@@ -1504,6 +1504,51 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
+void llama_context::set_ridgefill(const llama_ridgefill * rf) {
+    ridgefill = rf;
+}
+
+void llama_context::ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end) {
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ) {
+        LLAMA_LOG_ERROR("%s: invalid seq_id %d\n", __func__, seq_id);
+        return;
+    }
+
+    ridgefill_p_end[seq_id] = p_end;
+}
+
+bool llama_context::ridgefill_is_fill(llama_seq_id seq_id, llama_pos pos) const {
+    return ridgefill && pos < ridgefill_p_end[seq_id];
+}
+
+bool llama_context::ridgefill_mark() {
+    const llama_batch & batch = balloc->get_batch();
+
+    std::vector<int8_t> fill(batch.n_tokens, 0);
+
+    bool has_fill = false;
+    for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        if (batch.n_seq_id[i] != 1 || !ridgefill_is_fill(batch.seq_id[i][0], batch.pos[i])) {
+            continue;
+        }
+
+        if (batch.logits[i]) {
+            LLAMA_LOG_ERROR("%s: token %d (seq_id %d, pos %d) is filled by RidgeFill and cannot be an output\n",
+                    __func__, i, batch.seq_id[i][0], batch.pos[i]);
+            return false;
+        }
+
+        fill[i]  = 1;
+        has_fill = true;
+    }
+
+    if (has_fill) {
+        balloc->set_fill(std::move(fill));
+    }
+
+    return true;
+}
+
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
@@ -1896,6 +1941,10 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     GGML_ASSERT(n_tokens_all <= cparams.n_batch);
 
     GGML_ASSERT((cparams.causal_attn || cparams.n_ubatch >= n_tokens_all) && "non-causal attention requires n_ubatch >= n_tokens");
+
+    if (ridgefill && !ridgefill_mark()) {
+        return -1;
+    }
 
     // TODO: this clear of the buffer can easily be forgotten - need something better
     // sync first so any in-flight async copies into embd_seq complete before it is freed
@@ -2702,6 +2751,9 @@ llm_graph_params llama_context::graph_params(
         /*.moe_cache   =*/ moe_cache.get(),
         /*.prec_policy =*/ &model.prec_policy,
         /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
+        // the ubatch split does not mix filled and other tokens, and filled tokens are never outputs
+        /*.ridgefill   =*/ ridgefill && n_outputs == 0 && ubatch.n_tokens > 0 && ubatch.n_seq_id[0] == 1 &&
+                           ridgefill_is_fill(ubatch.seq_id[0][0], ubatch.pos[0]) ? ridgefill : nullptr,
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),

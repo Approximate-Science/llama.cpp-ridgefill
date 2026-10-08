@@ -3,6 +3,7 @@
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // staging API: RidgeFill
 
 #include <algorithm>
 #include <array>
@@ -439,6 +440,20 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
     return {tokens, std::exp(nll / count), logit_history, prob_history};
 }
 
+// RidgeFill: fill at most the first half of each chunk, the scored second half stays exact
+static void ridgefill_set_chunks(llama_context * ctx, const common_params & params, int n_ctx, int n_seq) {
+    const int p_end = std::min(common_ridgefill_p_end(params, n_ctx), n_ctx/2);
+    if (p_end <= 0) {
+        return;
+    }
+
+    LOG_INF("%s: RidgeFill fills positions [0, %d) of each chunk, exact tail = %d tokens\n", __func__, p_end, n_ctx - p_end);
+
+    for (int seq = 0; seq < n_seq; ++seq) {
+        llama_ridgefill_seq_set(ctx, seq, p_end);
+    }
+}
+
 static results_perplexity perplexity(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
     if (params.ppl_stride > 0) {
         return perplexity_v2(ctx, params);
@@ -538,6 +553,8 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     // last 256 tokens.  Then, we split the input up into context window size chunks to
     // process the entire prompt.
     const int first = n_ctx/2;
+
+    ridgefill_set_chunks(ctx, params, (int) n_ctx, n_seq);
 
     for (int i = 0; i < n_chunk; i += n_seq) {
         const int start =     i * n_ctx;
@@ -1771,6 +1788,8 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
     const int first = n_ctx/2;
 
+    ridgefill_set_chunks(ctx, params, (int) n_ctx, n_seq);
+
     for (int i = 0; i < n_chunk; i += n_seq) {
         const int start =     i * n_ctx;
         const int end   = start + n_ctx;
@@ -2002,6 +2021,11 @@ int llama_perplexity(int argc, char ** argv) {
     const int32_t n_ctx = params.n_ctx;
     if (n_ctx <= 0) {
         LOG_ERR("%s: perplexity tool requires '--ctx-size' > 0\n", __func__);
+        return 1;
+    }
+
+    if (!params.ridgefill_path.empty() && (params.hellaswag || params.winogrande || params.multiple_choice || params.ppl_stride > 0)) {
+        LOG_ERR("%s: RidgeFill supports the perplexity and KL divergence modes only\n", __func__);
         return 1;
     }
 

@@ -163,6 +163,9 @@ public:
 
     const llama_batch & get_batch() const;
 
+    // fill[i] != 0 marks the tokens filled by RidgeFill, a ubatch never mixes marked and unmarked tokens
+    void set_fill(std::vector<int8_t> fill);
+
     uint32_t get_n_tokens()  const;
     uint32_t get_n_outputs() const;
     uint32_t get_n_used()    const;
@@ -232,6 +235,7 @@ private:
     std::vector<int32_t>        seq_idx;
     std::vector<int8_t>         output;
     std::vector<int32_t>        decision_order; // empty if no entry has one
+    std::vector<int8_t>         fill;           // empty if no token is filled
 
     using pos_set_t = std::set<llama_pos>;
     using seq_cpl_t = std::vector<bool>;

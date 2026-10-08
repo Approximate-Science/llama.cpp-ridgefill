@@ -573,6 +573,10 @@ llama_pos llama_batch_allocr::seq_pos_max(llama_seq_id seq_id) const {
     return seq_pos[seq_id].empty() ? -1 : *seq_pos[seq_id].rbegin();
 }
 
+void llama_batch_allocr::set_fill(std::vector<int8_t> fill) {
+    this->fill = std::move(fill);
+}
+
 void llama_batch_allocr::split_reset() {
     out_ids.clear();
 
@@ -611,6 +615,10 @@ llama_ubatch llama_batch_allocr::split_simple(uint32_t n_ubatch) {
         if (idxs.size() >= n_ubatch) {
             break;
         }
+
+        if (!fill.empty() && fill[cur_idx] != fill[idxs[0]]) {
+            break;
+        }
     }
 
     return ubatch_add(idxs, idxs.size(), false);
@@ -626,6 +634,9 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
     std::vector<seq_set_t> cur_seq_set;
 
     llama_seq_id last_seq_id = -1;
+
+    int8_t fill_first = 0;
+    std::vector<seq_set_t> fill_skip;
 
     // determine the non-overlapping sequence sets participating in this ubatch
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
@@ -646,6 +657,18 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
         // accept only increasing sequence ids
         if (sequential) {
             add = add && (cur_seq_set.empty() || batch.seq_id[i][0] == last_seq_id + 1);
+        }
+
+        // the first unused token of a sequence set decides if the set can join the ubatch
+        if (add && !fill.empty()) {
+            if (std::find(fill_skip.begin(), fill_skip.end(), seq_set[i]) != fill_skip.end()) {
+                add = false;
+            } else if (cur_seq_set.empty()) {
+                fill_first = fill[i];
+            } else if (fill[i] != fill_first) {
+                fill_skip.push_back(seq_set[i]);
+                add = false;
+            }
         }
 
         if (add) {
@@ -686,6 +709,11 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
 
         for (uint32_t s = 0; s < n_seqs; ++s) {
             if (cur_idx[s] >= (int32_t) seq_set_map[cur_seq_set[s]].size()) {
+                can_expand = false;
+                break;
+            }
+
+            if (!fill.empty() && fill[seq_set_map[cur_seq_set[s]][cur_idx[s]]] != fill_first) {
                 can_expand = false;
                 break;
             }
@@ -845,6 +873,7 @@ void llama_batch_allocr::clear() {
     seq_id_unq  .clear();
     output      .clear();
     decision_order.clear();
+    fill        .clear();
 
     for (auto & cur : seq_pos) {
         cur.clear();

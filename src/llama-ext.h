@@ -142,6 +142,25 @@ LLAMA_API float * llama_get_embeddings_layer_inp(struct llama_context * ctx, uin
 LLAMA_API llama_context * llama_get_ctx_other(struct llama_context * ctx);
 
 //
+// RidgeFill: approximate prefill of long prompts
+// the filled tokens run the layers [0, split) only, the K/V of the later layers are predicted by a linear map
+//
+
+struct llama_ridgefill;
+
+// load a projector (GGUF, see convert_ridgefill_to_gguf.py) for the model, returns nullptr on error
+LLAMA_API struct llama_ridgefill * llama_ridgefill_init(const struct llama_model * model, const char * path);
+LLAMA_API void                     llama_ridgefill_free(struct llama_ridgefill * rf);
+LLAMA_API int32_t                  llama_ridgefill_split(const struct llama_ridgefill * rf);
+
+// attach a projector to the context (nullptr to detach), it must outlive the context
+LLAMA_API void llama_set_ridgefill(struct llama_context * ctx, const struct llama_ridgefill * rf);
+
+// from now on, the tokens of seq_id at positions < p_end are filled (p_end <= 0: none)
+// a filled token cannot be an output, llama_decode() returns -1 for such a batch
+LLAMA_API void llama_ridgefill_seq_set(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p_end);
+
+//
 // model/context data extraction
 //
 

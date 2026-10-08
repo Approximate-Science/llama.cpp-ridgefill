@@ -135,6 +135,9 @@ struct llama_context {
                 int32_t   il_start,
                 int32_t   il_end);
 
+    void set_ridgefill(const llama_ridgefill * rf);
+    void ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end);
+
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
     // ret contains the status of the graph computation
@@ -275,6 +278,10 @@ private:
 
     // create a new backend scheduler for a graph of the specified size and register the callbacks below
     void sched_new(size_t max_nodes, bool parallel);
+    bool ridgefill_is_fill(llama_seq_id seq_id, llama_pos pos) const;
+
+    // mark the tokens of the current batch that are filled, returns false if one of them is an output
+    bool ridgefill_mark();
 
     // ggml_backend_sched copy callback, copies only the experts used by MUL_MAT_ID and updates the MoE cache
     static bool sched_copy_experts(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph, void * user_data);
@@ -303,6 +310,10 @@ private:
 
     llama_adapter_cvec_ptr  cvec;
     llama_adapter_loras_ptr loras;
+
+    const llama_ridgefill * ridgefill = nullptr;
+
+    std::array<llama_pos, LLAMA_MAX_SEQ> ridgefill_p_end = {}; // tokens at pos < p_end are filled
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 

@@ -21,6 +21,8 @@ struct llama_cparams;
 struct llama_layer;
 struct llama_prec_policy;
 struct llama_hadamard;
+struct llama_ridgefill;
+struct llama_model;
 
 class llama_moe_cache;
 
@@ -809,6 +811,7 @@ struct llm_graph_params {
     const llama_prec_policy * prec_policy = nullptr;
 
     const llama_hadamard * hdmd = nullptr;
+    const llama_ridgefill * ridgefill = nullptr; // set for a ubatch that is filled
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -905,7 +908,8 @@ struct llm_graph_params {
             gtype == other.gtype &&
             cvec  == other.cvec  &&
             loras == other.loras &&
-            cross == other.cross;
+            cross == other.cross &&
+            ridgefill == other.ridgefill;
     }
 };
 
@@ -1062,6 +1066,7 @@ struct llm_graph_context {
     const llama_prec_policy * prec_policy;
 
     const llama_hadamard * hdmd;
+    const llama_ridgefill * ridgefill;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1287,6 +1292,16 @@ struct llm_graph_context {
             ggml_tensor * v_mla, // [n_embd_head_v_mla, n_embd_head_v, n_head_v] // TODO: remove
                   float   kq_scale,
                     int   il) const;
+
+    // RidgeFill (llama-ridgefill.cpp): on a filled ubatch at il == split, store the K/V of layers [il, n_layer)
+    // predicted from inp and return true; the caller must then stop building the graph
+    bool build_ridgefill(
+            const llama_model & model,
+                          int   il,
+                  ggml_tensor * inp,
+                  ggml_tensor * inp_pos,
+      llm_graph_input_attn_kv * inp_attn,
+                  ggml_tensor * inp_out_ids) const;
 
     llm_graph_input_attn_k  * build_attn_inp_k() const;
 

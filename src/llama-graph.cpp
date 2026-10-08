@@ -1573,6 +1573,7 @@ llm_graph_context::llm_graph_context(const llm_graph_params & params) :
     moe_cache        (params.moe_cache),
     prec_policy      (params.prec_policy),
     hdmd             (params.hdmd),
+    ridgefill        (params.ridgefill),
     samplers         (params.samplers),
     cb_func          (params.cb),
     res              (params.res),

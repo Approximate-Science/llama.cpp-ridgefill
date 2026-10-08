@@ -1154,6 +1154,10 @@ struct common_init_result::impl {
     common_threadpools threadpools;
 
     llama_model_ptr   model;
+
+    // must outlive the context
+    std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> ridgefill { nullptr, llama_ridgefill_free };
+
     llama_context_ptr context;
 
     std::vector<llama_adapter_lora_ptr> lora;
@@ -1377,6 +1381,27 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     }
 
     pimpl->context.reset(lctx);
+
+    if (!params.ridgefill_path.empty()) {
+        // the projector maps the hidden states of the base model as it is
+        if (!params.lora_adapters.empty() || !params.control_vectors.empty() || cparams.embeddings) {
+            COM_ERR("%s", "RidgeFill cannot be used with LoRA adapters, control vectors or embeddings\n");
+            pimpl->context.reset();
+            return;
+        }
+
+        pimpl->ridgefill.reset(llama_ridgefill_init(model, params.ridgefill_path.c_str()));
+        if (!pimpl->ridgefill) {
+            COM_ERR("failed to load RidgeFill projector '%s'\n", params.ridgefill_path.c_str());
+            pimpl->context.reset();
+            return;
+        }
+
+        llama_set_ridgefill(lctx, pimpl->ridgefill.get());
+
+        COM_INF("RidgeFill on: split %d, exact tail %d tokens, min prompt %d tokens\n",
+                llama_ridgefill_split(pimpl->ridgefill.get()), params.ridgefill_tail, params.ridgefill_min_prompt);
+    }
 
     set_process_priority(params.cpuparams.priority);
 
@@ -1656,6 +1681,14 @@ void common_memory::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, lla
     if (ctx_dft) {
         common_context_seq_add(ctx_dft, seq_id, p0, p1, delta);
     }
+}
+
+int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt) {
+    if (params.ridgefill_path.empty() || n_prompt < params.ridgefill_min_prompt || n_prompt <= params.ridgefill_tail) {
+        return 0;
+    }
+
+    return n_prompt - params.ridgefill_tail;
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {

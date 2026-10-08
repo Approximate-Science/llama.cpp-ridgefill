@@ -538,6 +538,10 @@ struct common_params {
 
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
+    std::string ridgefill_path;               // RidgeFill projector, empty: off
+    int32_t     ridgefill_tail       = 4096;  // the last prompt tokens that are computed exactly
+    int32_t     ridgefill_min_prompt = 8192;  // shorter prompts are not filled
+
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
     int32_t control_vector_layer_start = -1; // layer range for control vector
     int32_t control_vector_layer_end   = -1; // layer range for control vector
@@ -1016,6 +1020,9 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 
 // clear LoRA adapters from context, then apply new list of adapters
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
+
+// RidgeFill: the end of the filled positions of a prompt of n_prompt tokens, 0 if none is filled
+int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt);
 
 // model endpoint from env
 std::string common_get_model_endpoint();

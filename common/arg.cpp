@@ -2991,6 +2991,30 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         // we define this arg on both COMMON and EXPORT_LORA, so when showing help message of export-lora, it will be categorized as "example-specific" arg
     ).set_examples({LLAMA_EXAMPLE_COMMON, LLAMA_EXAMPLE_EXPORT_LORA}));
     add_opt(common_arg(
+        {"--ridgefill"}, "FNAME",
+        "path to a RidgeFill projector (experimental): the prompt tokens before the exact tail run the first layers only, the KV cache of the later layers is predicted (approximate prefill)",
+        [](common_params & params, const std::string & value) {
+            params.ridgefill_path = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-tail"}, "N",
+        string_format("RidgeFill: number of last prompt tokens computed exactly (default: %d)", params.ridgefill_tail),
+        [](common_params & params, int value) {
+            if (value < 1) {
+                throw std::invalid_argument("--ridgefill-tail must be at least 1");
+            }
+            params.ridgefill_tail = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-min-prompt"}, "N",
+        string_format("RidgeFill: prompts shorter than N tokens are not filled (default: %d)", params.ridgefill_min_prompt),
+        [](common_params & params, int value) {
+            params.ridgefill_min_prompt = value;
+        }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
         {"--control-vector"}, "FNAME",
         "add a control vector\nnote: use comma-separated values to add multiple control vectors",
         [](common_params & params, const std::string & value) {
