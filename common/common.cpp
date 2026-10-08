@@ -1683,12 +1683,16 @@ void common_memory::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, lla
     }
 }
 
-int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt) {
-    if (params.ridgefill_path.empty() || n_prompt < params.ridgefill_min_prompt || n_prompt <= params.ridgefill_tail) {
+int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, int32_t n_tail) {
+    if (n_tail <= 0) {
+        n_tail = params.ridgefill_tail;
+    }
+
+    if (params.ridgefill_path.empty() || n_prompt < params.ridgefill_min_prompt || n_prompt <= n_tail) {
         return 0;
     }
 
-    return n_prompt - params.ridgefill_tail;
+    return n_prompt - n_tail;
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {

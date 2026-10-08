@@ -68,6 +68,13 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(0, INT32_MAX)
         ->set_desc("Min chunk size to attempt reusing from the cache via KV shifting. See --cache-reuse arg"));
 
+    add((new field_bool("ridgefill", params.ridgefill))
+        ->set_desc("Use RidgeFill (approximate prefill) for this prompt, if the server was started with --ridgefill"));
+
+    add((new field_num("ridgefill_tail", params.ridgefill_tail))
+        ->set_hard_limits(0, INT32_MAX)
+        ->set_desc("RidgeFill: number of last prompt tokens computed exactly, 0 = the server's --ridgefill-tail"));
+
     // TODO: implement t_max_prompt_ms
     // add((new field_num("t_max_prompt_ms", params.t_max_prompt_ms))
 
@@ -477,6 +484,7 @@ task_params eval_llama_cmpl_schema(
     params.n_keep        = params_base.n_keep;
     params.n_predict     = params_base.n_predict;
     params.n_cache_reuse = params_base.n_cache_reuse;
+    params.ridgefill_tail = params_base.ridgefill_tail;
     params.cache_prompt  = params_base.cache_prompt;
     params.antiprompt    = params_base.antiprompt;
     params.sse_ping_interval = params_base.sse_ping_interval;

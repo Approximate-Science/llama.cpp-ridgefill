@@ -151,6 +151,10 @@ json server_slot_stats::to_json() const {
         {"predicted_per_second",   n_gen_tps()},
     };
 
+    if (n_prompt_filled > 0) {
+        base["prompt_filled_n"] = n_prompt_filled;
+    }
+
     if (n_draft_tokens > 0) {
         base["draft_n"]          = n_draft_tokens;
         base["draft_n_accepted"] = n_draft_accepted;

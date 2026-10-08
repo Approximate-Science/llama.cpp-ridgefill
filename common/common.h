@@ -1022,7 +1022,8 @@ struct llama_context_params common_context_params_to_llama(const common_params &
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora);
 
 // RidgeFill: the end of the filled positions of a prompt of n_prompt tokens, 0 if none is filled
-int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt);
+// n_tail > 0 overrides params.ridgefill_tail
+int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, int32_t n_tail = 0);
 
 // model endpoint from env
 std::string common_get_model_endpoint();

@@ -15,6 +15,7 @@
 #include "common.h"
 #include "fit.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // staging API: RidgeFill
 #include "log.h"
 #include "sampling.h"
 #include "speculative.h"
@@ -1358,6 +1359,11 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
             }
+        }
+
+        if (!params_base.ridgefill_path.empty() && params_base.n_cache_reuse) {
+            params_base.n_cache_reuse = 0;
+            SRV_WRN("%s\n", "cache_reuse is not supported with RidgeFill, it will be disabled");
         }
 
         if (llama_model_n_swa(model_tgt) == 0) {
@@ -3062,6 +3068,11 @@ private:
                         break;
                     }
 
+                    if (slot->prompt.n_filled > 0) {
+                        send_error(task, "Unable to save slot: it holds approximate RidgeFill rows", ERROR_TYPE_NOT_SUPPORTED);
+                        break;
+                    }
+
                     const int64_t t_start = ggml_time_us();
 
                     std::string filename = task.slot_action.filename;
@@ -3500,6 +3511,11 @@ private:
                 n_discard = std::clamp(n_discard, 0, std::max(0, n_left - 1));
 
                 SLT_WRN(slot, "slot context shift, n_keep = %d, n_left = %d, n_discard = %d\n", n_keep, n_left, n_discard);
+
+                // the shifted positions are below the end of the filled prompt
+                if (!params_base.ridgefill_path.empty()) {
+                    llama_ridgefill_seq_set(ctx_tgt, slot.id, 0);
+                }
 
                 slot.mem.seq_rm (slot.id, n_keep            , n_keep + n_discard);
                 slot.mem.seq_add(slot.id, n_keep + n_discard, slot.prompt.tokens.pos_next(), -n_discard);
@@ -4013,6 +4029,31 @@ private:
                             SLT_WRN(slot, "need to evaluate at least 1 token for each active slot (n_past = %d, task.n_tokens() = %d)\n", n_past, slot.task->n_tokens());
                             n_past--;
                             SLT_WRN(slot, "n_past was set to %d\n", n_past);
+                        }
+
+                        if (!params_base.ridgefill_path.empty()) {
+                            const auto & tparams = slot.task->params;
+
+                            // a prompt that needs outputs before its tail cannot be filled
+                            const int32_t p_fill = tparams.ridgefill && !slot.need_embd() && !input_tokens.has_mtmd ?
+                                common_ridgefill_p_end(params_base, slot.task->n_tokens(), tparams.ridgefill_tail) : 0;
+
+                            // filled rows in the cache are approximate: reuse them only for a prompt that fills the same rows
+                            if (slot.prompt.n_filled > 0 && n_past > std::min(slot.prompt.n_filled, p_fill)) {
+                                SLT_INF(slot, "RidgeFill: cached tokens up to %d are filled, reusing %d of %d cached tokens\n",
+                                        slot.prompt.n_filled, std::min(slot.prompt.n_filled, p_fill), n_past);
+                                n_past = std::min(slot.prompt.n_filled, p_fill);
+                            }
+
+                            slot.prompt.n_filled = p_fill > n_past ? p_fill : std::min(slot.prompt.n_filled, n_past);
+                            slot.stats.n_prompt_filled = std::max(0, p_fill - n_past);
+
+                            llama_ridgefill_seq_set(ctx_tgt, slot.id, p_fill > n_past ? p_fill : 0);
+
+                            if (p_fill > n_past) {
+                                SLT_INF(slot, "RidgeFill: filling prompt tokens [%d, %d) of %d, exact tail %d\n",
+                                        n_past, p_fill, slot.task->n_tokens(), slot.task->n_tokens() - p_fill);
+                            }
                         }
 
                         slot.stats.n_prompt_cached    = n_past;

@@ -74,6 +74,9 @@ struct task_params {
 
     int32_t n_cache_reuse = 0; // min chunk size to attempt reusing from the cache via KV shifting (0 = disabled)
 
+    bool    ridgefill      = true; // fill the prompt with RidgeFill, if the server has a projector
+    int32_t ridgefill_tail = 0;    // exact tail, 0 = server default
+
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
 
@@ -636,9 +639,13 @@ struct server_prompt {
 
     std::list<common_prompt_checkpoint> checkpoints;
 
+    // the tokens before n_filled may hold approximate RidgeFill rows in the KV cache
+    int32_t n_filled = 0;
+
     void clear() {
         tokens.clear();
         checkpoints.clear();
+        n_filled = 0;
     }
 
     int n_tokens() const {
@@ -649,6 +656,7 @@ struct server_prompt {
         return server_prompt {
             tokens.clone(),
             checkpoints,
+            n_filled,
         };
     }
 };

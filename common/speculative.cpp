@@ -2580,6 +2580,9 @@ common_params common_base_params_to_speculative(const common_params & params) {
     result.embedding    = false;
     result.pooling_type = LLAMA_POOLING_TYPE_UNSPECIFIED;
 
+    // the RidgeFill projector belongs to the target model
+    result.ridgefill_path.clear();
+
     if (has_draft) {
         // default to global devices value
         if (!params_spec.devices.empty()) {

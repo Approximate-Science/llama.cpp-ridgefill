@@ -399,6 +399,7 @@ json format_response_rerank(
 struct server_slot_stats {
     uint64_t n_prompt_cached    = 0;
     uint64_t n_prompt_processed = 0;
+    uint64_t n_prompt_filled    = 0; // RidgeFill: processed prompt tokens that were filled
     uint64_t n_gen              = 0;
 
     // speculative decoding stats
