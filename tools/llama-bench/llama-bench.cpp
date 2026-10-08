@@ -26,6 +26,7 @@
 #include "fit.h"
 #include "ggml.h"
 #include "llama.h"
+#include "../../src/llama-ext.h" // staging API: RidgeFill
 #include "log.h"
 
 #ifdef _WIN32
@@ -332,6 +333,10 @@ static std::vector<int> parse_int_range(const std::string & s, bool allow_negati
     return result;
 }
 
+// RidgeFill (experimental): the pp tests without depth fill all but the last g_ridgefill_tail prompt tokens
+static std::string g_ridgefill_path;
+static int         g_ridgefill_tail = 4096;
+
 struct cmd_params {
     std::vector<std::string>         model;
     std::vector<std::string>         hf_repo;
@@ -440,6 +445,8 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  -v, --verbose                               verbose output\n");
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
+    printf("  --ridgefill <file>                          RidgeFill projector: fill the prompt of pp tests (experimental)\n");
+    printf("  --ridgefill-tail <n>                        RidgeFill: last prompt tokens computed exactly (default: %d)\n", g_ridgefill_tail);
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)\n");
     if (llama_supports_rpc()) {
@@ -1056,6 +1063,19 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "--ridgefill") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                g_ridgefill_path = argv[i];
+            } else if (arg == "--ridgefill-tail") {
+                if (++i >= argc) {
+                    invalid_param = true;
+                    break;
+                }
+                g_ridgefill_tail = std::stoi(argv[i]);
+                invalid_param = g_ridgefill_tail < 1;
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -2093,6 +2113,9 @@ struct markdown_printer : public printer {
                 if (t.n_depth > 0) {
                     int len = strlen(buf);
                     snprintf(buf + len, sizeof(buf) - len, " @ d%d", t.n_depth);
+                } else if (!g_ridgefill_path.empty() && t.n_prompt > g_ridgefill_tail) {
+                    int len = strlen(buf);
+                    snprintf(buf + len, sizeof(buf) - len, " rf-t%d", g_ridgefill_tail);
                 }
                 value = buf;
             } else if (field == "t/s") {
@@ -2165,7 +2188,7 @@ struct ctx_state {
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
 
-static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads) {
+static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, int p_fill = 0) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -2183,6 +2206,9 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
             tokens[i] = std::rand() % n_vocab;
         }
         common_batch batch = common_batch_get_one(ctx, tokens.data(), n_tokens);
+        if (n_processed + n_tokens <= p_fill) {
+            batch.set_output(n_tokens - 1, false); // a filled token cannot be an output
+        }
         int res = llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get());
         if (res != 0) {
             fprintf(stderr, "%s: failed to decode prompt batch, res = %d\n", __func__, res);
@@ -2311,6 +2337,7 @@ int llama_bench(int argc, char ** argv) {
 
     llama_model *               lmodel    = nullptr;
     const cmd_params_instance * prev_inst = nullptr;
+    llama_ridgefill *           rf        = nullptr;
 
     // store the llama_context state at the previous depth that we performed a test
     // ref: https://github.com/ggml-org/llama.cpp/pull/16944#issuecomment-3478151721
@@ -2373,6 +2400,15 @@ int llama_bench(int argc, char ** argv) {
                 return 1;
             }
             prev_inst = &inst;
+
+            if (!g_ridgefill_path.empty()) {
+                llama_ridgefill_free(rf);
+                rf = llama_ridgefill_init(lmodel, g_ridgefill_path.c_str());
+                if (rf == NULL) {
+                    fprintf(stderr, "%s: error: failed to load RidgeFill projector '%s'\n", __func__, g_ridgefill_path.c_str());
+                    return 1;
+                }
+            }
         }
 
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
@@ -2385,6 +2421,12 @@ int llama_bench(int argc, char ** argv) {
         test t(inst, lmodel, ctx);
 
         llama_memory_clear(llama_get_memory(ctx), false);
+
+        const int p_fill = rf && t.n_depth == 0 && t.n_prompt > g_ridgefill_tail ? t.n_prompt - g_ridgefill_tail : 0;
+        if (rf) {
+            llama_set_ridgefill(ctx, rf);
+            llama_ridgefill_seq_set(ctx, 0, p_fill);
+        }
 
         // cool off before the test
         if (params.delay) {
@@ -2419,7 +2461,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
                     llama_free(ctx);
@@ -2488,7 +2530,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     llama_free(ctx);
@@ -2531,6 +2573,7 @@ int llama_bench(int argc, char ** argv) {
         ggml_threadpool_free_fn(threadpool);
     }
 
+    llama_ridgefill_free(rf);
     llama_model_free(lmodel);
 
     if (p) {
