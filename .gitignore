@@ -95,6 +95,7 @@
 # Python
 
 /.venv
+/.venv-oracle/
 __pycache__/
 */poetry.lock
 poetry.toml
