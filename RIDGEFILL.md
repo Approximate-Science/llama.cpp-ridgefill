@@ -18,7 +18,68 @@ bit-identical to upstream llama.cpp (checked, see "Tests").
 
 RidgeFill is by Dylan Johnston and tcclaviger. Method, reference implementation and paper: TODO (Dylan).
 
-## Measured results
+## Qwen3.8-27B (`qwen35`): development status
+
+The Qwen3.8-27B port is in progress. The format-2 projector converter and tiny Qwen3.5 fixtures are available. The tiny model's speed-mode logits, KV caches, convolution state and recurrent state match the CPU oracle across three chunk sizes and alpha 0/1; mode-off, T>=N, wrong-map, wrong-correction-orientation and filled-logit controls passed. Real-model results below are **NOT YET MEASURED** for this port; the later Llama/Qwen3 tables are earlier measurements on different models.
+
+The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 512, and minimum prompt 8192. Defaults come from the projector: alpha 0, class share 0.5, digits on, question-attention share 0.2. A format-2 GGUF checks every model fingerprint field and the vocabulary token hash; the tokenizer JSON hash and source file hashes are retained as provenance. A different quantization of the same base model is allowed.
+
+| mode | prefix rows run exactly through late layers | current status |
+|---|---|---|
+| `off` | all rows | stock fallback; Qwen27 validation pending |
+| `speed` | none | tiny CPU G1 passed; real-model gates pending |
+| `quality` | union of class rows and digit rows | engine G1 pending |
+| `quality+qattn` | quality rows plus question-attention rows | sweep integration pending; refused by name when qattn share is positive |
+
+Class selection is per prompt: keep `rint(share * qualifying_rows)` prefix positions with the highest finite row scores, ties by lower position. Digit rows contain an ASCII digit in the vocabulary token text, with added/special tokens excluded. The question-attention rule selects `round(qattn_share * prefix_length)` prefix rows by causal attention mass from the last `qattn_window` prompt rows at attention layers 3, 7, 11 and 15. `--ridgefill-qattn-blind` moves the query window immediately before the prefix end. Question-attention needs the sweep driver; its zero-share case uses the class/digit selection.
+
+Speed mode writes attention KV and GDN convolution/recurrent state from each predicted layer input. Quality mode mixes predicted bulk inputs with the carried exact-row residuals, then restricts the remaining late-layer work to exact rows. The terminal GDN correction is applied once at the prefix boundary; quality scales it by the gate-decayed bulk share. The source package already stores corrections as `[heads, V, K]`; GGUF conversion reorders value heads into llama.cpp order without transposing K/V again.
+
+| same-build paired result | mode off | speed | quality | quality+qattn |
+|---|---|---|---|---|
+| NLL of last 512 tokens, 24 documents at 16K | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| needles, 48 prompts with thinking off | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| TTFT at 8K / 16K / 32K | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| prefill tokens/s and analytic ceiling | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+| decode tokens/s | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+
+Machine/backend, build revision, cache precision and paired 95% BCa intervals will accompany each measured row. The reference package's quality numbers are not engine measurements and are not substituted here.
+
+| Qwen35 RidgeFill backend gate | status |
+|---|---|
+| CPU | tiny-model speed oracle gate passed; real-model results NOT YET MEASURED |
+| Vulkan | NOT YET MEASURED |
+| HIP/ROCm | NOT YET MEASURED |
+| CUDA | NOT RUN |
+| Metal | NOT RUN |
+
+### Projector conversion
+
+The planned release location is `TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8`; publication is pending. The expected GGUF filename is `ridgefill-projector-qwen3.8-27b-i8-S16.gguf`.
+
+```sh
+# Once the release is published:
+hf download TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8 ridgefill-projector-qwen3.8-27b-i8-S16.gguf --local-dir projector
+
+# Or convert the verified int8 source folder, with NumPy and safetensors installed:
+python3 convert_ridgefill_to_gguf.py projector-source/ --model-gguf model.gguf --outfile projector.gguf
+```
+
+Folder conversion needs no torch and defaults to Q8_0 maps. `--outtype f32|f16|bf16|q8_0` changes the maps; biases, row scores and corrections remain F32. The converter verifies SHA256SUMS and manifest file checksums before writing, and computes `adapter.ridgefill.vocab_sha256` from the base model GGUF's token strings, each followed by one NUL byte. A different tokenizer or model fingerprint is refused by name.
+
+### Options and evaluation
+
+```sh
+llama-server -m model.gguf -c 32768 -ngl 99 --ridgefill projector.gguf --ridgefill-mode speed --ridgefill-tail 4096
+```
+
+The intended quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. They are not a measured recommendation for this engine yet. Per request, `ridgefill: false` or `ridgefill_mode: "off"` selects stock processing; `ridgefill_tail` overrides the exact tail; `ridgefill_mode` selects a mode. The RAM prompt cache carries the mode and exact-row set with its fill marker. A changed mode or changed exact rows in a retained filled region requires recomputation. Slot save of filled rows is refused; `--cache-reuse` remains disabled.
+
+Perplexity and bench support speed/quality plumbing and refuse `quality+qattn` by name. Perplexity fills at most the unscored first half of each chunk, so its effective tail is `max(T, n_ctx/2)`. Its quality rows are selected separately for each chunk, including its actual BOS token. These tool paths still need the engine API implementation and integration checks.
+
+The paired client and CPU gates are documented in [tests/ridgefill/README.md](tests/ridgefill/README.md). NLL uses only the last 512 teacher-forced targets and keeps the approximate prefix fixed. Needle evaluation removes the answer IDs appended by the source dataset, applies the loaded model's Qwen chat template with `enable_thinking=false`, and generates the answer. Speed runs alternate mode off with the selected mode for at least three repeats. Statistics use the oracle repository's `finals/stats.py`; an inactive fill or missing probability fails the run.
+
+## Earlier measured results: dense Llama and Qwen3
 
 Llama-3.1-8B-Instruct (unsloth, revision 4699cc75), projector split 12 of 32 (bf16 maps), one NVIDIA RTX 4090 24 GB,
 CUDA 12.4, flash attention on, default batch sizes (`-b 2048 -ub 512`), F16 KV cache. Branch commit: see
@@ -207,8 +268,15 @@ supports the perplexity and KL-divergence modes only. llama-bench fills the pp t
 | option | default | meaning |
 |---|---|---|
 | `--ridgefill FILE` | off | projector GGUF |
-| `--ridgefill-tail N` | 4096 | last prompt tokens computed exactly (at least 1) |
+| `--ridgefill-tail N` | projector (27B: 4096) | last prompt tokens computed exactly (at least projector `tail_min`) |
 | `--ridgefill-min-prompt N` | 8192 | shorter prompts are not filled (llama-cli, llama-server, llama-perplexity) |
+| `--ridgefill-mode MODE` | speed with a projector | off, speed, quality, quality+qattn; see Qwen35 development status |
+| `--ridgefill-share N` | projector (27B: 0.5) | class row share in (0, 1] |
+| `--ridgefill-digits on\|off` | projector (27B: on) | keep digit rows exact |
+| `--ridgefill-alpha N` | projector (27B: 0) | terminal-state correction scale in [0, 1] |
+| `--ridgefill-qattn-share N` | projector (27B: 0.2) | question-attention row share in [0, 1] |
+| `--ridgefill-qattn-window N` | 64 | number of query rows for question-attention |
+| `--ridgefill-qattn-blind` | off | query window before the prefix end |
 
 ### API (libllama, `src/llama-ext.h`, experimental)
 
@@ -225,9 +293,7 @@ Batches and ubatches may be split anywhere: the fork never mixes filled and exac
 
 ## Limits
 
-- Dense Llama (`llama` GGUF architecture) and dense Qwen3 (`qwen3`) only. Not supported: MoE, sliding-window
-  attention, hybrid models (for example Qwen3.5 / Qwen3-Next with Gated DeltaNet: they need a recurrent-state fill
-  that is not implemented), multimodal M-RoPE, Llama 4. The projector loader refuses them.
+- The earlier validated paths are dense Llama (`llama`) and dense Qwen3 (`qwen3`). Qwen3.8-27B (`qwen35`) is under development as described above. MoE, sliding-window attention, other hybrid architectures, multimodal RidgeFill inputs and Llama 4 remain unsupported.
 - Approximate: outputs differ from normal llama.cpp. Quality drops with the share of the prompt that is filled.
 - No speedup for short prompts: below `--ridgefill-min-prompt`, or when the prompt is not longer than the tail,
   nothing is filled. The speedup grows with prompt length (analytic ceiling about 1.35x at 8K, 1.67x at 16K and 1.93x

@@ -93,4 +93,65 @@ rf_dump: projector load failed
 
 Current runner log: `out/gate1-speed-current-run.log`. Loader log: `out/gate1-qwen35/g1-s3-speed/off-b700-ub512.log`. Built harness: `out/gate1-engine/72d79baa775d/rf_dump`. G1 overall is SKIPPED with a nonzero exit, not PASS: fill agreement, alpha-1 engine orientation, wrong-map engine control, mode-off byte comparison, T>=N and filled-logit refusal remain NOT RUN. All test Python files pass ty; shell syntax and `git diff --check` pass; converter regressions in the new venv report `Ran 9 tests ... OK`.
 
-Pending by name: quality alpha-1 needs a rho reference; quality+qattn needs the sweep dump/mass integration. Both refuse rather than returning success. Server/perplexity/bench plumbing and the evaluation client are still pending. Next: relay the current qwen35 loader refusal to L-A, rerun G1 speed when that path lands, then complete tool-side plumbing.
+At that milestone, quality alpha-1 needed a rho reference and quality+qattn needed sweep dump/mass integration. Server/perplexity/bench plumbing and the evaluation client were pending. Subsequent work is recorded below.
+
+## Tool plumbing, evaluation client, and speed G1
+
+Rebased `rf27-tools` onto `rf27-engine` at `72d79baa7`, as requested. Replayed converter/fixture commits became `952a24dd2`, `4191dd49f`, and `e0e1fa9e8`. No engine source was edited.
+
+Implemented common args for mode, share, digits, alpha, qattn share/window/blind; tail and row defaults resolve from the projector through the RF27 C API. Mode off produces no fill boundary. The parser refuses non-finite/out-of-range values, trailing garbage and invalid mode/digit strings by flag name. Added a common-init projector accessor and shared class/digit selection helper. Row split refuses by name.
+
+Server request schema accepts `ridgefill`, `ridgefill_tail`, and `ridgefill_mode`. Quality calls select_rows once per prompt, sets the exact rows after the fill end, and checks API return statuses. RAM cache entries carry mode and selected rows with their fill marker; changing either inside a retained approximate region restarts from zero. This is required because the old fill-end-only cache rule cannot distinguish speed and quality. Existing slot-save refusal remains. Extra /props metadata is emitted only with an enabled projector mode; off responses retain their existing fields. Until L-C's driver is integrated, positive-share quality+qattn refuses at startup or per request by name; zero share uses class/digit selection.
+
+Perplexity selects quality rows per chunk (with its actual BOS token), resets per-sequence markers after each memory clear, and retains effective tail max(T, n_ctx/2). Bench generates a known full prompt before quality selection, resets the marker/rows for each repeated prefill, and names its mode in output. Both refuse quality+qattn by name. These calls use the interface's getters and setters. L-A's actual setters now return int32 status, and all tool/dump calls check it.
+
+Independent C++ checks:
+
+- `out/test-tool-args`: `PASS: 18 RidgeFill argument/boundary checks` (real common.cpp functions, linked with unused sections discarded; no inference stubs).
+- Syntax checks passed for common/common.cpp, common/arg.cpp, server-task.cpp, server-schema.cpp, server-context.cpp, perplexity.cpp and llama-bench.cpp. The check supplied declarations from RF27-INTERFACE.md, with setters updated to int32. No fake implementation or successful unsupported path was supplied. Logs: `out/tools-syntax-results.txt`, `out/tools-syntax.log`.
+- Full tool linking is BLOCKED: engine `45199c4dc` has not yet declared/defined `llama_ridgefill_select_rows`. L-A must provide that promised C API. No server quality/perplexity/bench integration pass is claimed. Need to rerun full builds against L-A's header once it lands.
+
+Implemented `tests/ridgefill/eval_client.py`: paired same-build mode-off vs candidate NLL, needles, SSE TTFT and native llama-bench wrappers, JSONL provenance, per-length speed summaries, and 95% BCa intervals using kva finals/stats.py (5000 resamples, its declared seed). Existing outputs, missing/non-finite probabilities, inactive eligible fill, no units, unpaired units and undefined intervals refuse. No torch is needed by the client.
+
+NLL scores exactly 512 teacher-forced targets. Each request samples the true next target with a large bias but reads its raw pre-sampling logprob (`post_sampling_probs=false`, `n_probs=1`), over the full vocabulary; common/sampling.cpp copies logits before changing the sampling candidates. The first request turns off cache reuse, subsequent requests reuse the true teacher-forced continuation. The request tail grows so P is constant. Require T-512 >= tail_min and N-512 >= min-prompt. This avoids requesting logits on bulk rows and avoids silently changing the approximation per target.
+
+Needle data are raw prompts plus an appended answer suffix. The client strips answer_len IDs before detokenization, applies the model's chat template through /apply-template with enable_thinking=false, then parses special tokens while tokenizing it. Answers match at digit boundaries. TTFT warms both modes and alternates at least 3 repetitions with prompt caching off; bench alternates the same executable/model and can measure pp or tg128. Synthetic controls are labeled as such and are not release quality/speed numbers.
+
+Evaluation tests:
+
+```text
+test_eval_client.py: 7 tests OK
+check_eval_live.py: PASS (stock tiny model, 512 targets)
+maximum absolute server-logprob vs direct-logit error: 8.506307640487876e-7
+off/off repeated logprobs: byte-identical
+post-sampling probability control: REFUSED
+BCa positive control estimate: 0.025; negative control estimate: 0.0 (degenerate)
+```
+
+The live control built the unmodified archived server at `72d79baa7` with -j4. Both instruments used F32 KV, flash attention off, 4 CPU threads. Rejected the initial comparison between default server F16 KV and F32 direct-dump KV: its max logprob error was about 2.3e-4. Matched cache precision instead of widening the tolerance. Logs: `out/eval-live-portable-control.json`, `out/eval-live-portable-control-error.log`, `out/eval-client-tests.txt`. This validates instrumentation only; 27B NLL/needles/TTFT/bench are NOT YET MEASURED.
+
+Commands for the live controls and unit tests:
+
+```sh
+.venv-oracle/bin/python tests/ridgefill/test_eval_client.py -v
+.venv-oracle/bin/python tests/ridgefill/check_eval_live.py --engine-dir out/gate1-engine/72d79baa775d --kva /var/home/dylan/projects/research/kva-wt-q27
+out/test-tool-args
+```
+
+Updated RIDGEFILL.md with the Qwen27 section, row rules, planned projector line, modes/knobs, backend status, limits and stock fallback. Every real-model result cell says NOT YET MEASURED. Evaluation commands are in tests/ridgefill/README.md.
+
+### G1 speed on the landed engine
+
+L-A landed the loader/fill in `45199c4dc`. Built a fresh pinned archive and ran:
+
+```sh
+tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-wt-q27 --engine-ref 45199c4dc --split 3 --mode speed
+```
+
+```json
+{"gate":"G1","result":"PASS","checks":27,"split":3,"mode":"speed"}
+```
+
+All 27 checks passed: stock oracle comparison, byte-identical mode off, byte-identical T>=N, fill oracle at alpha 0/1, wrong-map rejection at alpha 0/1, wrong-state-orientation rejection at alpha 1, and filled-logit refusal, over 700/512, 128/128 and 50/50. Maximum relative error across correct comparisons was `9.938011089616339e-7`, tolerance `1e-4`. The wrong-orientation control differs by up to about 1.37 relative in prefix recurrent state; it is observed before tail decay. The dump now checks the actual setter return statuses as well.
+
+Artifacts: `out/gate1-engine/45199c4dc*/rf_dump`, `out/gate1-speed-45199-run.log`, and `out/gate1-qwen35/g1-s3-speed/results.json`. The comparison checks 33 arrays for stock and 27 for fill. No GPU was used. Quality/rho and question-attention engine gates remain NOT RUN. Next: L-A supplies select_rows, full tool builds/integration, then quality/sweep G1 and lane Q's real-model measurements.
