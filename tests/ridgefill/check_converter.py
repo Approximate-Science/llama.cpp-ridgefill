@@ -48,7 +48,7 @@ def map_within_bound(actual: np.ndarray, expected: np.ndarray, qtype) -> tuple[b
     return ok, float(error.max())
 
 
-def verify(folder: Path, output: Path) -> dict:
+def verify(folder: Path, output: Path, model_gguf: Path) -> dict:
     manifest, hashes = converter.read_package(folder)
     reader = gguf.GGUFReader(output)
     tensors = {t.name: t for t in reader.tensors}
@@ -57,16 +57,18 @@ def verify(folder: Path, output: Path) -> dict:
     expected_meta = {
         "general.architecture": "qwen35", "general.type": "adapter", "adapter.type": "ridgefill",
         prefix + "split": manifest["split"], prefix + "n_layer": m["num_hidden_layers"],
+        prefix + "format": 2,
         prefix + "n_embd": m["hidden_size"], prefix + "source_manifest_sha256": hashes["ridgefill.json"],
         prefix + "tokenizer_sha256": manifest["model"]["tokenizer_json_sha256"],
-        prefix + "authors": ", ".join(manifest["authors"]),
+        prefix + "authors": manifest["authors"],
+        prefix + "vocab_sha256": converter.model_vocab_sha256(model_gguf, m["vocab_size"]),
         prefix + "digits_default": manifest["rowsel"]["digits_default"],
         prefix + "model_layer_types": manifest["model"]["layer_types"],
         prefix + "tail_default": manifest["tail"]["default"], prefix + "tail_min": manifest["tail"]["min"],
     }
     expected_meta.update({prefix + k: manifest[k] for k in ("name", "license", "doi")})
     expected_meta.update({prefix + "model_meta." + k: v for k, v in m.items()})
-    expected_meta.update({prefix + "source_sha256." + k: v for k, v in hashes.items()})
+    expected_meta.update({prefix + "source." + k: v for k, v in hashes.items()})
     for key, expected in expected_meta.items():
         if reader.fields[key].contents() != expected:
             raise AssertionError(f"metadata {key}: {reader.fields[key].contents()!r} != {expected!r}")
@@ -80,6 +82,7 @@ def verify(folder: Path, output: Path) -> dict:
     wrong_map_checked = False
     previous = None
     head_control = False
+    orientation_control = False
     for il in range(manifest["split"], m["num_hidden_layers"]):
         _, source, _ = converter.read_safetensors(folder / manifest["projector"]["files"][str(il)])
         width = m["hidden_size"]
@@ -113,6 +116,9 @@ def verify(folder: Path, output: Path) -> dict:
         expected_names.add(ggname)
         actual = read_tensor(tensors[ggname])
         np.testing.assert_array_equal(actual, source_st[indices])
+        transposed = source_st[indices].swapaxes(-1, -2)
+        if not np.array_equal(actual, transposed):
+            orientation_control = True
         if not np.array_equal(source_st, source_st[indices]):
             if np.array_equal(actual, source_st):
                 raise AssertionError("positive wrong-head-order control was not rejected")
@@ -122,10 +128,11 @@ def verify(folder: Path, output: Path) -> dict:
     np.testing.assert_array_equal(read_tensor(tensors["ridgefill.rowsel.score"]), rowsel["score"])
     if set(tensors) != expected_names:
         raise AssertionError(f"unexpected tensor set: {set(tensors) ^ expected_names}")
-    if not maps or not states or not wrong_map_checked or not head_control:
+    if not maps or not states or not wrong_map_checked or not head_control or not orientation_control:
         raise ValueError("SKIPPED: maps, correction or nontrivial controls missing; no passing verdict")
     return dict(result="PASS", maps=maps, states=states, tensors=len(tensors), max_map_abs_error=maximum_error,
-                metadata="PASS", bias_and_score_exact="PASS", wrong_map_control="PASS", head_order_control="PASS",
+                metadata="PASS", bias_and_score_exact="PASS", wrong_map_control="PASS", head_order_control="PASS", orientation_control="PASS",
+                vocab_sha256=reader.fields[prefix + "vocab_sha256"].contents(),
                 source_sha256=hashes["ridgefill.json"], output_sha256=converter.file_sha256(output))
 
 
@@ -133,5 +140,6 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("package", type=Path)
     parser.add_argument("gguf", type=Path)
+    parser.add_argument("--model-gguf", type=Path, required=True)
     args = parser.parse_args()
-    print(json.dumps(verify(args.package, args.gguf), sort_keys=True))
+    print(json.dumps(verify(args.package, args.gguf, args.model_gguf), sort_keys=True))
