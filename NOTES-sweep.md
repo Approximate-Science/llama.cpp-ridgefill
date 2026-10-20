@@ -16,8 +16,8 @@ The row selector uses a prefix-relative budget, ties-to-even rounding, score ord
 |---|---|---|
 | CPU library builds, maximum four build jobs | `cmake --build build-sweep --target llama -j4` | PASS |
 | Bounded storage, conversion/capture/replay, chunk invariance, corruption control | `build-sweep/check-sweep` | PASS |
-| Question graph agrees with `select.window_mass` within 1e-4 | `PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-mass.py /var/home/dylan/projects/research/kva-wt-q27` | PASS for the standalone graph using oracle lower-layer inputs/keys |
-| h_S capture of a tiny split-4 lower pass matches PyTorch conversion | Same Python command, chunk sizes 700/128/50 | PASS |
+| Question graph agrees with `select.window_mass` within 1e-4 | `check-frozen.py`, L-B shared split-4 oracle | PASS: graph max relative error 1.763e-7; live FP32 cache 3.017e-7 |
+| h_S capture of a tiny split-4 lower pass matches PyTorch conversion | `check-frozen.py`, L-B frozen h_S, chunk sizes 700/128/50 | PASS |
 | Engine lower-only graph stops at S and captures its own h_S | L-A dispatch/context hook plus L-B fixture | SKIPPED: touch points are specified but not implemented yet |
 | Engine cache mapping and layer-input extraction feed the mass graph | `check-cache.cpp` plus `check-cache.py`, L-B tiny GGUF | PASS using stock full decode; LOWER dispatch still SKIPPED |
 | Sweeps 2-3, server driver, G1 caches/logits, qattn-share-zero equals quality | L-A late fill passes G1, then integrated sweep gate | SKIPPED |
@@ -75,7 +75,7 @@ The wrong-weight control rotates query-head weight groups and must exceed 1e-2 r
 
 ## Fixture and precision
 
-No L-B tiny model was available when these tests began. Under the coordinator's authorization, `check-mass.py` creates a throwaway local fixture and random split-4 projector in `build-sweep/tiny-qwen35-local/`: seed 20261020, eight layers, attention at 3/7, hidden 64, attention head dimension 16, four Q heads/two KV heads, GDN two key heads/four value heads of width 16, conv width 4, vocabulary 300. It writes safetensors directly, then runs the actual oracle `Qwen35`, `run_lower`, `window_mass`, and `top_rows` in CPU FP32. N=700, P=500; windows end at 700, 500, and 37, with window lengths 64, 37, and 1. This is not yet L-B's shared fixture or a converted GGUF.
+No L-B tiny model was available when these tests began. Under the coordinator's authorization, `check-mass.py` creates a throwaway local fixture and random split-4 projector in `build-sweep/tiny-qwen35-local/`: seed 20261020, eight layers, attention at 3/7, hidden 64, attention head dimension 16, four Q heads/two KV heads, GDN two key heads/four value heads of width 16, conv width 4, vocabulary 300. It writes safetensors directly, then runs the actual oracle `Qwen35`, `run_lower`, `window_mass`, and `top_rows` in CPU FP32. N=700, P=500; windows end at 700, 500, and 37, with window lengths 64, 37, and 1. These initial measurements are historical; the shared split-4 fixture below is now the gate input.
 
 At width 5120 with two-byte elements, the 1 GiB cap admits at most 104857 tokens; 32768 tokens need 335544320 bytes. The cap is per buffer; graph scratch and captured query inputs are additional allocations. F32 is available internally for captured query windows and strict FP32 oracle checks. Four F32 query windows of 64 rows and width 5120 need 5242880 bytes.
 
@@ -89,7 +89,7 @@ Read L-A's `RF27-INTERFACE.md`, commit `9e1c3d076`. The proposed `llama_ridgefil
 
 - L-A can use `llama_ridgefill_sweep_buffer::tensor()` for the specified `h_buf`, allocated with `model.select_buft(split)`. `capture()` and `slice()` also provide per-ubatch graph copies/views, avoiding per-row host copying described in the interface note. These views bake the row offset into the graph, so a changed offset requires rebuilding or must be handled by the context copy path.
 - Layer-input extraction from the existing embeddings API is the agreed query-window source. The mass helper accepts the actual window size through `llm_graph_context::n_tokens` and four positions per query row, then keys `[head_dim, N, Hkv]` in prompt order. The cache helpers now gather the slot's logical rows before calling it; the driver must fill the row-index input and the optional key-rotation input.
-- L-B should supply the split-4 fixture variant and adopt the standalone checks into its owned harness. Split 3 with attention at 3/7 contains no lower attention and cannot validate question mass.
+- L-B supplied the split-4 fixture variant and frozen oracle at `rf27-tools` commit `022983964`; it should adopt the standalone checks into its owned harness. Split 3 with attention at 3/7 contains no lower attention and cannot validate question mass.
 - Next implement lower-sweep execution and slot cache mapping against L-A's landed touch points, then sweeps 2-3 and the server driver after G1 speed.
 
 The initial missing skill path is resolved: read `/var/home/dylan/AI-Work/ridgefill-ports-20261020/skills/build-anything.md` sections 2-4. No GPU, Docker, push, or publication was attempted.
@@ -132,3 +132,42 @@ Exact remaining interface items for L-A/coordinator:
 2. The interface's layer-input extraction description needs correction: current `llama_context::extract_layer_inputs` copies ALL rows of each enabled layer from a decode batch, not only output rows. The flag is context-wide and `llama_set_embeddings_layer_inp` requests scheduler reservation. The eventual driver must scope extraction to lower-sweep calls and restore it before LATE calls, or L-A must make extraction part-aware; a LATE graph has no layer-3 input to extract.
 3. PART_LATE memory preparation must preserve lower recurrent state at N and reuse the lower sweep's physical KV cells instead of allocating duplicate prompt positions. This invariant needs an integrated test; the interface currently states graph dispatch and copies but does not spell out this memory transition.
 4. L-C owns new server driver files. An owner must wire their call into the existing server prompt-processing loop and register the server source; only the `src/CMakeLists.txt` source-line exception has been authorized so far.
+
+## 2026-10-20 18:12: shared split-4 frozen oracle gate
+
+Switched the gate input to L-B's `out/gate1-qwen35/` fixture as relayed by the coordinator. The split-4 projector is the designated input for future integrated sweep gates; the question-mass component itself does not consume a projector. No new throwaway projector was generated or used for these checks. Read `rf27-tools:tests/ridgefill/run_gate1_qwen35.py` at `022983964`; its `quality+qattn` path explicitly returns SKIPPED until the sweep dump/mass API is available.
+
+The new local `check-frozen.py` reads `qattn-s4-oracle.npz` without pickle, checks its tokens and total mass, and verifies the frozen mass against the local oracle's `window_mass`. It feeds the frozen layer-3 input and keys into the production question graph. It compares mass before calling the production C++ row selector through `check-rows.cpp`; all 100 rows must equal the frozen reference. Positive controls change query-head weights or reverse the live cache row map, while the unchanged-input control compares output bytes. Live cache runs use the shared GGUF and tokens, with two interleaved sequences. The capture checks use the frozen split-4 h_S rather than the earlier throwaway model.
+
+```text
+PASS frozen oracle provenance: mass_sum=255.999999155 local window_mass max_abs=0.000e+00 max_rel=0.000e+00
+PASS frozen question graph: max_abs=4.470e-08 max_rel=1.763e-07 rows=100/100 repeat=bitwise wrong_weight_rel=7.076e-01
+PASS frozen live cache f32: max_abs=1.341e-07 max_rel=3.017e-07 rows=100/100 wrong_mapping_rel=6.636e-01
+MEASURE frozen live cache f16: max_abs=9.476e-05 max_rel=2.319e-04; FP32 1e-4 gate=FAIL
+PASS frozen h_S capture f16: chunks=700/128/50 byte-identical to torch; rounding max_abs=3.040e-05 max_rel=1.163e-01
+PASS frozen h_S capture bf16: chunks=700/128/50 byte-identical to torch; rounding max_abs=2.434e-04 max_rel=3.890e-03
+PASS frozen h_S capture f32: chunks=700/128/50 byte-identical to torch; rounding max_abs=0.000e+00 max_rel=0.000e+00
+SKIPPED integrated LOWER/LATE and server: L-A dispatch/context hooks are not present; shared split-4 projector reserved for the integrated gate
+```
+
+The component FP32 mass gate passes 1e-4. FP16 cache versus the FP32-key oracle still fails that tolerance; this result is not relabeled PASS or used to weaken the gate. F16/BF16 capture PASS means the stored bytes match PyTorch conversion, not that the rounded hidden state matches FP32 values or final logits.
+
+Commands:
+
+```sh
+c++ -std=c++17 -O2 -I src -I ggml/include build-sweep/check-rows.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-rows
+build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f32 f32
+build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f16 f16
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-frozen.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+```
+
+These commands exited zero; the test records the FP16 mismatch as a precision measurement and explicitly skips unavailable integration. Log: `build-sweep/check-frozen.log`. The new harness files are local and ignored, ready for L-B to adopt with the other component checks. Production sources did not change in this milestone; the existing CPU build remains green. L-A's inspected tip is `72d79baa7`; LOWER/LATE hooks and the rebase-ready notification are still pending.
+
+Shared fixture SHA-256:
+
+```text
+tiny-qwen35-f32.gguf 7ca220ce7e310c0b8a2a24ef5b17f37ef083c6fd568cd689ce513e77c980c868
+projector-s4-f32.gguf 195b590b75550b14095dd78dcc5554d05b9680294a24482b212635a7e05ea9a0
+qattn-s4-oracle.npz 8a42699c91592637fc5f3d7337d68e29c642c057d4d5d07b754d86a74b706402
+tokens.bin 6f050715842a38697e27ffb16cff0cc29fbda6bece55a19b914d385ef9e50dfb
+```
