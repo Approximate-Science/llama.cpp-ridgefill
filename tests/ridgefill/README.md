@@ -27,6 +27,7 @@ uv pip install --python .venv-oracle/bin/python -r /path/to/kva/requirements.txt
 .venv-oracle/bin/python tests/ridgefill/make_tiny_qwen35.py
 .venv-oracle/bin/python tests/ridgefill/check_fixture.py --kva /path/to/kva
 tests/ridgefill/run_gate1_qwen35.sh --kva /path/to/kva --split 3 --mode speed
+tests/ridgefill/run_gate1_qwen35.sh --kva /path/to/kva --split 3 --mode quality
 ```
 
 The fixture has 8 layers, attention at 3 and 7, hidden size 64, attention head size 16 and 2 KV heads, GDN with 2 key heads and 4 value heads of size 16, and a kernel of 4. It is converted by upstream `convert_hf_to_gguf.py --no-mtp --outtype f32`; only vocabulary export is replaced with a synthetic vocabulary. The HF directory also contains a valid fast tokenizer with the same token strings and IDs.
@@ -45,7 +46,7 @@ The harness pins `--engine-ref` (default `rf27-engine`), builds its `git archive
 
 Speed cases compare tail logits, every layer's final KV/conv/recurrent state, and every late layer's prefix state at N=700/T=200 over batch/ubatch pairs 700/512, 128/128 and 50/50. Prefix dumps are necessary to expose a wrong alpha correction before tail decay. Alpha is 0 and 1. Controls require byte-identical mode-off and T>=N outputs, a wrong map that fails by over 100x tolerance, a wrong correction orientation at alpha 1, and refusal of a filled row asking for logits. The tolerance is 1e-4 relative F32.
 
-Quality accepts hand-picked rows through the RF27 API. The rho-scaled alpha-1 reference and the quality+qattn sweep integration are pending; those cases refuse by name and do not return a passing gate. Split 4 is already available for L-C's mass comparison.
+The same harness is the canonical G1 for quality with hand-picked rows through the RF27 API. It compares alpha-0 inference against the oracle and requires wrong maps, wrong exact rows and speed-instead-of-quality to fail that comparison. Its T>=N control supplies no exact rows because the prefix is empty. Quality alpha 1 is an expected refusal (rc 2 naming the rho-scaled correction), not a passing inference comparison. Speed retains its alpha-0/1 inference and wrong-correction-orientation checks. The quality+qattn sweep integration remains pending and returns nonzero SKIPPED. Split 4 is already available for L-C's mass comparison.
 
 ## Paired server evaluation
 
