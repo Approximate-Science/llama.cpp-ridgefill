@@ -56,6 +56,9 @@ std::unique_ptr<llm_graph_context> llama_model_qwen3::build_arch_graph(const llm
 
 llama_model_qwen3::graph::graph(const llama_model & model, const llm_graph_params & params) : llm_graph_context(params) {
     ggml_tensor * cur = build_backbone(model);
+    if (!cur) {
+        return; // RidgeFill: a filled ubatch has no output head
+    }
 
     // lm_head
     cur = build_lora_mm(model.output, cur, model.output_s);
@@ -84,7 +87,7 @@ ggml_tensor * llama_model_qwen3::graph::build_backbone(const llama_model & model
 
     for (int il = 0; il < n_layer; ++il) {
         if (build_ridgefill(model, il, inpL, inp_pos, inp_attn, inp_out_ids)) {
-            return;
+            return nullptr;
         }
 
         res->t_layer_inp[il] = inpL;
