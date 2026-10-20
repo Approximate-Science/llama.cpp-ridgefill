@@ -2024,6 +2024,10 @@ int llama_perplexity(int argc, char ** argv) {
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
         return 1;
     }
+    if (params.ridgefill_mode == "quality") {
+        LOG_ERR("%s: --ridgefill-mode quality requires llama_ridgefill_select_rows, which is unavailable in this build\n", __func__);
+        return 1;
+    }
     if (params.ridgefill_mode == "quality+qattn") {
         LOG_ERR("%s: --ridgefill-mode quality+qattn requires the server's question-attention sweep\n", __func__);
         return 1;

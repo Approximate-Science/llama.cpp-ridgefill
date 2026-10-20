@@ -75,3 +75,11 @@ Controls:
 ```
 
 The live control directory must contain `rf_dump` and `build/bin/llama-server`. It compares 512 teacher-forced server probabilities against direct F32 logits on the tiny model, checks an identical off/off rerun, rejects post-sampling probabilities, exercises streaming TTFT, and checks positive/negative BCa integration controls. These are eval-client controls, not real-model quality/speed measurements.
+
+The tool integration control takes the directory containing the three built executables and a matching `rf_dump`:
+
+```sh
+.venv-oracle/bin/python tests/ridgefill/check_tool_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-tools
+```
+
+It compares server speed/off logprobs with direct F32 logits, changes request modes and exact tails through a live cache, checks CLI propagation through /props, runs bench and perplexity, and requires named refusals for unavailable quality modes. Bench uses F16 KV because its existing parser does not accept F32. This is a tiny CPU integration check; it produces no real-model performance claim.

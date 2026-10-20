@@ -2319,6 +2319,10 @@ int llama_bench(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
+    if (g_ridgefill.ridgefill_mode == "quality") {
+        fprintf(stderr, "--ridgefill-mode quality requires llama_ridgefill_select_rows, which is unavailable in this build\n");
+        return 1;
+    }
     if (g_ridgefill.ridgefill_mode == "quality+qattn") {
         fprintf(stderr, "--ridgefill-mode quality+qattn requires the server's question-attention sweep\n");
         return 1;

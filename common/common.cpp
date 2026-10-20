@@ -1788,14 +1788,10 @@ void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf
 }
 
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const llama_ridgefill * rf,
-        const llama_token * tokens, int32_t n_prefix, const std::string & mode) {
+        const llama_token *, int32_t n_prefix, const std::string & mode) {
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
     if (!rf || n_prefix <= 0 || selected_mode == "off" || selected_mode == "speed") { return {}; }
-    std::vector<llama_pos> rows(n_prefix);
-    const int32_t count = llama_ridgefill_select_rows(rf, tokens, n_prefix, params.ridgefill_share, params.ridgefill_digits != 0, rows.data());
-    if (count < 0 || count > n_prefix) { throw std::runtime_error("RidgeFill: select_rows failed"); }
-    rows.resize(count);
-    return rows;
+    throw std::runtime_error("RidgeFill: mode " + selected_mode + " requires llama_ridgefill_select_rows, which is unavailable in this build");
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
