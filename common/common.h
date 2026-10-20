@@ -539,8 +539,15 @@ struct common_params {
     std::vector<common_control_vector_load_info> control_vectors; // control vector with user defined scale
 
     std::string ridgefill_path;               // RidgeFill projector, empty: off
-    int32_t     ridgefill_tail       = 4096;  // the last prompt tokens that are computed exactly
+    std::string ridgefill_mode       = "speed";
+    int32_t     ridgefill_tail       = 0;     // 0: projector default
     int32_t     ridgefill_min_prompt = 8192;  // shorter prompts are not filled
+    float       ridgefill_share      = -1;    // negative: projector default
+    float       ridgefill_alpha      = -1;
+    int32_t     ridgefill_digits     = -1;
+    float       ridgefill_qattn_share = -1;
+    int32_t     ridgefill_qattn_window = 64;
+    bool        ridgefill_qattn_blind = false;
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
     int32_t control_vector_layer_start = -1; // layer range for control vector
@@ -994,12 +1001,14 @@ struct common_gguf_info {
 common_gguf_info common_get_gguf_info(const std::string & fname);
 
 // note: defines the model, context, samplers, ets. lifetimes
+struct llama_ridgefill;
 struct common_init_result {
     common_init_result(common_params & params, bool model_only = false);
     ~common_init_result();
 
     llama_model * model();
     llama_context * context();
+    llama_ridgefill * ridgefill();
 
     common_sampler * sampler(llama_seq_id seq_id);
     void reset_samplers();
@@ -1023,7 +1032,12 @@ void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adap
 
 // RidgeFill: the end of the filled positions of a prompt of n_prompt tokens, 0 if none is filled
 // n_tail > 0 overrides params.ridgefill_tail
-int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, int32_t n_tail = 0);
+int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, int32_t n_tail = 0, const std::string & mode = "");
+bool common_ridgefill_mode_valid(const std::string & mode);
+void common_ridgefill_set_option(common_params & params, const std::string & option, const std::string & value);
+void common_ridgefill_resolve(common_params & params, const struct llama_ridgefill * rf);
+std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const struct llama_ridgefill * rf,
+        const llama_token * tokens, int32_t n_prefix, const std::string & mode = "");
 
 // model endpoint from env
 std::string common_get_model_endpoint();
