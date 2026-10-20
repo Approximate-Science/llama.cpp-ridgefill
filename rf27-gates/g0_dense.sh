@@ -17,7 +17,7 @@ KVA=${KVA:-/var/home/dylan/projects/research/kva}
 BASE=$(git -C "$REPO" merge-base HEAD origin/master)
 JOBS=${JOBS:-4}
 mkdir -p out
-out=results-g0.txt; : > $out
+out=results-g0${ONLY:+-$ONLY}.txt; : > $out
 say() { echo "$*" | tee -a $out; }
 
 # upstream at the merge base
@@ -45,6 +45,7 @@ for tiny in llama qwen3; do
   export TINY=$tiny
   T=$FIX/work/tokens.bin; TAIL=200
   for fa in 0 1; do
+    [ "${ONLY:-}" = ppl ] && break
     for cfg in $cfgs; do
       b=${cfg%/*}; ub=${cfg#*/}; tag="$tiny-fa$fa-b$b-ub$ub"
       if [ $fa = 1 ]; then export TOL=1e-2; else export TOL=1e-4; fi
@@ -67,16 +68,16 @@ for tiny in llama qwen3; do
       say "$s dense wrongmap  $tag: $(echo "$r" | $PY -c "$summ" 2>&1 | tail -1) (must exceed tolerance)"
     done
   done
-  ./rf_dump -m $M -t $T -o out/err-$tiny --proj $FIX/work/$PJ-f32.gguf --tail $TAIL --keep $((TAIL + 1)) -b 128 -ub 64 2>/dev/null
-  [ $? -eq 2 ] && say "PASS refuse-output $tiny: decode refuses a filled token that is an output" || say "FAIL refuse-output $tiny"
+  [ "${ONLY:-}" != ppl ] && ./rf_dump -m $M -t $T -o out/err-$tiny --proj $FIX/work/$PJ-f32.gguf --tail $TAIL --keep $((TAIL + 1)) -b 128 -ub 64 2>/dev/null
+  [ "${ONLY:-}" != ppl ] && { [ $? -eq 2 ] && say "PASS refuse-output $tiny: decode refuses a filled token that is an output" || say "FAIL refuse-output $tiny"; }
 
   # llama-perplexity: per-chunk lines identical (timings stripped)
-  ppl() { "$1" -m $M -f $FIX/work/text.txt -c 256 -b 256 -t 4 "${@:2}" 2>&1 | grep -E '^\[[0-9]+\]|^Final estimate|estimated PPL' ; }
+  ppl() { "$1" -m $M -f $FIX/work/text.txt -c 256 -b 256 -t 4 "${@:2}" 2>&1 | grep -oE '\[[0-9]+\][0-9.]+|Final estimate.*' ; }  # -o: the async log interleaves lines
   ppl build-upstream/bin/llama-perplexity > out/ppl-stock-$tiny.txt
   ppl "$REPO/build-cpu/bin/llama-perplexity" > out/ppl-off-$tiny.txt
   ppl "$REPO/build-cpu/bin/llama-perplexity" --ridgefill $FIX/work/$PJ-f32.gguf --ridgefill-min-prompt 100000 > out/ppl-tgen-$tiny.txt
   for v in off tgen; do
-    [ -s out/ppl-stock-$tiny.txt ] && grep -q '\[1\]' out/ppl-stock-$tiny.txt && cmp -s out/ppl-stock-$tiny.txt out/ppl-$v-$tiny.txt \
+    [ -s out/ppl-stock-$tiny.txt ] && grep -q '^\[33\]' out/ppl-stock-$tiny.txt && cmp -s out/ppl-stock-$tiny.txt out/ppl-$v-$tiny.txt \
       && say "PASS G0 ppl-$v    $tiny: $(grep -c . out/ppl-stock-$tiny.txt) lines identical ($(tail -1 out/ppl-stock-$tiny.txt | tr -s ' ' | cut -c1-60))" \
       || say "FAIL G0 ppl-$v    $tiny"
   done
