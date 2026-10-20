@@ -181,3 +181,27 @@ ty 0.0.84: All checks passed!
 The cached ty is version 0.0.84; an offline request for the CI's 0.0.88 was unavailable. The check used the existing cached executable. Quality/rho/qattn positive inference gates and real-model measurements remain NOT RUN and are not claimed by this handoff.
 
 L-C handoff: buildable tool plumbing is committed at `997892598cb3db27e1ce025a01108c2ab4fff6e1` (common/server fields originated in `1978cc39b`; CPU builds and 30 live + 18 argument checks pass; unavailable modes refuse by name).
+
+### Canonical speed and quality G1 on 3ac42957d (2026-10-20)
+
+Read L-A's dated interface correction: exact-row vectors are a stable graph parameter pointer and graph-reuse key, and the selected-row positions tensor is I32 `[n_R * n_pos]` in M-RoPE section-major order. The public set_rows call used by rf_dump needs no signature change.
+
+Fixed the canonical `run_gate1_qwen35.sh` driver in two places. T>=N supplies no --rows because no prefix positions exist. Quality alpha 1 now requires an actual decode refusal (rc 2 and the phrase `rho-scaled correction`), rather than attempting an unsupported oracle comparison. Speed still compares alpha 0 and 1 and exercises the non-symmetric correction-orientation control. No rf_dump or src changes were needed.
+
+Quality alpha 0 compares all expected arrays against the independent oracle for R=[0,7,31,127,255,499]. Its positive controls require a wrong map, wrong rows [1,6,30,126,254,498], and speed used in place of quality to fail that oracle by more than 1e-2. Rejected treating a successful decode alone as a quality pass. Every batch setting also tests byte-identical off and T>=N, the named alpha-1 refusal, and filled-logit refusal.
+
+Built a clean archive of engine `3ac42957d0bfb7449b11bc77ed82685ef21b7148` with -j4, then ran:
+
+```sh
+tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-wt-q27 --engine-ref 3ac42957d --split 3 --mode speed
+tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-wt-q27 --engine-ref 3ac42957d --split 3 --mode quality
+```
+
+```json
+{"checks":27,"gate":"G1","mode":"speed","result":"PASS","split":3}
+{"checks":27,"gate":"G1","mode":"quality","result":"PASS","split":3}
+```
+
+Both modes passed over batch/ubatch 700/512, 128/128 and 50/50, CPU F32 KV, flash attention off, 4 threads, N=700/T=200. Maximum correct oracle relative error was 9.938011089616339e-7 in each run (tolerance 1e-4). Quality positive controls had max relative errors 1.4805277585983276 (wrong map) and 1.482216715812683 (wrong rows and speed instead of quality). Quality alpha 1 returned rc 2 with the required message in all three settings. Speed wrong-orientation error remained 1.370469093322754.
+
+Evidence: `out/gate1-speed-3ac42957d-run.log`, `out/gate1-quality-3ac42957d-run.log`, `out/gate1-engine/3ac42957d0bf/{build.json,build.log,harness-build.log}`, and `out/gate1-qwen35/g1-s3-{speed,quality}/results.json`. Type check passed (`out/gate1-3ac42957d-typecheck.log`); git diff --check passed. This canonical gate tests explicit rows, not the missing class/digit selector API. Rho correction, qattn, and real-model measurements remain outside these passing verdicts.

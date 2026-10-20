@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
 """CPU G1: oracle agreement and controls over three chunk sizes. Nothing skipped is a pass.
 
-Use split 3 for speed/quality and split 4 for the future qattn sweep gate. An engine build failure
-or an unavailable sweep/rho oracle produces a nonzero SKIPPED result with the blocking stage.
+Use split 3 for speed/quality and split 4 for the future qattn sweep gate. Quality alpha 1 must
+refuse the unavailable rho-scaled correction; it is not an inference-agreement case. Empty prefixes
+must not receive exact rows. An engine build failure or unavailable sweep produces nonzero SKIPPED.
 Logs and reference arrays live under --work; cached engine build logs identify the exact revision.
 """
 
@@ -31,6 +32,8 @@ def run(args) -> int:
     out = work / f"g1-s{args.split}-{args.mode}"
     out.mkdir(exist_ok=True)
     rows = [0, 7, 31, 127, 255, 499]
+    other_rows = [1, 6, 30, 126, 254, 498]
+    n_prompt = (work / "tokens.bin").stat().st_size // 4
     expected = {}
     records = []
 
@@ -41,20 +44,20 @@ def run(args) -> int:
         if not passed:
             raise AssertionError(f"G1 check failed: {name}")
 
-    def invoke(tag, batch, ubatch, mode="off", alpha=0, projector=None, tail=200, filled_logit=False):
+    def invoke(tag, batch, ubatch, mode="off", alpha=0, projector=None, tail=200, filled_logit=False, exact_rows=None, expect_refusal=False):
         prefix = out / tag
         command = [str(dump), "--model", str(work / "tiny-qwen35-f32.gguf"), "--tokens", str(work / "tokens.bin"),
                    "--output", str(prefix), "--mode", mode, "--tail", str(tail), "--keep", "200",
                    "--batch", str(batch), "--ubatch", str(ubatch), "--alpha", str(alpha)]
         if projector:
             command += ["--projector", str(projector)]
-        if mode == "quality":
-            command += ["--rows", ",".join(str(row) for row in rows)]
+        if mode == "quality" and tail < n_prompt:
+            command += ["--rows", ",".join(str(row) for row in (rows if exact_rows is None else exact_rows))]
         if filled_logit:
             command.append("--filled-logit")
         with prefix.with_suffix(".log").open("w") as log:
             result = subprocess.run(command, stdout=log, stderr=subprocess.STDOUT)
-        if result.returncode and not filled_logit:
+        if result.returncode and not (filled_logit or expect_refusal):
             raise RuntimeError(f"rf_dump failed ({result.returncode}); see {prefix.with_suffix('.log')}")
         return prefix, result.returncode
 
@@ -81,7 +84,7 @@ def run(args) -> int:
         no_prefix, _ = invoke("no-prefix-" + tag, batch, ubatch, mode=args.mode, projector=projector, tail=700)
         record("negative-tail-ge-n-" + tag, all(Path(str(stock_short) + suffix).read_bytes() == Path(str(no_prefix) + suffix).read_bytes()
                                                for suffix in (".kv", ".logits")))
-        for alpha in (0, 1):
+        for alpha in ((0, 1) if args.mode == "speed" else (0,)):
             suffix = tag + f"-a{alpha}"
             filled, _ = invoke("fill-" + suffix, batch, ubatch, mode=args.mode, alpha=alpha, projector=projector)
             comparison = compare(filled, args.mode, alpha)
@@ -96,6 +99,18 @@ def run(args) -> int:
                 prefix_errors = [error for name, error in comparison["relative_errors"].items() if name.startswith("prefix.") and name.endswith(".rec")]
                 record("positive-wrong-st-" + suffix, comparison["result"] == "FAIL" and bool(prefix_errors) and max(prefix_errors) > 1e-2,
                        comparison=comparison)
+        if args.mode == "quality":
+            wrong, _ = invoke("wrong-rows-" + tag, batch, ubatch, mode="quality", projector=projector, exact_rows=other_rows)
+            comparison = compare(wrong, "quality", 0)
+            record("positive-wrong-rows-" + tag, comparison["result"] == "FAIL" and comparison["max_relative_error"] > 1e-2,
+                   comparison=comparison)
+            speed, _ = invoke("speed-instead-of-quality-" + tag, batch, ubatch, mode="speed", projector=projector)
+            comparison = compare(speed, "quality", 0)
+            record("positive-speed-instead-of-quality-" + tag, comparison["result"] == "FAIL" and comparison["max_relative_error"] > 1e-2,
+                   comparison=comparison)
+            refused, code = invoke("quality-alpha1-" + tag, batch, ubatch, mode="quality", alpha=1, projector=projector, expect_refusal=True)
+            message = refused.with_suffix(".log").read_text().lower()
+            record("quality-alpha1-refused-" + tag, code == 2 and "rho-scaled correction" in message, returncode=code)
         refused, code = invoke("filled-logit-" + tag, batch, ubatch, mode=args.mode, projector=projector, filled_logit=True)
         message = refused.with_suffix(".log").read_text().lower()
         record("filled-logit-refused-" + tag, code == 2 and ("filled" in message or "ridgefill" in message))

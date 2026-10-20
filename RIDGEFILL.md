@@ -20,7 +20,7 @@ RidgeFill is by Dylan Johnston and tcclaviger. Method, reference implementation 
 
 ## Qwen3.8-27B (`qwen35`): development status
 
-The Qwen3.8-27B port is in progress. The format-2 projector converter and tiny Qwen3.5 fixtures are available. The tiny model's speed-mode logits, KV caches, convolution state and recurrent state match the CPU oracle across three chunk sizes and alpha 0/1; mode-off, T>=N, wrong-map, wrong-correction-orientation and filled-logit controls passed. Real-model results below are **NOT YET MEASURED** for this port; the later Llama/Qwen3 tables are earlier measurements on different models.
+The Qwen3.8-27B port is in progress. The format-2 projector converter and tiny Qwen3.5 fixtures are available. On engine `3ac42957d`, the canonical tiny CPU G1 passed 27 checks each for speed (alpha 0/1) and quality with explicit exact rows (alpha 0), across three chunk sizes. The gates compare logits, KV caches, convolution state and recurrent state with the oracle and require positive/negative controls. Quality alpha 1 is refused by name until the rho-scaled correction is implemented. Real-model results below are **NOT YET MEASURED** for this port; the later Llama/Qwen3 tables are earlier measurements on different models.
 
 The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 512, and minimum prompt 8192. Defaults come from the projector: alpha 0, class share 0.5, digits on, question-attention share 0.2. A format-2 GGUF checks every model fingerprint field and the vocabulary token hash; the tokenizer JSON hash and source file hashes are retained as provenance. A different quantization of the same base model is allowed.
 
@@ -28,12 +28,12 @@ The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 5
 |---|---|---|
 | `off` | all rows | stock fallback; Qwen27 validation pending |
 | `speed` | none | tiny CPU G1 passed; real-model gates pending |
-| `quality` | union of class rows and digit rows | refused by name until the selector API and masked decode land |
+| `quality` | union of class rows and digit rows | tiny CPU G1 with explicit rows/alpha 0 passed; tool selector API pending |
 | `quality+qattn` | quality rows plus question-attention rows | selector/sweep integration pending; refused by name |
 
 Class selection is per prompt: keep `rint(share * qualifying_rows)` prefix positions with the highest finite row scores, ties by lower position. Digit rows contain an ASCII digit in the vocabulary token text, with added/special tokens excluded. The question-attention rule selects `round(qattn_share * prefix_length)` prefix rows by causal attention mass from the last `qattn_window` prompt rows at attention layers 3, 7, 11 and 15. `--ridgefill-qattn-blind` moves the query window immediately before the prefix end. Question-attention needs the sweep driver; its zero-share case uses the class/digit selection.
 
-Speed mode writes attention KV and GDN convolution/recurrent state from each predicted layer input. Quality mode mixes predicted bulk inputs with the carried exact-row residuals, then restricts the remaining late-layer work to exact rows. The terminal GDN correction is applied once at the prefix boundary; quality scales it by the gate-decayed bulk share. The source package already stores corrections as `[heads, V, K]`; GGUF conversion reorders value heads into llama.cpp order without transposing K/V again.
+Speed mode writes attention KV and GDN convolution/recurrent state from each predicted layer input. Quality mode mixes predicted bulk inputs with the carried exact-row residuals, then restricts the remaining late-layer work to exact rows. The terminal GDN correction is applied once at the prefix boundary in speed mode. Quality needs scaling by the gate-decayed bulk share; this rho-scaled correction is pending, so nonzero quality alpha is refused. The source package already stores corrections as `[heads, V, K]`; GGUF conversion reorders value heads into llama.cpp order without transposing K/V again.
 
 | same-build paired result | mode off | speed | quality | quality+qattn |
 |---|---|---|---|---|
