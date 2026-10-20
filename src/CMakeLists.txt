@@ -39,6 +39,7 @@ set(LLAMA_CORE_SOURCES
     llama-model.cpp
     llama-quant.cpp
     llama-ridgefill.cpp
+    llama-ridgefill-sweep.cpp
     llama-sampler.cpp
     llama-vocab.cpp
     unicode-data.cpp
