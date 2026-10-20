@@ -226,7 +226,7 @@ the attention layers' K cache through `llama_kv_cache` views.
   split, nothing above changes.
 - The rows / scale input shapes may get a dated correction once the masked path is built; the function signature will not.
 
-## Correction 2026-10-20 18:45 (L-A, with the qwen35 speed fill)
+## Correction 2026-10-20 18:25 (L-A, with the qwen35 speed fill)
 
 - `llama_ridgefill_set_alpha` and `llama_ridgefill_seq_set_rows` return `int32_t` (0 ok, < 0 refused and logged by
   name) instead of `void`, so a refusal is visible to the caller. Both are in `src/llama-ext.h` now, with the

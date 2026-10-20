@@ -28,7 +28,7 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   both binaries print the same 33 chunks and PPL 301.4395 (llama) / 305.1462 (qwen3).
 - Dense fill vs kva after the rebase, FA off: llama logits rel 4.3e-7-level as on Oct 8; qwen3 4.32e-07 / KV 2.80e-06.
 
-## 18:20-18:50 qwen35 speed fill, G1 speed
+## 18:15-18:25 qwen35 speed fill, G1 speed
 - Implemented: format-2 loader (model_meta compared key by key, unknown key refused; vocab_sha256 recomputed from
   `model.vocab`; `model_layer_types` checked when present; `st` F32 [S_k, S_v, H_v] required per late GDN layer;
   score table and digit set on the host; a GDN layer without a map = identity fill, warned), `build_ridgefill_late`
@@ -52,3 +52,22 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   fixed (rc captured), both rows PASS with rc 2.
 - Quality mode refuses by name at decode (exact rows set): rc 2, "exact rows (quality mode), which this build does not
   implement yet".
+
+## 18:25-18:35 rollback decision (n_rs_seq > 0)
+- Decision: keep rollback on (no forced n_rs_seq = 0); filled ubatches write the stock snapshots through
+  `build_recurrent_attn`; the correction ubatch writes the current slot only.
+- Bug found and fixed (src/llama-batch.cpp `split_equal`): with n_rs_seq > 0 the keep-tail rule keeps a sequence's
+  last n_rs_seq + 1 tokens of a batch in one ubatch; when a batch crossed P and held fewer exact tokens than that,
+  its "extend the sequence to completion" branch appended tail tokens to the filled ubatch. The mixed ubatch had
+  outputs, so it ran stock: the filled rows were silently computed exactly (rs4 vs rs0: 1.73 / 1.64 max rel at
+  batch 694/695, T = 8). Fix: the rule counts only the remaining tokens of the current fill class (a filled run never
+  shares a ubatch with the next run). No effect when nothing is filled (the marker vector is empty).
+- Test (`rf27-gates/g1_rollback.sh`, L-B's fixture): L-B's G1 speed harness with n_rs_seq = 4 (27/27 PASS);
+  batches crossing P (`--cross`, as the server submits them) at 700/512, 694/512, 695/128, 128/128, 50/50 with T = 8:
+  n_rs_seq 4 == n_rs_seq 0 (max rel 0.0, same fused GDN op), control fill != stock 1.42 everywhere. 11/11.
+  Negative check: with only the split fix reverted, exactly the two crossing rows (694, 695) FAIL.
+- Rejected: refusing outputs within n_rs_seq + 1 exact tokens of the fill end. Too strict (it refused every harness
+  run scoring all tail rows and would refuse a server batch that happens to end a few tokens after P), and not
+  needed: stock does not shift snapshot slots either, a rollback is valid only into the tokens of the last ubatch
+  ("older slots are caller-owned"), and callers roll back drafts, never prompt rows. Documented in llama-ext.h.
+- rf27-gates/rf_dump_rs.cpp = L-B's rf_dump.cpp + `--n-rs-seq`, `--cross` (L-B's file untouched).

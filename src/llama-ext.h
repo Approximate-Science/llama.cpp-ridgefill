@@ -158,6 +158,9 @@ LLAMA_API void llama_set_ridgefill(struct llama_context * ctx, const struct llam
 
 // from now on, the tokens of seq_id at positions < p_end are filled (p_end <= 0: none)
 // a filled token cannot be an output, llama_decode() returns -1 for such a batch
+// recurrent rollback (n_rs_seq > 0): a filled ubatch never holds exact tokens, so the snapshots of a decode whose exact
+// run is shorter than n_rs_seq + 1 cover only that run; roll back only into the tokens of the last exact ubatch (as
+// stock, where older slots are caller-owned) - never into filled prompt rows
 LLAMA_API void llama_ridgefill_seq_set(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p_end);
 
 // RF27 (qwen35): defaults from the projector GGUF (format 2; format-1 files report the built-in defaults)

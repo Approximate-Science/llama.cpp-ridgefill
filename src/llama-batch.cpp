@@ -746,7 +746,21 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
         GGML_ASSERT(n_ubatch > n_keep_tail);
 
         auto n_remaining = [&](uint32_t s) {
-            return (uint32_t) (seq_set_map[cur_seq_set[s]].size() - cur_idx[s]);
+            const auto & seq_idxs = seq_set_map[cur_seq_set[s]];
+
+            uint32_t n = seq_idxs.size() - cur_idx[s];
+
+            // RidgeFill: a run of filled tokens never shares a ubatch with the next run, so the rule applies to
+            //   each run (a filled ubatch is never extended with exact-tail tokens)
+            if (!fill.empty()) {
+                uint32_t m = 0;
+                while (m < n && fill[seq_idxs[cur_idx[s] + m]] == fill_first) {
+                    ++m;
+                }
+                n = m;
+            }
+
+            return n;
         };
 
         // keep the longest prefix of seqs that satisfy the constraint, to preserve sequential seq ids

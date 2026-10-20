@@ -1,0 +1,12 @@
+PASS harness-speed-n_rs_seq4: {"checks": 27, "gate": "G1", "mode": "speed", "result": "PASS", "split": 3}
+PASS boundary rs4==rs0  b700-ub512 T=8: {"max_rel": 0.0, "worst": "logits", "arrays": 17}
+PASS control fill!=stock b700-ub512 T=8: {"max_rel": 1.4189854860305786, "worst": "final.3.k", "arrays": 17} (must exceed 1e-2)
+PASS boundary rs4==rs0  b694-ub512 T=8: {"max_rel": 0.0, "worst": "logits", "arrays": 17}
+PASS control fill!=stock b694-ub512 T=8: {"max_rel": 1.4189854860305786, "worst": "final.3.k", "arrays": 17} (must exceed 1e-2)
+PASS boundary rs4==rs0  b695-ub128 T=8: {"max_rel": 0.0, "worst": "logits", "arrays": 17}
+PASS control fill!=stock b695-ub128 T=8: {"max_rel": 1.4189854860305786, "worst": "final.3.k", "arrays": 17} (must exceed 1e-2)
+PASS boundary rs4==rs0  b128-ub128 T=8: {"max_rel": 0.0, "worst": "logits", "arrays": 17}
+PASS control fill!=stock b128-ub128 T=8: {"max_rel": 1.4189854860305786, "worst": "final.3.k", "arrays": 17} (must exceed 1e-2)
+PASS boundary rs4==rs0  b50-ub50 T=8: {"max_rel": 0.0, "worst": "logits", "arrays": 17}
+PASS control fill!=stock b50-ub50 T=8: {"max_rel": 1.4189854860305786, "worst": "final.3.k", "arrays": 17} (must exceed 1e-2)
+TOTAL PASS 11 FAIL 0
