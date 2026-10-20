@@ -86,6 +86,22 @@ def package_file(folder: Path, name: str) -> Path:
     return path
 
 
+def model_vocab_sha256(path: Path, vocab_size: int) -> str:
+    reader = gguf.GGUFReader(path)
+    if reader.fields["general.architecture"].contents() != "qwen35":
+        raise ValueError("--model-gguf: general.architecture must be qwen35")
+    tokens = reader.fields.get("tokenizer.ggml.tokens")
+    if tokens is None or tokens.types != [gguf.GGUFValueType.ARRAY, gguf.GGUFValueType.STRING]:
+        raise ValueError("--model-gguf: tokenizer.ggml.tokens must be a string array")
+    if len(tokens.data) != vocab_size:
+        raise ValueError(f"--model-gguf: tokenizer.ggml.tokens count {len(tokens.data)} != model.meta.vocab_size {vocab_size}")
+    digest = hashlib.sha256()
+    for index in tokens.data:
+        digest.update(tokens.parts[index].tobytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
 def read_package(folder: Path) -> tuple[dict, dict[str, str]]:
     manifest_path = package_file(folder, "ridgefill.json")
     manifest = json.loads(manifest_path.read_text())
@@ -135,6 +151,8 @@ def read_package(folder: Path) -> tuple[dict, dict[str, str]]:
     nk, nv = m["linear_num_key_heads"], m["linear_num_value_heads"]
     if nv % nk:
         raise ValueError("model.meta.linear_num_value_heads: not divisible by key heads")
+    if manifest["correction"]["layout"] != "[heads, V, K]":
+        raise ValueError("correction.layout: expected [heads, V, K]")
     required_files = set(manifest["projector"]["files"].values()) | {"correction.safetensors", "rowsel.safetensors"}
     if not required_files <= set(manifest["files"]):
         raise ValueError("ridgefill.json files: missing projector, correction or rowsel checksums")
@@ -182,6 +200,9 @@ def package_map(folder: Path, manifest: dict, il: int) -> tuple[np.ndarray, np.n
 def convert_package(args: argparse.Namespace) -> None:
     manifest, hashes = read_package(args.projector)
     m = manifest["model"]["meta"]
+    if args.model_gguf is None:
+        raise ValueError("--model-gguf is required for a format-1 int8 folder (checked vocabulary fingerprint)")
+    vocab_sha256 = model_vocab_sha256(args.model_gguf, m["vocab_size"])
     if args.base:
         config = json.loads((args.base / "config.json").read_text())
         config = config.get("text_config", config)
@@ -202,7 +223,7 @@ def convert_package(args: argparse.Namespace) -> None:
         writer.add_type(gguf.GGUFType.ADAPTER)
         writer.add_string(gguf.Keys.Adapter.TYPE, "ridgefill")
         prefix = "adapter.ridgefill."
-        for key, value in (("split", manifest["split"]), ("n_layer", m["num_hidden_layers"]), ("n_embd", m["hidden_size"]),
+        for key, value in (("format", 2), ("split", manifest["split"]), ("n_layer", m["num_hidden_layers"]), ("n_embd", m["hidden_size"]),
                            ("tail_default", manifest["tail"]["default"]), ("tail_min", manifest["tail"]["min"])):
             writer.add_uint32(prefix + key, value)
         for key, value in (("alpha_default", manifest["correction"]["alpha_default"]),
@@ -211,15 +232,16 @@ def convert_package(args: argparse.Namespace) -> None:
         writer.add_bool(prefix + "digits_default", manifest["rowsel"]["digits_default"])
         for key in ("name", "license", "doi"):
             writer.add_string(prefix + key, manifest[key])
-        writer.add_string(prefix + "authors", ", ".join(manifest["authors"]))
+        writer.add_array(prefix + "authors", manifest["authors"])
         writer.add_string(prefix + "source_manifest_sha256", hashes["ridgefill.json"])
         writer.add_string(prefix + "tokenizer_sha256", manifest["model"]["tokenizer_json_sha256"])
+        writer.add_string(prefix + "vocab_sha256", vocab_sha256)
         writer.add_string(prefix + "model_layer_types", manifest["model"]["layer_types"])
         writer.add_string(prefix + "source_manifest", json.dumps(manifest, sort_keys=True))
         for key, value in sorted(m.items()):
             writer.add_uint32(prefix + "model_meta." + key, value)
         for name, digest in sorted(hashes.items()):
-            writer.add_string(prefix + "source_sha256." + name, digest)
+            writer.add_string(prefix + "source." + name, digest)
         for il in range(manifest["split"], m["num_hidden_layers"]):
             w, b = package_map(args.projector, manifest, il)
             writer.add_tensor(f"blk.{il}.ridgefill.weight", gguf.quants.quantize(w, qtype), raw_dtype=qtype)
@@ -234,7 +256,7 @@ def convert_package(args: argparse.Namespace) -> None:
         for il in sorted(recurrent):
             st = correction[f"st.{il}"]
             check_shape(f"st.{il}", st, (nv, dv, dk))
-            # HF groups value heads by key head; llama.cpp tiles key heads within each value group.
+            # q27_package.py already transposes oracle [H, K, V] to [H, V, K]; only reorder heads here.
             st = st.reshape(nk, nv // nk, dv, dk).swapaxes(0, 1).reshape(nv, dv, dk)
             writer.add_tensor(f"blk.{il}.ridgefill.st", np.ascontiguousarray(st, dtype=np.float32))
         _, rowsel, _ = read_safetensors(package_file(args.projector, "rowsel.safetensors"))
@@ -259,6 +281,7 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Convert a RidgeFill projector (kva safetensors) to GGUF")
     parser.add_argument("projector", type=Path, help="projector file (.safetensors) or format-1 int8 release folder")
     parser.add_argument("--base", type=Path, help="HF model directory (required for a legacy file; verifies config and tokenizer for a folder)")
+    parser.add_argument("--model-gguf", type=Path, help="base model GGUF (required for an int8 folder to fingerprint tokenizer.ggml.tokens)")
     parser.add_argument("--outfile", type=Path, help="output file (default: projector name with .gguf, plus the type)")
     parser.add_argument("--outtype", choices=list(OUTTYPES), help="type of the maps (default: q8_0 for a folder, bf16 for a legacy file)")
     parser.add_argument("--verbose", action="store_true", help="increase output verbosity")

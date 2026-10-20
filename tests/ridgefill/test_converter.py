@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import sys
 import tempfile
@@ -42,7 +43,7 @@ def make_package(folder: Path) -> dict:
                     model=dict(model_type="qwen3_5_text", meta=meta, tokenizer_json_sha256="0" * 64,
                                layer_types="linear_attention linear_attention full_attention"),
                     split=1, stream_width=64, block_in_width=64, layers={"1": "recurrent", "2": "full_attn"},
-                    tail=dict(default=4096, min=512), correction=dict(alpha_default=0.0, layers=[1]),
+                    tail=dict(default=4096, min=512), correction=dict(alpha_default=0.0, layers=[1], layout="[heads, V, K]"),
                     rowsel=dict(share_default=0.5, qattn_default=0.2, digits_default=True),
                     projector=dict(encoding="i8*bf16[1x128]", files={str(i): f"proj8.L{i}.safetensors" for i in (1, 2)}))
     for il in (1, 2):
@@ -67,21 +68,41 @@ class ConverterTests(unittest.TestCase):
         self.folder = Path(self.temporary.name)
         self.manifest = make_package(self.folder)
         self.output = self.folder / "projector.gguf"
+        self.model_gguf = self.folder / "model.gguf"
+        self.tokens = [f"token-{i}" for i in range(32)]
+        writer = converter.gguf.GGUFWriter(self.model_gguf, "qwen35")
+        writer.add_token_list(self.tokens)
+        writer.write_header_to_file()
+        writer.write_kv_data_to_file()
+        writer.write_tensors_to_file()
+        writer.close()
 
     def tearDown(self):
         self.temporary.cleanup()
 
     def convert(self, outtype="q8_0", base=None):
-        converter.convert_package(argparse.Namespace(projector=self.folder, base=base, outtype=outtype, outfile=self.output))
+        converter.convert_package(argparse.Namespace(projector=self.folder, base=base, outtype=outtype, outfile=self.output, model_gguf=self.model_gguf))
 
     def test_output_types_and_controls(self):
         for outtype in converter.OUTTYPES:
             with self.subTest(outtype=outtype):
                 self.convert(outtype)
-                result = verify(self.folder, self.output)
+                result = verify(self.folder, self.output, self.model_gguf)
                 self.assertEqual(result["result"], "PASS")
                 self.assertEqual(result["maps"], 2)
                 self.assertEqual(result["states"], 1)
+
+    def test_vocab_hash(self):
+        expected = hashlib.sha256(b"".join(token.encode("utf-8") + b"\0" for token in self.tokens)).hexdigest()
+        self.assertEqual(converter.model_vocab_sha256(self.model_gguf, 32), expected)
+        without_terminators = hashlib.sha256("".join(self.tokens).encode("utf-8")).hexdigest()
+        self.assertNotEqual(expected, without_terminators)
+        with self.assertRaisesRegex(ValueError, "tokenizer.ggml.tokens count"):
+            converter.model_vocab_sha256(self.model_gguf, 31)
+
+    def test_model_gguf_required(self):
+        with self.assertRaisesRegex(ValueError, "--model-gguf is required"):
+            converter.convert_package(argparse.Namespace(projector=self.folder, base=None, outtype="q8_0", outfile=self.output, model_gguf=None))
 
     def test_corruption_refused_and_output_preserved(self):
         self.output.write_bytes(b"previous output")
