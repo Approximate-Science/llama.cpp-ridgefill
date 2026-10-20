@@ -20,6 +20,8 @@ The row selector uses a prefix-relative budget, ties-to-even rounding, score ord
 | h_S capture of a tiny split-4 lower pass matches PyTorch conversion | `check-frozen.py`, L-B frozen h_S, chunk sizes 700/128/50 | PASS |
 | Engine lower-only graph stops at S and captures its own h_S | L-A dispatch/context hook plus L-B fixture | SKIPPED: touch points are specified but not implemented yet |
 | Engine cache mapping and layer-input extraction feed the mass graph | `check-cache.cpp` plus `check-cache.py`, L-B tiny GGUF | PASS using stock full decode; LOWER dispatch still SKIPPED |
+| Server driver compiles and refuses unavailable stages by name | `cmake --build build-sweep --target server-context -j4`, `build-sweep/check-driver` | PASS for the skeleton; server call awaits L-B mode plumbing |
+| Zero qattn share uses quality without sweep allocation or context access | `build-sweep/check-driver`, replaced allocator and null-context control | PASS routing; quality cache/logit equivalence still SKIPPED |
 | Sweeps 2-3, server driver, G1 caches/logits, qattn-share-zero equals quality | L-A late fill passes G1, then integrated sweep gate | SKIPPED |
 | Device placement on non-CPU backends | Lane Q hardware gates after integration | SKIPPED: CPU only in this lane |
 
@@ -85,7 +87,7 @@ Measured h_S rounding above demonstrates that two-byte storage is not bit-identi
 
 ## Interface handoff and next step
 
-Read L-A's `RF27-INTERFACE.md`, commit `9e1c3d076`. The proposed `llama_ridgefill_seq_set_part` and PART_LOWER/PART_LATE dispatch were still absent from L-A's implementation at the final inspection. The local branch remains based on `85b1c41fb`; rebase awaits the coordinator's/L-A's ready notification.
+Read L-A's `RF27-INTERFACE.md`, commit `9e1c3d076`. The proposed `llama_ridgefill_seq_set_part` and PART_LOWER/PART_LATE dispatch remain absent. The coordinator confirmed rebase readiness; the local branch is now rebased onto `rf27-engine` at `72d79baa7`, including upstream `1242be66f`.
 
 - L-A can use `llama_ridgefill_sweep_buffer::tensor()` for the specified `h_buf`, allocated with `model.select_buft(split)`. `capture()` and `slice()` also provide per-ubatch graph copies/views, avoiding per-row host copying described in the interface note. These views bake the row offset into the graph, so a changed offset requires rebuilding or must be handled by the context copy path.
 - Layer-input extraction from the existing embeddings API is the agreed query-window source. The mass helper accepts the actual window size through `llm_graph_context::n_tokens` and four positions per query row, then keys `[head_dim, N, Hkv]` in prompt order. The cache helpers now gather the slot's logical rows before calling it; the driver must fill the row-index input and the optional key-rotation input.
@@ -131,7 +133,7 @@ Exact remaining interface items for L-A/coordinator:
 1. `llama_ridgefill_seq_set_part`, `LLM_RIDGEFILL_PART_LOWER/LATE`, and the qwen35 lower-stop/late-input dispatch are described but not present in the implementation at this inspection. Lower-only execution and sweeps 2-3 cannot be exercised until they land.
 2. The interface's layer-input extraction description needs correction: current `llama_context::extract_layer_inputs` copies ALL rows of each enabled layer from a decode batch, not only output rows. The flag is context-wide and `llama_set_embeddings_layer_inp` requests scheduler reservation. The eventual driver must scope extraction to lower-sweep calls and restore it before LATE calls, or L-A must make extraction part-aware; a LATE graph has no layer-3 input to extract.
 3. PART_LATE memory preparation must preserve lower recurrent state at N and reuse the lower sweep's physical KV cells instead of allocating duplicate prompt positions. This invariant needs an integrated test; the interface currently states graph dispatch and copies but does not spell out this memory transition.
-4. L-C owns new server driver files. An owner must wire their call into the existing server prompt-processing loop and register the server source; only the `src/CMakeLists.txt` source-line exception has been authorized so far.
+4. Resolved by coordinator: L-C owns the guarded driver call in server prompt processing and its CMake entries; L-B owns the rest of the server. The current engine base has no request `ridgefill_mode` or common qattn fields. They exist in L-B's working tree but are not committed yet, so the guarded call cannot compile on this branch until that plumbing lands.
 
 ## 2026-10-20 18:12: shared split-4 frozen oracle gate
 
@@ -171,3 +173,38 @@ projector-s4-f32.gguf 195b590b75550b14095dd78dcc5554d05b9680294a24482b212635a7e0
 qattn-s4-oracle.npz 8a42699c91592637fc5f3d7337d68e29c642c057d4d5d07b754d86a74b706402
 tokens.bin 6f050715842a38697e27ffb16cff0cc29fbda6bece55a19b914d385ef9e50dfb
 ```
+
+## 2026-10-20 18:21: rebased driver skeleton and zero-share refusal controls
+
+Rebased only L-C's three commits onto `rf27-engine` at `72d79baa7`, whose ancestry includes upstream `1242be66f`. The first plain `git rebase rf27-engine` tried to replay older engine commits and conflicted in L-A/L-B files. Aborted that attempt without resolving or changing their files, then ran `git rebase --onto rf27-engine 85b1c41fb rf27-sweep`. This succeeded without conflicts. Commit mapping: `f5bab7106` -> `f1c1173dd`, `956bf872e` -> `aa4085be5`, `41f6e1f8e` -> `4f0530a98`.
+
+Added `tools/server/server-ridgefill-sweep.{h,cpp}` and only their two source/header entries in the server CMake file, under the coordinator's ownership decision. `server_ridgefill_sweep_step` is the named entry point, intended for a `mode == "quality+qattn"` guard. Its state owns the hidden buffer, mass, selected rows, phase and cursor. The skeleton orders lower ubatches, mass, union of class/digit/question rows, late-prefix ubatches, then exact-tail ubatches. One call can run at most one ubatch or one mass/selection stage; it never loops over the whole prompt in the server thread.
+
+The execution methods explicitly throw named `RidgeFill quality+qattn` errors for missing LOWER dispatch, missing captured query inputs/cache rows, missing LATE fill replay and missing LATE tail logits. Nonzero share cannot report success: the first execution stage refuses without modifying the context. The row-union and later phase transitions are not reachable yet and are not claimed as tested integration. Zero share returns the `quality` routing result before the byte check, allocation or context access, leaving class/digit rows alone. A zero prefix also bypasses sweeps. All nonzero filled prompts check the existing shared buffer limit before calling the missing engine stage; the size constant is not duplicated.
+
+The guarded server call is not installed yet. This base has neither `server_task_params::ridgefill_mode` nor `common_params::ridgefill_qattn_share/window/blind`. L-B has those fields and a temporary refusal hunk in its working tree, but `rf27-tools` at `e0e1fa9e8` does not contain them. The intended replacement is that temporary refusal in `server-context.cpp`, after `p_fill` is computed. Need L-B's committed plumbing before that owned hunk can compile. For actual interleaving, the sweep object must live with the slot across prompt updates and remain alive until pending graphs finish; a local temporary or a synchronous full-prompt loop is not a valid implementation.
+
+CPU commands:
+
+```sh
+cmake --build build-sweep --target llama -j4
+cmake -S . -B build-sweep -DGGML_CUDA=OFF -DGGML_HIP=OFF -DGGML_VULKAN=OFF -DLLAMA_BUILD_TESTS=OFF -DLLAMA_BUILD_TOOLS=ON -DLLAMA_BUILD_EXAMPLES=OFF -DLLAMA_BUILD_SERVER=ON -DLLAMA_BUILD_UI=OFF -DLLAMA_OPENSSL=OFF -DCMAKE_BUILD_TYPE=Release
+cmake --build build-sweep --target server-context -j4
+c++ -std=c++17 -O2 -Wall -Wextra -I tools/server -I include -I ggml/include build-sweep/check-driver.cpp tools/server/server-ridgefill-sweep.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-driver
+build-sweep/check-driver
+```
+
+```text
+[100%] Built target llama
+[100%] Built target server-context
+PASS zero-share control: returns quality, no allocation/context access, class/digit rows unchanged, repeats unchanged
+PASS h_S cap: 104857 rows admitted, 104858 refused by name for F16/BF16, extreme dimensions refused before allocation
+PASS positive controls: nonzero share refuses missing LOWER dispatch; invalid shares/window/prefix refuse by name; no-prefix bypass
+SKIPPED quality+qattn share 0 versus quality caches/logits: quality and LOWER/LATE engine dispatch unavailable
+```
+
+The local ignored `build-sweep/check-driver.cpp` is ready for L-B to adopt. It replaces C++ allocation functions to count zero-share allocations, passes a null context to detect accidental engine access, preserves class/digit row values, repeats the neutral case, and requires positive-control refusals by mode and reason. The boundary tests admit exactly 1073735680 bytes at 104857 rows of width 5120/F16, then require the next row to fail with `maximum 104857 tokens`. A skipped numerical quality comparison is printed explicitly, never counted as a passing check.
+
+Recompiled `check-sweep`, `check-question`, `check-cache`, and `check-rows` against the rebased internal headers, then reran the storage checks, live FP32/FP16 cache runs, and `check-frozen.py`. Results are unchanged: question graph max relative error 1.763e-7, live FP32 cache 3.017e-7, selected rows 100/100, and the FP16-vs-FP32 1e-4 gate still fails at 2.319e-4. Logs: `build-rebased.log`, `configure-server.log`, `build-server.log`, `check-driver.log`, and `check-frozen-rebased.log` under `build-sweep/`.
+
+Self-review checked scope, dimensions before allocation, lifetime, ASCII comments, and the server's one-ubatch scheduling requirement. `git diff --check` passed. Rejected: copying L-B's uncommitted plumbing, bypassing missing engine stages with stock/speed execution, allocating the sweep buffer for zero share, and blocking the server loop for a complete prompt. Remaining numerical and server integration checks stay SKIPPED until L-A's hooks and L-B's committed fields are available. The coordinator has relayed the part-aware extraction and lower-state/KV-cell preservation requirements to L-A.
