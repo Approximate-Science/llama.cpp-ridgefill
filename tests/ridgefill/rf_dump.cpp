@@ -102,7 +102,9 @@ static int run(int argc, char ** argv) {
     if (rf) {
         llama_set_ridgefill(ctx.get(), rf.get());
 #ifdef RF27_API
-        llama_ridgefill_set_alpha(ctx.get(), alpha);
+        if (llama_ridgefill_set_alpha(ctx.get(), alpha) < 0) {
+            throw std::invalid_argument("--alpha was refused");
+        }
 #endif
         llama_ridgefill_seq_set(ctx.get(), 0, prefix);
 #ifdef RF27_API
@@ -119,7 +121,9 @@ static int run(int argc, char ** argv) {
                 if (end == std::string::npos) { break; }
                 begin = end + 1;
             }
-            llama_ridgefill_seq_set_rows(ctx.get(), 0, rows.data(), rows.size());
+            if (llama_ridgefill_seq_set_rows(ctx.get(), 0, rows.data(), rows.size()) < 0) {
+                throw std::invalid_argument("--mode quality exact rows were refused");
+            }
         }
 #endif
     }

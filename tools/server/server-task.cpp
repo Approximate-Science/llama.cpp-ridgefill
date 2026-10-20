@@ -1805,6 +1805,8 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             /*.tokens      =*/ prompt.tokens.clone(),
             /*.checkpoints =*/ prompt.checkpoints,
             /*.n_filled    =*/ prompt.n_filled,
+            /*.ridgefill_mode =*/ prompt.ridgefill_mode,
+            /*.ridgefill_rows =*/ prompt.ridgefill_rows,
         },
         /*.data   =*/ {
             /*.main =*/ std::move(state_data_tgt),
