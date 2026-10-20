@@ -28,8 +28,8 @@ The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 5
 |---|---|---|
 | `off` | all rows | stock fallback; Qwen27 validation pending |
 | `speed` | none | tiny CPU G1 passed; real-model gates pending |
-| `quality` | union of class rows and digit rows | engine G1 pending |
-| `quality+qattn` | quality rows plus question-attention rows | sweep integration pending; refused by name when qattn share is positive |
+| `quality` | union of class rows and digit rows | refused by name until the selector API and masked decode land |
+| `quality+qattn` | quality rows plus question-attention rows | selector/sweep integration pending; refused by name |
 
 Class selection is per prompt: keep `rint(share * qualifying_rows)` prefix positions with the highest finite row scores, ties by lower position. Digit rows contain an ASCII digit in the vocabulary token text, with added/special tokens excluded. The question-attention rule selects `round(qattn_share * prefix_length)` prefix rows by causal attention mass from the last `qattn_window` prompt rows at attention layers 3, 7, 11 and 15. `--ridgefill-qattn-blind` moves the query window immediately before the prefix end. Question-attention needs the sweep driver; its zero-share case uses the class/digit selection.
 
@@ -75,7 +75,7 @@ llama-server -m model.gguf -c 32768 -ngl 99 --ridgefill projector.gguf --ridgefi
 
 The intended quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. They are not a measured recommendation for this engine yet. Per request, `ridgefill: false` or `ridgefill_mode: "off"` selects stock processing; `ridgefill_tail` overrides the exact tail; `ridgefill_mode` selects a mode. The RAM prompt cache carries the mode and exact-row set with its fill marker. A changed mode or changed exact rows in a retained filled region requires recomputation. Slot save of filled rows is refused; `--cache-reuse` remains disabled.
 
-Perplexity and bench support speed/quality plumbing and refuse `quality+qattn` by name. Perplexity fills at most the unscored first half of each chunk, so its effective tail is `max(T, n_ctx/2)`. Its quality rows are selected separately for each chunk, including its actual BOS token. These tool paths still need the engine API implementation and integration checks.
+Perplexity and bench run speed/off and refuse `quality` and `quality+qattn` by name until the required engine paths are available. Perplexity fills at most the unscored first half of each chunk, so its effective tail is `max(T, n_ctx/2)`. Quality plumbing is prepared to select rows separately for each chunk, including its actual BOS token. The tiny CPU integration check covers both tools and server speed/off requests, including reuse of an unchanged fill boundary and safe recomputation when it changes.
 
 The paired client and CPU gates are documented in [tests/ridgefill/README.md](tests/ridgefill/README.md). NLL uses only the last 512 teacher-forced targets and keeps the approximate prefix fixed. Needle evaluation removes the answer IDs appended by the source dataset, applies the loaded model's Qwen chat template with `enable_thinking=false`, and generates the answer. Speed runs alternate mode off with the selected mode for at least three repeats. Statistics use the oracle repository's `finals/stats.py`; an inactive fill or missing probability fails the run.
 

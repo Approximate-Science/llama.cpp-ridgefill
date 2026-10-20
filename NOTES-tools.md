@@ -159,3 +159,23 @@ Artifacts: `out/gate1-engine/45199c4dc*/rf_dump`, `out/gate1-speed-45199-run.log
 Final sync for this report: rebased the tools branch onto `bd9ede799` after L-A's rollback-split fix. Current implementation commits are `1978cc39b` (tool plumbing), `c746b7bc6` (eval client/controls), and `d5a050d2c` (Qwen27 docs/status). Recompiled common.cpp against the actual engine header, without the supplied interface declarations: FAILED exactly because `llama_ridgefill_select_rows` is undeclared. Log: `out/tools-actual-api-check.log`. This is the expected dependency named in L-A's 18:25 interface correction; the selector can be supplied independently while quality decode continues to refuse. Full tool builds and app integration remain blocked, rather than being reported as passed.
 
 G1 results in this report are on `45199c4dc`, not a claim about the later rollback commit. Python type checking reports `All checks passed!`; the eval unit suite reports 7 tests OK. The home-layout-audit executable is not available in this sandbox, so that audit was NOT RUN. No files were written outside this worktree and no GPU, Docker, push or publishing action was used.
+
+### Buildable plumbing handoff for L-C
+
+The mode/share/digits/alpha/qattn common fields and server request fields were already committed in `1978cc39b`. Removed the unresolved selector dependency from the active helper: eligible quality requests now refuse with `mode quality requires llama_ridgefill_select_rows, which is unavailable in this build`. Bench and perplexity refuse quality before loading a model; they already refuse quality+qattn. No selector implementation, mock symbol, or successful empty-row substitute is supplied. L-C's guarded server driver-call hunk is unchanged.
+
+Configured a clean CPU build without the temporary API declarations: `cmake -S . -B out/tools-cpu-build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=OFF -DGGML_VULKAN=OFF -DGGML_METAL=OFF -DLLAMA_OPENSSL=OFF -DLLAMA_BUILD_TESTS=ON -DLLAMA_BUILD_TOOLS=ON`. Built `llama-server llama-bench llama-perplexity -j4` successfully against the real engine header/library at base `bd9ede799`. Logs: `out/tools-cpu-configure.log`, `out/tools-cpu-build.log`, `out/tools-cpu-rebuild.log`.
+
+The first live cache control exposed a crash: the old fill cache rule clamped a repeated prompt from its recent recurrent snapshot to position 500, outside the rollback window. Rejected masking the failure or disabling the cache test. The server now preserves the exact cached tail when the approximate boundary is unchanged; a changed boundary restarts recurrent/hybrid contexts from zero when the old approximate prefix would require an unsupported rewind. The direct-logit checks cover speed -> speed, T=200 -> T=201, speed -> off, T>=N, and ridgefill=false with an otherwise unavailable mode.
+
+```text
+real CPU build: llama-server, llama-bench, llama-perplexity BUILT
+out/test-tool-args-real: PASS: 18 RidgeFill argument/boundary checks
+check_tool_live.py: PASS, 30 checks
+test_eval_client.py: 7 tests OK
+ty 0.0.84: All checks passed!
+```
+
+`check_tool_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-tools` verifies all CLI fields through /props, actual speed/off logits within 1e-5 of native F32 logits, filled counts 500/0/499, named server and command refusals, and finite bench/perplexity measurements. Perplexity speed filled [0,256) and scored one chunk (fixture PPL 330.5232 +/- 3.53619; instrumentation only). Bench uses its supported F16 KV; an initial F32 argument was refused by its existing parser. Raw evidence: `out/tools-live-control.json`, `out/tool-live-control/`, `out/test-tool-args-real.log`, `out/tool-milestone-eval-tests.log`, `out/tools-live-typecheck.log`.
+
+The cached ty is version 0.0.84; an offline request for the CI's 0.0.88 was unavailable. The check used the existing cached executable. Quality/rho/qattn positive inference gates and real-model measurements remain NOT RUN and are not claimed by this handoff.

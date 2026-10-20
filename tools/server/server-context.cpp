@@ -4070,11 +4070,13 @@ private:
                                 n_past = 0;
                             }
 
-                            // filled rows in the cache are approximate: reuse them only for a prompt that fills the same rows
-                            if (slot.prompt.n_filled > 0 && n_past > std::min(slot.prompt.n_filled, p_fill)) {
+                            // A changed fill boundary can reuse only the common approximate prefix.
+                            if (slot.prompt.n_filled > 0 && slot.prompt.n_filled != p_fill && n_past > std::min(slot.prompt.n_filled, p_fill)) {
+                                const int32_t keep = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ? 0 : std::min(slot.prompt.n_filled, p_fill);
                                 SLT_INF(slot, "RidgeFill: cached tokens up to %d are filled, reusing %d of %d cached tokens\n",
-                                        slot.prompt.n_filled, std::min(slot.prompt.n_filled, p_fill), n_past);
-                                n_past = std::min(slot.prompt.n_filled, p_fill);
+                                        slot.prompt.n_filled, keep, n_past);
+                                n_past = keep;
                             }
 
                             slot.prompt.n_filled = p_fill > n_past ? p_fill : std::min(slot.prompt.n_filled, n_past);
