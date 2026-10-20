@@ -151,12 +151,14 @@ def needle_prompt(client: Client, item: dict) -> str:
     raw = client.request("/detokenize", dict(tokens=item["ids"][:-answer_len]))["content"]
     prompt = client.request("/apply-template", dict(messages=[dict(role="user", content=raw)],
                                                     chat_template_kwargs=dict(enable_thinking=False)))["prompt"]
-    if not isinstance(prompt, str) or prompt.rfind("<think>") > prompt.rfind("</think>"):
-        raise EvalError("thinking-off chat template left an open reasoning block")
+    if not isinstance(prompt, str) or not re.search(r"<\|im_start\|>assistant\n<think>\s*</think>\s*$", prompt):
+        raise EvalError("Qwen thinking-off chat template must end with the assistant's closed empty reasoning block")
     return prompt
 
 
 def needle_correct(answer: str, value: str) -> bool:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9]{7}", value) is None:
+        raise EvalError("needle value must contain exactly seven ASCII digits")
     return re.search(r"(?<!\d)" + re.escape(value) + r"(?!\d)", answer) is not None
 
 
@@ -212,6 +214,7 @@ def evaluate(args, client: Client, file) -> list[dict]:
                     raise EvalError(f"{item['name']}: fewer than --length {args.length} tokens")
                 results[arm] = score_nll(client, ids, mode, args.tail, args.min_prompt, args.tail_min)
             else:
+                needle_correct("", item["value"])
                 prompt = needle_prompt(client, item)
                 ids = client.request("/tokenize", dict(content=prompt, add_special=False, parse_special=True))["tokens"]
                 body = completion_body(ids, mode, args.tail, predict=32)
@@ -219,7 +222,9 @@ def evaluate(args, client: Client, file) -> list[dict]:
                 response = client.request("/completion", body)
                 filled = check_fill(response, expected=mode != "off" and len(ids) >= args.min_prompt and len(ids) > args.tail, mode=mode)
                 results[arm] = dict(accuracy=100.0 * needle_correct(response["content"], str(item["value"])), answer=response["content"],
-                                    prompt_tokens=len(ids), filled=filled, timings=response["timings"], wall_s=time.perf_counter() - start)
+                                    prompt_tokens=len(ids), prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
+                                    thinking=False, greedy=True, removed_answer_tokens=item["answer_len"],
+                                    filled=filled, timings=response["timings"], wall_s=time.perf_counter() - start)
         record = dict(kind=args.command, name=item["name"], domain=item.get("domain"), candidate_mode=args.mode, **results)
         records.append(record)
         write_record(file, record)
@@ -256,10 +261,12 @@ def measure_bench(args, file) -> list[dict]:
                 command = [str(args.binary.resolve()), *args.bench_arg, "-m", str(args.model), "-p", str(length), "-n", str(args.predict),
                            "-r", "1", "-o", "json", "--ridgefill", str(args.projector), "--ridgefill-mode", mode,
                            "--ridgefill-tail", str(args.tail)]
-                completed = subprocess.run(command, capture_output=True, text=True, check=True)
+                completed = subprocess.run(command, capture_output=True, text=True, check=True, timeout=args.timeout)
                 rows = json.loads(completed.stdout)
                 if len(rows) != 1 or rows[0]["n_prompt"] != length or rows[0]["n_gen"] != args.predict:
                     raise EvalError("llama-bench returned an unexpected test set")
+                if not math.isfinite(rows[0]["avg_ts"]) or rows[0]["avg_ts"] <= 0:
+                    raise EvalError("llama-bench returned no positive finite throughput")
                 results[arm] = dict(tokens_per_second=rows[0]["avg_ts"], native=rows[0], command=command)
             record = dict(kind="bench", name=f"n{length}-g{args.predict}-r{repeat}", length=length, candidate_mode=args.mode, **results)
             records.append(record)
@@ -329,6 +336,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         sys.exit(main())
-    except (EvalError, OSError, ValueError, subprocess.CalledProcessError) as error:
+    except (EvalError, OSError, ValueError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print(json.dumps(dict(result="FAILED", reason=str(error))), file=sys.stderr)
         sys.exit(1)

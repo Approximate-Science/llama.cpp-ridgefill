@@ -72,6 +72,20 @@ class EvaluationTests(unittest.TestCase):
         self.assertTrue(evaluation.needle_correct("The answer is 1234567.", "1234567"))
         self.assertFalse(evaluation.needle_correct("12345678", "1234567"))
         self.assertFalse(evaluation.needle_correct("91234567", "1234567"))
+        self.assertTrue(evaluation.needle_correct("0000001", "0000001"))
+        for value in ("123456", "12345678", "abcdefg", "123456\u0667"):
+            with self.assertRaisesRegex(evaluation.EvalError, "seven ASCII digits"):
+                evaluation.needle_correct(value, value)
+
+    def test_needle_requires_qwen_thinking_off(self):
+        class ThinkingClient(FakeClient):
+            def request(self, path: str, body: dict | None = None) -> dict:
+                result = super().request(path, body)
+                if path == "/apply-template":
+                    result["prompt"] = "<|im_start|>assistant\n<think>\n"
+                return result
+        with self.assertRaisesRegex(evaluation.EvalError, "thinking-off"):
+            evaluation.needle_prompt(ThinkingClient(), dict(ids=[10, 11, 90], answer_len=1))
 
     def test_inactive_fill_refused(self):
         with self.assertRaisesRegex(evaluation.EvalError, "did not fill"):
