@@ -160,6 +160,24 @@ LLAMA_API void llama_set_ridgefill(struct llama_context * ctx, const struct llam
 // a filled token cannot be an output, llama_decode() returns -1 for such a batch
 LLAMA_API void llama_ridgefill_seq_set(struct llama_context * ctx, llama_seq_id seq_id, llama_pos p_end);
 
+// RF27 (qwen35): defaults from the projector GGUF (format 2; format-1 files report the built-in defaults)
+LLAMA_API float        llama_ridgefill_alpha_default (const struct llama_ridgefill * rf);
+LLAMA_API int32_t      llama_ridgefill_tail_default  (const struct llama_ridgefill * rf);
+LLAMA_API int32_t      llama_ridgefill_tail_min      (const struct llama_ridgefill * rf);
+LLAMA_API float        llama_ridgefill_share_default (const struct llama_ridgefill * rf);
+LLAMA_API bool         llama_ridgefill_digits_default(const struct llama_ridgefill * rf);
+LLAMA_API float        llama_ridgefill_qattn_default (const struct llama_ridgefill * rf);
+LLAMA_API const char * llama_ridgefill_desc          (const struct llama_ridgefill * rf); // "name (authors; license; doi ...)"
+
+// the recurrent-state correction scale in [0, 1] (default: the projector's alpha_default); 0 ok, < 0 refused
+LLAMA_API int32_t llama_ridgefill_set_alpha(struct llama_context * ctx, float alpha);
+
+// the exact rows R of seq_id (sorted, unique, < p_end; n = 0: speed mode); call after llama_ridgefill_seq_set,
+// which clears them. 0 ok, < 0 refused. Until the masked path lands, llama_decode() refuses filled rows of a
+// sequence that has exact rows (quality mode is not implemented in this build).
+LLAMA_API int32_t llama_ridgefill_seq_set_rows(struct llama_context * ctx, llama_seq_id seq_id,
+        const llama_pos * rows, int32_t n);
+
 //
 // model/context data extraction
 //

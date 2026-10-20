@@ -1,5 +1,6 @@
 #include "models.h"
 #include "llama-memory-recurrent.h"
+#include "llama-ridgefill.h"
 
 void llama_model_qwen35::load_arch_hparams(llama_model_loader & ml) {
     ml.get_key(LLM_KV_ATTENTION_LAYERNORM_RMS_EPS,       hparams.f_norm_rms_eps);
@@ -157,6 +158,16 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     for (int il = 0; il < n_layer; ++il) {
+        if (ridgefill && il == ridgefill->split) {
+            // RidgeFill: a filled ubatch writes the late layers' caches from h_S and has no output head
+            build_ridgefill_late(*this, model, inpL, build_inp_ridgefill(), inp_pos, inp->get_attn(), inp->get_recr(),
+                    (llm_ridgefill_fill) ridgefill_params.fill);
+            if (inp_out_ids) {
+                ggml_build_forward_expand(gf, inp_out_ids);
+            }
+            return;
+        }
+
         res->t_layer_inp[il] = inpL;
 
         ggml_tensor * inpSA = inpL;

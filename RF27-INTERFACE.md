@@ -225,3 +225,16 @@ the attention layers' K cache through `llama_kv_cache` views.
 - Rollback (`n_rs_seq > 0`): decision pending (T+2:30); either way it is internal to `build_ridgefill_late` and the
   split, nothing above changes.
 - The rows / scale input shapes may get a dated correction once the masked path is built; the function signature will not.
+
+## Correction 2026-10-20 18:45 (L-A, with the qwen35 speed fill)
+
+- `llama_ridgefill_set_alpha` and `llama_ridgefill_seq_set_rows` return `int32_t` (0 ok, < 0 refused and logged by
+  name) instead of `void`, so a refusal is visible to the caller. Both are in `src/llama-ext.h` now, with the
+  default getters and `llama_ridgefill_desc`.
+- Until the masked path lands, `llama_decode` returns -1 for a batch with filled rows of a sequence that has exact rows
+  ("quality mode ... not implemented yet"); `llama_ridgefill_select_rows` and `llama_ridgefill_seq_set_part` are not
+  in the build yet (they will not link, rather than return success).
+- `llm_graph_params_ridgefill` also carries `alpha` (the speed-mode correction scale) and `p_end` (the context's
+  per-sequence fill-end array) — both part of the reuse key; `h_buf` is not added until the parts are implemented.
+- The correction-scale input is exactly as written in §2: F32 `[H_v, n_seqs, n_gdn_late]`; in speed mode every entry
+  of a sequence whose last filled row is in the ubatch is `alpha`, every other entry 0.

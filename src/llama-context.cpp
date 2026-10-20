@@ -1,4 +1,5 @@
 #include "llama-context.h"
+#include "llama-ridgefill.h"
 
 #include "ggml.h"
 #include "llama-arch.h"
@@ -1506,6 +1507,7 @@ bool llama_context::set_adapter_cvec(
 
 void llama_context::set_ridgefill(const llama_ridgefill * rf) {
     ridgefill = rf;
+    ridgefill_alpha = rf ? rf->alpha_default : 0.0f;
 }
 
 void llama_context::ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end) {
@@ -1515,6 +1517,70 @@ void llama_context::ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end) {
     }
 
     ridgefill_p_end[seq_id] = p_end;
+    ridgefill_rows[seq_id].clear();
+}
+
+int32_t llama_context::ridgefill_set_alpha(float alpha) {
+    if (!(alpha >= 0.0f && alpha <= 1.0f)) {
+        LLAMA_LOG_ERROR("%s: RidgeFill alpha %g is outside [0, 1]\n", __func__, alpha);
+        return -1;
+    }
+
+    ridgefill_alpha = alpha;
+
+    return 0;
+}
+
+int32_t llama_context::ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n) {
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ || n < 0) {
+        LLAMA_LOG_ERROR("%s: invalid seq_id %d or row count %d\n", __func__, seq_id, n);
+        return -1;
+    }
+
+    for (int32_t i = 0; i < n; ++i) {
+        if (rows[i] < 0 || rows[i] >= ridgefill_p_end[seq_id] || (i > 0 && rows[i] <= rows[i - 1])) {
+            LLAMA_LOG_ERROR("%s: exact rows must be sorted, unique and below the fill end %d (row %d = %d)\n",
+                    __func__, ridgefill_p_end[seq_id], i, rows[i]);
+            return -1;
+        }
+    }
+
+    ridgefill_rows[seq_id].assign(rows, rows + n);
+
+    return 0;
+}
+
+bool llama_context::ridgefill_correct(const llama_ubatch & ubatch) const {
+    if (ridgefill_alpha == 0.0f || ridgefill->n_gdn_late == 0 || !ubatch.equal_seqs()) {
+        return false;
+    }
+
+    for (uint32_t s = 0; s < ubatch.n_seqs; ++s) {
+        const uint32_t i_last = (s + 1)*ubatch.n_seq_tokens - 1;
+        if (ubatch.pos[i_last] + 1 == ridgefill_p_end[ubatch.seq_id[i_last][0]]) {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_ubatch & ubatch, uint32_t n_outputs) const {
+    llm_graph_params_ridgefill res;
+
+    // the ubatch split does not mix filled and other tokens, and filled tokens are never outputs
+    if (!ridgefill || n_outputs != 0 || ubatch.n_tokens == 0 || ubatch.n_seq_id[0] != 1 ||
+        !ridgefill_is_fill(ubatch.seq_id[0][0], ubatch.pos[0])) {
+        return res;
+    }
+
+    res.rf      = ridgefill;
+    res.fill    = LLM_RIDGEFILL_FILL_BULK;
+    res.correct = ridgefill_correct(ubatch);
+    res.alpha   = res.correct ? ridgefill_alpha : 0.0f;
+    res.p_end   = ridgefill_p_end.data();
+
+    return res;
 }
 
 bool llama_context::ridgefill_is_fill(llama_seq_id seq_id, llama_pos pos) const {
@@ -1535,6 +1601,12 @@ bool llama_context::ridgefill_mark() {
         if (batch.logits[i]) {
             LLAMA_LOG_ERROR("%s: token %d (seq_id %d, pos %d) is filled by RidgeFill and cannot be an output\n",
                     __func__, i, batch.seq_id[i][0], batch.pos[i]);
+            return false;
+        }
+
+        if (!ridgefill_rows[batch.seq_id[i][0]].empty()) {
+            LLAMA_LOG_ERROR("%s: seq_id %d has RidgeFill exact rows (quality mode), which this build does not implement yet\n",
+                    __func__, batch.seq_id[i][0]);
             return false;
         }
 
@@ -2751,9 +2823,7 @@ llm_graph_params llama_context::graph_params(
         /*.moe_cache   =*/ moe_cache.get(),
         /*.prec_policy =*/ &model.prec_policy,
         /*.hdmd        =*/ model.hdmd.rot.empty() ? nullptr : &model.hdmd,
-        // the ubatch split does not mix filled and other tokens, and filled tokens are never outputs
-        /*.ridgefill   =*/ ridgefill && n_outputs == 0 && ubatch.n_tokens > 0 && ubatch.n_seq_id[0] == 1 &&
-                           ridgefill_is_fill(ubatch.seq_id[0][0], ubatch.pos[0]) ? ridgefill : nullptr,
+        /*.ridgefill   =*/ ridgefill_graph_params(ubatch, n_outputs),
         /*.samplers    =*/ sampling.samplers,
         /*.n_outputs   =*/ n_outputs,
         /*.cb          =*/ graph_get_cb(),

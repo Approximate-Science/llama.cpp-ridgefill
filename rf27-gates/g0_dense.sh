@@ -68,8 +68,10 @@ for tiny in llama qwen3; do
       say "$s dense wrongmap  $tag: $(echo "$r" | $PY -c "$summ" 2>&1 | tail -1) (must exceed tolerance)"
     done
   done
-  [ "${ONLY:-}" != ppl ] && ./rf_dump -m $M -t $T -o out/err-$tiny --proj $FIX/work/$PJ-f32.gguf --tail $TAIL --keep $((TAIL + 1)) -b 128 -ub 64 2>/dev/null
-  [ "${ONLY:-}" != ppl ] && { [ $? -eq 2 ] && say "PASS refuse-output $tiny: decode refuses a filled token that is an output" || say "FAIL refuse-output $tiny"; }
+  if [ "${ONLY:-}" != ppl ]; then
+    ./rf_dump -m $M -t $T -o out/err-$tiny --proj $FIX/work/$PJ-f32.gguf --tail $TAIL --keep $((TAIL + 1)) -b 128 -ub 64 2>/dev/null; rc=$?
+    [ $rc -eq 2 ] && say "PASS refuse-output $tiny: decode refuses a filled token that is an output (rc $rc)" || say "FAIL refuse-output $tiny (rc $rc)"
+  fi
 
   # llama-perplexity: per-chunk lines identical (timings stripped)
   ppl() { "$1" -m $M -f $FIX/work/text.txt -c 256 -b 256 -t 4 "${@:2}" 2>&1 | grep -oE '\[[0-9]+\][0-9.]+|Final estimate.*' ; }  # -o: the async log interleaves lines
@@ -82,4 +84,20 @@ for tiny in llama qwen3; do
       || say "FAIL G0 ppl-$v    $tiny"
   done
 done
-say "TOTAL PASS $(grep -c '^PASS' $out) FAIL $(grep -c '^FAIL' $out)"
+# qwen35 (hybrid GDN + M-RoPE), L-B's tiny fixture: G0 rows only (oracle agreement is L-B's run_gate1_qwen35)
+Q35=${Q35:-$HERE/lb/out/gate1-qwen35}
+if [ -s "$Q35/tiny-qwen35-f32.gguf" ] && [ "${ONLY:-}" != ppl ]; then
+  M=$Q35/tiny-qwen35-f32.gguf; T=$Q35/tokens.bin
+  for cfg in 700/512 128/128 50/50; do
+    b=${cfg%/*}; ub=${cfg#*/}; tag="qwen35-b$b-ub$ub"
+    rm -f out/*-$tag.*
+    ./rf_dump_stock -m $M -t $T -o out/stock-$tag --keep 200 -b $b -ub $ub --fa 0 2>/dev/null
+    ./rf_dump       -m $M -t $T -o out/off-$tag   --keep 200 -b $b -ub $ub --fa 0 2>/dev/null
+    same out/off-$tag out/stock-$tag && say "PASS G0 off        $tag: no projector, byte-identical to upstream" || say "FAIL G0 off        $tag"
+    ./rf_dump -m $M -t $T -o out/tgen-$tag --proj $Q35/projector-s3-f32.gguf --tail 700 --keep 200 -b $b -ub $ub --fa 0 2>/dev/null
+    same out/tgen-$tag out/stock-$tag && say "PASS G0 T>=N       $tag: projector loaded, nothing filled, byte-identical" || say "FAIL G0 T>=N       $tag"
+  done
+else
+  say "SKIPPED G0 qwen35: no fixture at $Q35"
+fi
+say "TOTAL PASS $(grep -c '^PASS' $out) FAIL $(grep -c '^FAIL' $out) SKIPPED $(grep -c '^SKIPPED' $out)"

@@ -137,6 +137,8 @@ struct llama_context {
 
     void set_ridgefill(const llama_ridgefill * rf);
     void ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end);
+    int32_t ridgefill_set_alpha(float alpha);
+    int32_t ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n);
 
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
@@ -283,6 +285,11 @@ private:
     // mark the tokens of the current batch that are filled, returns false if one of them is an output
     bool ridgefill_mark();
 
+    // the ubatch holds the last filled row of a sequence and the correction adds something
+    bool ridgefill_correct(const llama_ubatch & ubatch) const;
+
+    llm_graph_params_ridgefill ridgefill_graph_params(const llama_ubatch & ubatch, uint32_t n_outputs) const;
+
     // ggml_backend_sched copy callback, copies only the experts used by MUL_MAT_ID and updates the MoE cache
     static bool sched_copy_experts(ggml_backend_t backend, const ggml_tensor * src, ggml_tensor * dst, ggml_cgraph * graph, void * user_data);
 
@@ -314,6 +321,10 @@ private:
     const llama_ridgefill * ridgefill = nullptr;
 
     std::array<llama_pos, LLAMA_MAX_SEQ> ridgefill_p_end = {}; // tokens at pos < p_end are filled
+
+    std::array<std::vector<llama_pos>, LLAMA_MAX_SEQ> ridgefill_rows; // exact rows R (sorted, < p_end); empty: speed
+
+    float ridgefill_alpha = 0.0f; // recurrent-state correction scale, default from the projector
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 

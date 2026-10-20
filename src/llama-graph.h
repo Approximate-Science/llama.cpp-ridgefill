@@ -22,6 +22,7 @@ struct llama_layer;
 struct llama_prec_policy;
 struct llama_hadamard;
 struct llama_ridgefill;
+class  llm_graph_input_ridgefill;
 struct llama_model;
 
 class llama_moe_cache;
@@ -789,6 +790,29 @@ using llm_graph_cb = std::function<void(const llama_ubatch & ubatch, ggml_tensor
 
 class llm_graph_result;
 
+// RidgeFill parameters of one ubatch (RF27-INTERFACE.md §3); all of them are part of the graph-reuse key
+enum llm_ridgefill_part : int32_t {
+    LLM_RIDGEFILL_PART_FULL  = 0, // single pass: layers [0, split), then fill or stock late layers
+    LLM_RIDGEFILL_PART_LOWER = 1, // sweep 1: layers [0, split) only; h_S of every row is a graph output
+    LLM_RIDGEFILL_PART_LATE  = 2, // sweeps 2-3: no embedding, no lower layers; h_S is a graph input
+};
+
+struct llm_graph_params_ridgefill {
+    const llama_ridgefill * rf   = nullptr; // non-null iff the ubatch is filled or part != FULL
+    int32_t                 fill = 0;       // llm_ridgefill_fill
+    llm_ridgefill_part      part = LLM_RIDGEFILL_PART_FULL;
+    int32_t                 n_rows  = 0;     // |R| in this ubatch (shape of the rows input)
+    bool                    correct = false; // the correction-scale input exists (correction ubatch, alpha != 0)
+    float                   alpha   = 0.0f;  // the correction scale of speed mode
+
+    const llama_pos * p_end = nullptr; // [LLAMA_MAX_SEQ] the context's per-sequence fill ends (stable pointer)
+
+    bool operator==(const llm_graph_params_ridgefill & o) const {
+        return rf == o.rf && fill == o.fill && part == o.part && n_rows == o.n_rows && correct == o.correct &&
+               alpha == o.alpha && p_end == o.p_end;
+    }
+};
+
 struct llm_graph_params {
     llm_arch arch = LLM_ARCH_UNKNOWN;
 
@@ -811,7 +835,7 @@ struct llm_graph_params {
     const llama_prec_policy * prec_policy = nullptr;
 
     const llama_hadamard * hdmd = nullptr;
-    const llama_ridgefill * ridgefill = nullptr; // set for a ubatch that is filled
+    llm_graph_params_ridgefill ridgefill; // rf is set for a ubatch that is filled
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1066,7 +1090,9 @@ struct llm_graph_context {
     const llama_prec_policy * prec_policy;
 
     const llama_hadamard * hdmd;
-    const llama_ridgefill * ridgefill;
+    const llama_ridgefill * ridgefill; // = ridgefill_params.rf
+
+    const llm_graph_params_ridgefill ridgefill_params;
 
     std::map<llama_seq_id, llama_sampler *> samplers;
 
@@ -1302,6 +1328,9 @@ struct llm_graph_context {
                   ggml_tensor * inp_pos,
       llm_graph_input_attn_kv * inp_attn,
                   ggml_tensor * inp_out_ids) const;
+
+    // RidgeFill (llama-ridgefill.cpp): the rows / correction-scale input of a filled ubatch, nullptr if it has neither
+    llm_graph_input_ridgefill * build_inp_ridgefill() const;
 
     llm_graph_input_attn_k  * build_attn_inp_k() const;
 

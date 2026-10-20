@@ -1,3 +1,7 @@
 .upstream/
 build-*/
 out/
+rf_dump
+rf_dump_stock
+lb/
+rf_dump_q35

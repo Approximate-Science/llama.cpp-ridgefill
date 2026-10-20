@@ -27,3 +27,28 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   `grep -o` and a required `[33]` on the stock side; perplexity rows rerun (`ONLY=ppl`): 4 PASS / 0 FAIL. Run directly,
   both binaries print the same 33 chunks and PPL 301.4395 (llama) / 305.1462 (qwen3).
 - Dense fill vs kva after the rebase, FA off: llama logits rel 4.3e-7-level as on Oct 8; qwen3 4.32e-07 / KV 2.80e-06.
+
+## 18:20-18:50 qwen35 speed fill, G1 speed
+- Implemented: format-2 loader (model_meta compared key by key, unknown key refused; vocab_sha256 recomputed from
+  `model.vocab`; `model_layer_types` checked when present; `st` F32 [S_k, S_v, H_v] required per late GDN layer;
+  score table and digit set on the host; a GDN layer without a map = identity fill, warned), `build_ridgefill_late`
+  speed fill (attention: K/V via build_qkv, k-norm, `ggml_rope_multi(sections)`, cpy_k/cpy_v; GDN: wqkv only, beta,
+  gate, build_conv_state, ssm_conv + silu, l2 norms, the delta rule, state written back; output dropped), the alpha
+  correction on the ubatch holding row p_end-1, the qwen35 hook (+11 lines).
+- Correction path: on the correction ubatch the fill calls `build_delta_net` itself and stores
+  `new_state + scale * st` into the current slot, instead of `build_recurrent_attn` (whose store is internal; a
+  second add on the cache view after its cpy would be an ordering hazard across backends). On every other filled
+  ubatch it calls `build_recurrent_attn` unchanged, so rollback snapshots are written as stock. Rejected: undo/redo
+  of the correction per chunk (radiance) — the homogeneous split makes "the ubatch holding p_end-1" unique.
+- Upstream trap: `llm_graph_input_mem_hybrid::set_input` wrote the KQ mask unconditionally; a fill graph never
+  attends, so the mask is not allocated -> `GGML_ASSERT(buffer)`. Added the same `->buffer` guard upstream already
+  has in `llm_graph_input_attn_kv::set_input` (src/llama-graph.cpp, 2 lines).
+- G1 speed (L-B's run_gate1_qwen35.py from rf27-tools e0e1fa9, run here against build-cpu with `--dump`): 27/27
+  PASS. Fill vs oracle max rel 6.31e-07 (alpha 0 and 1, 3 chunk configs); prefix GDN states at alpha 1 2.0e-08..4.6e-08;
+  wrong map 2.88 / 1.53; wrong st orientation 1.29-1.37 on the prefix states (its final states match because the
+  200-token tail decays the difference; its logits miss by 0.34). Results: rf27-gates/results-g1-qwen35-speed.json.
+- G0 rerun with the qwen35 fixture (byte-identical to upstream 1242be66f, no projector and T >= N, 3 chunk configs):
+  72/0 in total. A first rerun showed 2 FAIL refuse-output rows: my `ONLY=ppl` edit made `$?` read a test's status;
+  fixed (rc captured), both rows PASS with rc 2.
+- Quality mode refuses by name at decode (exact rows set): rc 2, "exact rows (quality mode), which this build does not
+  implement yet".
