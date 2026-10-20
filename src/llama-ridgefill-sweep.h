@@ -8,6 +8,7 @@
 
 struct llm_graph_context;
 struct llama_layer;
+class llama_kv_cache;
 
 constexpr size_t LLAMA_RIDGEFILL_SWEEP_MAX_BYTES = size_t(1) << 30;
 
@@ -44,6 +45,7 @@ ggml_tensor * llama_ridgefill_sweep_mass(
         int32_t window_end,
         float scale);
 
+// Pass the cache's key rotation when its stored keys are rotated.
 ggml_tensor * build_ridgefill_question_mass(
         llm_graph_context & g,
         const llama_layer & layer,
@@ -51,7 +53,19 @@ ggml_tensor * build_ridgefill_question_mass(
         ggml_tensor * positions,
         ggml_tensor * keys,
         int32_t window_end,
-        int32_t il);
+        int32_t il,
+        ggml_tensor * key_rotation = nullptr);
+
+std::vector<int32_t> llama_ridgefill_sweep_key_rows(const llama_kv_cache & cache, int32_t seq_id, int32_t n_tokens);
+
+// rows contains the indices returned by llama_ridgefill_sweep_key_rows for this sequence.
+ggml_tensor * build_ridgefill_sweep_keys(
+        ggml_context * ctx,
+        const llama_kv_cache & cache,
+        int32_t seq_id,
+        int32_t il,
+        int32_t head_dim,
+        ggml_tensor * rows);
 
 std::vector<int32_t> llama_ridgefill_sweep_top_rows(
         const std::vector<double> & mass,

@@ -19,7 +19,7 @@ The row selector uses a prefix-relative budget, ties-to-even rounding, score ord
 | Question graph agrees with `select.window_mass` within 1e-4 | `PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-mass.py /var/home/dylan/projects/research/kva-wt-q27` | PASS for the standalone graph using oracle lower-layer inputs/keys |
 | h_S capture of a tiny split-4 lower pass matches PyTorch conversion | Same Python command, chunk sizes 700/128/50 | PASS |
 | Engine lower-only graph stops at S and captures its own h_S | L-A dispatch/context hook plus L-B fixture | SKIPPED: touch points are specified but not implemented yet |
-| Engine cache mapping and layer-input extraction feed the mass graph | Integrated lower sweep and slot cache | SKIPPED |
+| Engine cache mapping and layer-input extraction feed the mass graph | `check-cache.cpp` plus `check-cache.py`, L-B tiny GGUF | PASS using stock full decode; LOWER dispatch still SKIPPED |
 | Sweeps 2-3, server driver, G1 caches/logits, qattn-share-zero equals quality | L-A late fill passes G1, then integrated sweep gate | SKIPPED |
 | Device placement on non-CPU backends | Lane Q hardware gates after integration | SKIPPED: CPU only in this lane |
 
@@ -88,8 +88,47 @@ Measured h_S rounding above demonstrates that two-byte storage is not bit-identi
 Read L-A's `RF27-INTERFACE.md`, commit `9e1c3d076`. The proposed `llama_ridgefill_seq_set_part` and PART_LOWER/PART_LATE dispatch were still absent from L-A's implementation at the final inspection. The local branch remains based on `85b1c41fb`; rebase awaits the coordinator's/L-A's ready notification.
 
 - L-A can use `llama_ridgefill_sweep_buffer::tensor()` for the specified `h_buf`, allocated with `model.select_buft(split)`. `capture()` and `slice()` also provide per-ubatch graph copies/views, avoiding per-row host copying described in the interface note. These views bake the row offset into the graph, so a changed offset requires rebuilding or must be handled by the context copy path.
-- Layer-input extraction from the existing embeddings API is the agreed query-window source. The mass helper accepts the actual window size through `llm_graph_context::n_tokens` and four positions per query row, then keys `[head_dim, N, Hkv]` in prompt order. The future driver must gather the slot's logical rows from the cache before calling it.
+- Layer-input extraction from the existing embeddings API is the agreed query-window source. The mass helper accepts the actual window size through `llm_graph_context::n_tokens` and four positions per query row, then keys `[head_dim, N, Hkv]` in prompt order. The cache helpers now gather the slot's logical rows before calling it; the driver must fill the row-index input and the optional key-rotation input.
 - L-B should supply the split-4 fixture variant and adopt the standalone checks into its owned harness. Split 3 with attention at 3/7 contains no lower attention and cannot validate question mass.
 - Next implement lower-sweep execution and slot cache mapping against L-A's landed touch points, then sweeps 2-3 and the server driver after G1 speed.
 
 The initial missing skill path is resolved: read `/var/home/dylan/AI-Work/ridgefill-ports-20261020/skills/build-anything.md` sections 2-4. No GPU, Docker, push, or publication was attempted.
+
+
+## 2026-10-20 18:06: real cache integration
+
+Read the relayed interface through `git show rf27-engine:RF27-INTERFACE.md`. At inspection the branch tip is `9e1c3d076`, whose ancestry includes upstream `1242be66f`; this lane has not rebased because the requested L-A ready notification has not arrived. The earlier cited `fffb9069b` interface object is also readable.
+
+Added logical-position mapping and device-side key gathering in L-C's existing new files. The mapping refuses missing/repeated positions, the wrong prompt length, invalid sequence IDs, and pending cache shifts. The graph selects the sequence's actual stream and gathers its physical rows into prompt order, including FP16-to-FP32 conversion through `ggml_get_rows`. Query reconstruction accepts the cache's Hadamard rotation and applies the same helper as stock attention before computing mass.
+
+L-B's shared fixture is now available under its `out/gate1-qwen35/` directory. The new temporary `build-sweep/check-cache.cpp` test loads `tiny-qwen35-f32.gguf`, decodes N=700 in chunks of 50, captures the real layer-3 inputs, and reads real layer-3 keys. A second sequence with different tokens is interleaved to create physical gaps. A separate run disables unified KV and selects stream 1. Wrong-map controls reverse the physical row map; unchanged graph repetitions must produce identical float values. `build-sweep/check-cache.py` compares the graph with `select.window_mass` both on the engine's captured inputs/keys and on independent `run_lower` output from L-B's HF fixture.
+
+```text
+PASS live cache f32: graph max_abs=5.960e-08 max_rel=1.433e-07; FP32 lower oracle max_rel=3.017e-07; wrong_mapping_rel=6.636e-01
+PASS live cache f16: graph max_abs=4.470e-08 max_rel=1.223e-07; FP32 lower oracle max_rel=2.319e-04; wrong_mapping_rel=6.635e-01
+PASS live cache stream-f32: graph max_abs=5.960e-08 max_rel=1.590e-07; FP32 lower oracle max_rel=3.469e-07; wrong_mapping_rel=7.786e-01
+PASS real llama.cpp cache rows and query window; input came from stock full decode, not LOWER dispatch
+PASS key rotation: paired Q/K max_rel=1.428e-07; omitted Q rotation control max_rel=9.425e-01
+```
+
+FP32 live-cache cases meet 1e-4 versus the independent lower oracle and select identical rows. FP16 passes the graph comparison against the same stored keys; it does NOT meet 1e-4 against the FP32-key reference (2.319e-4). The key-rotation check uses paired synthetic Hadamard rotations; it is not a quantized-cache end-to-end gate. No full sweep or final-logit agreement is claimed.
+
+Additional commands (four CPU threads maximum):
+
+```sh
+c++ -std=c++17 -O2 -I src -I include -I ggml/include build-sweep/check-cache.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-cache
+build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f32 f32
+build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f16 f16
+build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-stream-f32 f32 separate
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-cache.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-rotation.py
+```
+
+Logs are `build-sweep/check-cache.log`, `check-cache-f32.log`, `check-cache-f16.log`, `check-cache-stream.log`, and `check-rotation.log`. L-B can adopt `check-cache.cpp`, `check-cache.py`, and `check-rotation.py` along with the previous harnesses. The original storage and standalone mass checks were also rerun after the API change.
+
+Exact remaining interface items for L-A/coordinator:
+
+1. `llama_ridgefill_seq_set_part`, `LLM_RIDGEFILL_PART_LOWER/LATE`, and the qwen35 lower-stop/late-input dispatch are described but not present in the implementation at this inspection. Lower-only execution and sweeps 2-3 cannot be exercised until they land.
+2. The interface's layer-input extraction description needs correction: current `llama_context::extract_layer_inputs` copies ALL rows of each enabled layer from a decode batch, not only output rows. The flag is context-wide and `llama_set_embeddings_layer_inp` requests scheduler reservation. The eventual driver must scope extraction to lower-sweep calls and restore it before LATE calls, or L-A must make extraction part-aware; a LATE graph has no layer-3 input to extract.
+3. PART_LATE memory preparation must preserve lower recurrent state at N and reuse the lower sweep's physical KV cells instead of allocating duplicate prompt positions. This invariant needs an integrated test; the interface currently states graph dispatch and copies but does not spell out this memory transition.
+4. L-C owns new server driver files. An owner must wire their call into the existing server prompt-processing loop and register the server source; only the `src/CMakeLists.txt` source-line exception has been authorized so far.

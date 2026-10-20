@@ -1,6 +1,8 @@
 #include "llama-ridgefill-sweep.h"
 
 #include "llama-graph.h"
+#include "llama-impl.h"
+#include "llama-kv-cache.h"
 #include "llama-model.h"
 
 #include "ggml-alloc.h"
@@ -114,13 +116,18 @@ ggml_tensor * llama_ridgefill_sweep_mass(
 
 ggml_tensor * build_ridgefill_question_mass(
         llm_graph_context & g, const llama_layer & layer, ggml_tensor * window, ggml_tensor * positions,
-        ggml_tensor * keys, int32_t window_end, int32_t il) {
+        ggml_tensor * keys, int32_t window_end, int32_t il, ggml_tensor * key_rotation) {
     if (!window || window->type != GGML_TYPE_F32 || window->ne[0] != g.n_embd || window->ne[1] != g.n_tokens ||
             window->ne[2] != 1 || window->ne[3] != 1 || !positions || positions->type != GGML_TYPE_I32 ||
             ggml_nelements(positions) != 4*g.n_tokens || !keys || keys->ne[0] != g.n_embd_head_k ||
             keys->ne[2] != g.n_head_kv || g.arch != LLM_ARCH_QWEN35 ||
             il < 0 || il >= g.n_layer || g.hparams.is_recr(il)) {
         throw std::runtime_error("RidgeFill quality+qattn: question graph requires a qwen35 attention layer and its window inputs");
+    }
+    if (key_rotation && (key_rotation->type != GGML_TYPE_F32 || key_rotation->ne[0] <= 0 ||
+            key_rotation->ne[0] != key_rotation->ne[1] || key_rotation->ne[2] != 1 || key_rotation->ne[3] != 1 ||
+            g.n_embd_head_k % key_rotation->ne[0] != 0)) {
+        throw std::runtime_error("RidgeFill quality+qattn: invalid key-cache rotation");
     }
 
     ggml_tensor * normalized = g.build_norm(window, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
@@ -133,9 +140,62 @@ ggml_tensor * build_ridgefill_question_mass(
     std::copy(std::begin(g.hparams.rope_sections), std::end(g.hparams.rope_sections), sections);
     q = ggml_rope_multi(g.ctx0, q, positions, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig,
             g.freq_base, g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
+    if (key_rotation) {
+        q = llama_mul_mat_hadamard(g.ctx0, q, key_rotation);
+    }
     q = ggml_permute(g.ctx0, q, 0, 2, 1, 3);
     const float scale = g.hparams.f_attention_scale == 0.0f ? 1.0f / std::sqrt(float(g.n_embd_head_k)) : g.hparams.f_attention_scale;
     return llama_ridgefill_sweep_mass(g.ctx0, q, keys, window_end, scale);
+}
+
+static void ridgefill_sweep_check_sequence(const llama_kv_cache & cache, int32_t seq_id) {
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ ||
+            (cache.get_n_stream() > 1 && uint32_t(seq_id) >= cache.get_n_stream())) {
+        throw std::runtime_error("RidgeFill quality+qattn: sequence is outside the attention cache");
+    }
+}
+
+std::vector<int32_t> llama_ridgefill_sweep_key_rows(const llama_kv_cache & cache, int32_t seq_id, int32_t n_tokens) {
+    ridgefill_sweep_check_sequence(cache, seq_id);
+    if (n_tokens <= 0 || uint32_t(n_tokens) > cache.get_size() || cache.get_has_shift()) {
+        throw std::runtime_error("RidgeFill quality+qattn: invalid prompt length or pending attention-cache shift");
+    }
+    const auto & positions = cache.get_cells(seq_id).seq_pos_get(seq_id);
+    if (positions.size() != size_t(n_tokens)) {
+        throw std::runtime_error("RidgeFill quality+qattn: attention cache must contain exactly the prompt rows");
+    }
+    std::vector<int32_t> rows;
+    rows.reserve(n_tokens);
+    for (const auto & entry : positions) {
+        if (entry.first != int32_t(rows.size()) || entry.second >= cache.get_size() ||
+                entry.second > uint32_t(std::numeric_limits<int32_t>::max())) {
+            throw std::runtime_error("RidgeFill quality+qattn: attention cache has missing, repeated, or invalid prompt positions");
+        }
+        rows.push_back(int32_t(entry.second));
+    }
+    return rows;
+}
+
+ggml_tensor * build_ridgefill_sweep_keys(
+        ggml_context * ctx, const llama_kv_cache & cache, int32_t seq_id, int32_t il, int32_t head_dim, ggml_tensor * rows) {
+    ridgefill_sweep_check_sequence(cache, seq_id);
+    if (!ctx || !rows || rows->type != GGML_TYPE_I32 || rows->ne[0] <= 0 || rows->ne[0] > cache.get_size() ||
+            rows->ne[1] != 1 || rows->ne[2] != 1 || rows->ne[3] != 1 || head_dim <= 0) {
+        throw std::runtime_error("RidgeFill quality+qattn: invalid key-gather shape or head dimension");
+    }
+    const auto layers = cache.get_layer_ids();
+    if (std::find(layers.begin(), layers.end(), uint32_t(il)) == layers.end()) {
+        throw std::runtime_error("RidgeFill quality+qattn: selected layer has no attention key cache");
+    }
+    ggml_tensor * storage = cache.get_k_storage(il);
+    const uint32_t stream = cache.get_stream(seq_id);
+    if (storage->ne[0] % head_dim != 0 || storage->ne[1] != cache.get_size() || stream >= storage->ne[2] || storage->ne[3] != 1) {
+        throw std::runtime_error("RidgeFill quality+qattn: unexpected attention key-cache layout");
+    }
+    ggml_tensor * keys = ggml_view_2d(ctx, storage, storage->ne[0], storage->ne[1], storage->nb[1], stream*storage->nb[2]);
+    keys = ggml_get_rows(ctx, keys, rows);
+    keys = ggml_reshape_3d(ctx, keys, head_dim, storage->ne[0] / head_dim, rows->ne[0]);
+    return ggml_permute(ctx, keys, 0, 2, 1, 3);
 }
 
 std::vector<int32_t> llama_ridgefill_sweep_top_rows(const std::vector<double> & mass, int32_t prefix, double share) {
