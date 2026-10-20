@@ -50,6 +50,24 @@ The same harness is the canonical G1 for quality with hand-picked rows through t
 
 ## Paired server evaluation
 
+`run_g3.py` starts one server, measures last-512 NLL and Qwen thinking-off needles against per-request mode off, then measures streaming TTFT and native prefill/decode benchmarks from the same build:
+
+```sh
+python3 tests/ridgefill/run_g3.py --bin-dir build/bin --model model.gguf --projector projector.gguf --mode speed --docs evaldata/nll.jsonl --needles evaldata/needle.jsonl --out out/g3-speed --kva /path/to/kva --build-label COMMIT-BACKEND-CACHE --gpu-layers 99 --flash-attn off
+```
+
+Defaults are 16,384 tokens per document, exactly 512 scored targets, T=4096, tail_min=512, min-prompt=8192, TTFT/prefill at 8192/16384/32768, three paired timing repetitions, tg128, F16 KV, and one server slot with context 33792. There are no silent mode substitutions. Quality/qattn must have their engine paths available; otherwise the command exits nonzero with FAILED.json. Native bench refuses quality+qattn: use `--metrics nll,needles,ttft` to omit those bench stages explicitly. Omitted stages are labeled SKIPPED.
+
+`--out` is a new directory; existing outputs are refused. It contains provenance.json, server.log, one JSONL per requested metric, and summary.json only after the requested measurements finish. Summaries report paired 95% BCa intervals and flag degenerate intervals; COMPLETE means measurement completed, without a quality or noninferiority verdict. The runner checks that server and bench report the same build, that the projector's tail_min matches the requested value, and that the server uses the requested model and one slot. Extra backend flags use repeated `--server-arg=...` / `--bench-arg=...`; the same explicit model, projector, mode and knob values feed both instruments. Server and bench cache types are recorded separately because native bench does not accept F32.
+
+The end-to-end tiny control uses the same command and verifies all measured NLL probabilities against direct logits, off/off identity, an NLL positive control, suffix removal, the Qwen thinking-off template, seven-digit positive/negative controls, and all five measurement wrappers:
+
+```sh
+.venv-oracle/bin/python tests/ridgefill/check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-tools --kva /path/to/kva --chat-template-file /path/to/Qwen3.8-chat-template.jinja --work out/g3-controls
+```
+
+For the tiny run, extract the template from the real Qwen3.8 GGUF metadata and supply it with --chat-template-file. The real-model command uses its own GGUF template by default. The tiny model has random weights; its needle accuracy and timing figures are instrumentation controls, not model quality/speed evidence.
+
 `eval_client.py` needs Python, NumPy, and read access to the oracle repository's `finals/stats.py`; it needs no torch. Start one server with the desired projector, tail, class/digit/alpha settings and cache types. Each run alternates the candidate mode with per-request mode off on that same server/build. Use one slot for reproducible timing runs and record its launch command with the build label.
 
 ```sh

@@ -205,3 +205,35 @@ tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-
 Both modes passed over batch/ubatch 700/512, 128/128 and 50/50, CPU F32 KV, flash attention off, 4 threads, N=700/T=200. Maximum correct oracle relative error was 9.938011089616339e-7 in each run (tolerance 1e-4). Quality positive controls had max relative errors 1.4805277585983276 (wrong map) and 1.482216715812683 (wrong rows and speed instead of quality). Quality alpha 1 returned rc 2 with the required message in all three settings. Speed wrong-orientation error remained 1.370469093322754.
 
 Evidence: `out/gate1-speed-3ac42957d-run.log`, `out/gate1-quality-3ac42957d-run.log`, `out/gate1-engine/3ac42957d0bf/{build.json,build.log,harness-build.log}`, and `out/gate1-qwen35/g1-s3-{speed,quality}/results.json`. Type check passed (`out/gate1-3ac42957d-typecheck.log`); git diff --check passed. This canonical gate tests explicit rows, not the missing class/digit selector API. Rho correction, qattn, and real-model measurements remain outside these passing verdicts.
+
+### One-command G3 handoff to lane Q (2026-10-20)
+
+Implemented `tests/ridgefill/run_g3.py` with --mode speed|quality|quality+qattn|off, --docs, --needles, --out, plus explicit binary/model/projector/backend knobs. It manages one server and checks the native server/bench build IDs. Both arms use the same process/build/model/projector. Each stage writes metadata, individual paired units, and BCa summaries using kva finals/stats.py (5000 resamples, seed 20261004). Outputs are exclusive: summary.json exists only after requested stages complete; failures produce FAILED.json and a nonzero exit. An explicitly omitted stage is SKIPPED. COMPLETE is not a quality/noninferiority verdict.
+
+NLL scores exactly 512 teacher-forced targets, with n_probs=1 and raw pre-sampling logprob, one target per /completion call. P=N-T remains fixed as the known exact tail grows. Require T-512 >= projector tail_min and N-512 >= min-prompt. The runner reads tail_min from the actual projector GGUF. Native probabilities are never requested for filled prefix rows. Needles strip answer_len IDs before detokenization, use the loaded Qwen chat template with enable_thinking=false and a closed empty assistant think block, and generate greedily. Answers must be seven ASCII digits and match at digit boundaries. Prompt hashes, removed answer counts, thinking/greedy flags and raw answers are retained. TTFT warms both modes and alternates three measurements per length. Native bench alternates prefill and decode runs and refuses unexpected/zero/nonfinite measurements.
+
+Lane Q: after integrating this tools commit and rebuilding the selected engine/tools from one revision, run the following command inside its existing HIP host bridge environment, with cwd `/var/home/dylan/projects/inference/llama.cpp-ridgefill-validate`. The SDK setup/card assignment stays with Q's bridge; this script does not select a physical device.
+
+```sh
+python3 tests/ridgefill/run_g3.py --bin-dir build-hip-engine/bin --model /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf --projector /var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf --mode speed --docs /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/evaldata/nll.jsonl --needles /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/evaldata/needle.jsonl --out out/g3-hip-speed --kva /var/home/dylan/projects/research/kva-wt-q27 --build-label "$(git rev-parse HEAD)-HIP-f16-fa-off" --gpu-layers 99 --flash-attn off
+```
+
+For Vulkan, change --bin-dir to build-vulkan-engine/bin and the output/build label accordingly. No Python code changes are required. Defaults measure all 24 documents at N=16384, all 48 needles, TTFT and native prefill at 8192/16384/32768, and native tg128. Each output is paired against mode off within the same build, never the separately compiled upstream build. Run mode off as a negative control into a separate --out directory. Quality and quality+qattn flags are accepted, but they must fail by name on an engine lacking their paths. Bench quality+qattn is deliberately unsupported; when that server path lands, Q can explicitly request --metrics nll,needles,ttft instead of bench. No mode is silently substituted. These real-model measurements remain NOT YET MEASURED here.
+
+End-to-end CPU control command:
+
+```sh
+.venv-oracle/bin/python tests/ridgefill/check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-tools --kva /var/home/dylan/projects/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/g3-cpu-controls3 --port 18095
+```
+
+The control extracted the actual 9993-byte Qwen3.8 GGUF template (sha256 12827f24b742ea4e80cdc12dbcf9622227056b9f797252a3149263d4f9aaadce) into out/, then used it with the existing tiny model and split-3 projector. Source weights/vocab/projector and the canonical G1 fixture were unchanged. The first attempt used context 1536; the synthetic tokenizer expanded a formatted needle to 3797 tokens, and the server correctly refused it. Increased the tiny control context to 4096 instead of truncating the needle or ignoring the error.
+
+```json
+{"result":"PASS","checks":43,"max_logprob_abs_error":9.219664844906106e-7,"documents":2,"scored_per_document":512,"needles":2,"modes":["speed","off"],"metrics":["nll","needles","ttft","bench_prefill","bench_decode"]}
+```
+
+All five stages ran end to end in both modes. For each document/arm, all 512 probabilities matched direct F32 logits within 1e-5. Off/off logprobs were identical and NLL delta was 0 (degenerate interval, labeled). Speed's positive-control NLL delta was 0.0034566130489110947, 95% BCa [0.003109533339738846, 0.0038036927580833435]. The two random-model needle accuracy deltas were 0 with degenerate intervals; this is not evidence of useful retrieval. Seven-digit checker controls separately require valid values/leading zeros to match and longer numbers not to match. Bench used supported F16 KV, server/direct-logit comparisons used F32. Native server/bench both report build 11796, commit 22dd8f0da; source flags/logs and the control build label are recorded, not treated as a clean release build.
+
+Evidence: `out/g3-cpu-controls3.json`, `out/g3-cpu-controls3/{speed,off}/summary.json`, per-metric JSONL/provenance/server/native logs in that directory, `out/g3-unit-tests.log` (8 tests OK), and `out/g3-typecheck.log` (All checks passed!, cached ty 0.0.84). Next milestone is G5 archive-build portability and unsupported-combination controls.
+
+Also ran the actual one-command client against unavailable quality and quality+qattn on the CPU tools build. Both exited 1, wrote FAILED.json, and produced no summary.json. The errors named `llama_ridgefill_select_rows` and `question-attention sweep driver`, respectively. Evidence: `out/g3-cpu-controls3/refusals.json` and the two *-refused logs/directories. This is tested refusal, not positive quality/qattn inference coverage.
