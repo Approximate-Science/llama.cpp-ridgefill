@@ -99,3 +99,13 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   Not reproducible (6/6 direct runs complete and identical, ONLY=ppl rerun 4/4); it ran while my quality tests
   loaded the CPU. Suspected the async log losing its tail at exit; unconfirmed, the script did not keep the exit
   code. It now records each run's rc and shows it in a FAIL line. Rollback 11/11, G1 speed 27/27 after the change.
+
+## 18:43-18:50 G0 rerun with exit codes (closing the ppl-tgen qwen3 FAIL)
+- Full G0 rerun, nothing else of mine running: 71/1, this time FAIL `ppl-off llama` (rc 0 on both sides, 32/34
+  lines): the branch log ends after `[32]` with rc 0. Same signature as the earlier `ppl-tgen qwen3` FAIL.
+- Measured: 40 runs each of upstream (1242be66f) and branch llama-perplexity on the tiny Llama, 4 in parallel:
+  "Final estimate" missing in 6/40 (upstream) and 4/40 (branch), rc 0 in all 80. Upstream's async logger drops its
+  last lines at exit under load; the computed values are identical whenever printed. Not a fork defect.
+- Harness: the trap is named in g0_dense.sh's header; a log without "Final estimate" is rerun (<= 3 attempts, the
+  count printed); comparison unchanged (all 33 chunks + the final line on both sides). Rerun: 72/0, attempts 1/1 on
+  all four perplexity rows.

@@ -6,6 +6,9 @@
 #   dense regression: fill vs kva.kva.finish (1e-4 FA off, 1e-2 FA on), fill != exact, wrong-map positive control.
 # Traps: rf_dump_stock must be built from the SAME upstream commit as the merge base (checked below), otherwise
 # "identical" compares two different upstreams. A run that produced no file is FAIL, never PASS.
+# Trap (upstream, measured 2026-10-20): llama.cpp's async logger can drop its last lines at exit with rc 0 under CPU
+# load (upstream llama-perplexity 6/40, this branch 4/40, 4 parallel runs). A perplexity log without its
+# "Final estimate" line is rerun (at most 3 attempts, the count is printed); the comparison still requires all chunks.
 # Usage: rf27-gates/g0_dense.sh   (from anywhere; needs build-cpu/ of this repo built)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$HERE")"
@@ -75,14 +78,18 @@ for tiny in llama qwen3; do
 
   # llama-perplexity: per-chunk lines identical (timings stripped)
   # -o: the async log interleaves lines; the exit code goes to <out>.rc (a run cut short is visible as such)
-  ppl() { local o=$1; shift; "$1" -m $M -f $FIX/work/text.txt -c 256 -b 256 -t 4 "${@:2}" > $o.log 2>&1; echo $? > $o.rc;
+  ppl() { local o=$1; shift; local a
+          for a in 1 2 3; do
+            "$1" -m $M -f $FIX/work/text.txt -c 256 -b 256 -t 4 "${@:2}" > $o.log 2>&1; echo $? > $o.rc; echo $a > $o.attempts
+            grep -q 'Final estimate' $o.log && break
+          done
           grep -oE '\[[0-9]+\][0-9.]+|Final estimate.*' $o.log > $o; }
   ppl out/ppl-stock-$tiny.txt build-upstream/bin/llama-perplexity
   ppl out/ppl-off-$tiny.txt  "$REPO/build-cpu/bin/llama-perplexity"
   ppl out/ppl-tgen-$tiny.txt "$REPO/build-cpu/bin/llama-perplexity" --ridgefill $FIX/work/$PJ-f32.gguf --ridgefill-min-prompt 100000
   for v in off tgen; do
     [ -s out/ppl-stock-$tiny.txt ] && grep -q '^\[33\]' out/ppl-stock-$tiny.txt && cmp -s out/ppl-stock-$tiny.txt out/ppl-$v-$tiny.txt \
-      && say "PASS G0 ppl-$v    $tiny: $(grep -c . out/ppl-stock-$tiny.txt) lines identical ($(tail -1 out/ppl-stock-$tiny.txt | tr -s ' ' | cut -c1-60))" \
+      && say "PASS G0 ppl-$v    $tiny: $(grep -c . out/ppl-stock-$tiny.txt) lines identical ($(tail -1 out/ppl-stock-$tiny.txt | tr -s ' ' | cut -c1-60)), attempts $(cat out/ppl-stock-$tiny.txt.attempts)/$(cat out/ppl-$v-$tiny.txt.attempts)" \
       || say "FAIL G0 ppl-$v    $tiny (rc stock $(cat out/ppl-stock-$tiny.txt.rc) $v $(cat out/ppl-$v-$tiny.txt.rc), lines $(grep -c . out/ppl-stock-$tiny.txt)/$(grep -c . out/ppl-$v-$tiny.txt))"
   done
 done
