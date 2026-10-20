@@ -1,0 +1,227 @@
+# RF27 interface note (L-A engine → L-B tools, L-C sweep)
+
+Written 2026-10-20 ~18:00 (T+0:15) by L-A on `rf27-engine`. Binding between the three lanes; a change is a new dated
+section at the bottom, never a silent edit. Where this note and the oracle (`kva`) disagree, the oracle wins and the
+note gets a dated correction.
+
+## 1. Projector GGUF (L-B's converter writes, L-A's loader `src/llama-ridgefill.cpp` reads)
+
+### Metadata
+
+| key | GGUF type | value / rule | loader |
+|---|---|---|---|
+| `general.type` | string | `adapter` | refuse otherwise |
+| `adapter.type` | string | `ridgefill` | refuse otherwise |
+| `general.architecture` | string | `qwen35` (dense branch: `llama` / `qwen3`) | refuse if != model arch |
+| `adapter.ridgefill.format` | u32 | `2` (new; the Oct-8 dense files have no key = format 1) | qwen35 requires 2 |
+| `adapter.ridgefill.split` | u32 | S (27B: 16, tiny fixture: 3) | refuse outside `[1, n_layer)` |
+| `adapter.ridgefill.n_layer` | u32 | trunk layers without MTP (27B: 64) | refuse if != `hparams.n_layer()` |
+| `adapter.ridgefill.n_embd` | u32 | 5120 | refuse if != `n_embd` |
+| `adapter.ridgefill.alpha_default` | f32 | manifest `correction.alpha_default` (27B: 0.0) | default of `--ridgefill-alpha` |
+| `adapter.ridgefill.tail_default` | u32 | manifest `tail.default` (4096) | default tail |
+| `adapter.ridgefill.tail_min` | u32 | manifest `tail.min` (512) | tail below it refused by name |
+| `adapter.ridgefill.share_default` | f32 | manifest `rowsel.share_default` (0.5) | default class share |
+| `adapter.ridgefill.digits_default` | bool | manifest `rowsel.digits_default` (true) | default digit rows |
+| `adapter.ridgefill.qattn_default` | f32 | manifest `rowsel.qattn_default` (0.2) | default qattn share (L-C) |
+| `adapter.ridgefill.name` | string | manifest `name` | startup log line |
+| `adapter.ridgefill.authors` | string array | manifest `authors` | startup log line |
+| `adapter.ridgefill.license` | string | manifest `license` | startup log line |
+| `adapter.ridgefill.doi` | string | manifest `doi` | startup log line |
+| `adapter.ridgefill.source_manifest_sha256` | string | sha256 of `ridgefill.json` | logged |
+| `adapter.ridgefill.source.<file>` | string | sha256 of every source file (`proj8.L*.safetensors`, `correction.safetensors`, `rowsel.safetensors`) | provenance only |
+| `adapter.ridgefill.tokenizer_sha256` | string | manifest `model.tokenizer_json_sha256` | provenance only (an engine cannot hash `tokenizer.json`) |
+| `adapter.ridgefill.vocab_sha256` | string | **new, checked**: sha256 over the base model GGUF's `tokenizer.ggml.tokens` in id order, each token's UTF-8 bytes followed by one `0x00` byte. Converter flag `--model-gguf PATH` (gguf-py reads only the metadata). | recomputed from `model.vocab` at load; refuse on mismatch by name |
+| `adapter.ridgefill.model_meta.<key>` | u32 (ints), f32 (floats), string, bool — the JSON type | one per `model.meta` entry of the manifest | each key compared with the model (map below); an unknown key is refused by name (fail closed) |
+
+`model_meta` → llama.cpp hparams the loader compares: `num_hidden_layers` = `n_layer()`, `hidden_size` = `n_embd`,
+`intermediate_size` = `n_ff(il)` for every trunk layer, `vocab_size` = `n_vocab`, `num_attention_heads` = `n_head(il)`
+(attention layers), `num_key_value_heads` = `n_head_kv(il)` (attention layers), `head_dim` = `n_embd_head_k`,
+`full_attention_interval` = the period of `!is_recr(il)`, `linear_num_key_heads` = `ssm_n_group`,
+`linear_num_value_heads` = `ssm_dt_rank`, `linear_key_head_dim` = `ssm_d_state`, `linear_value_head_dim` =
+`ssm_d_inner / ssm_dt_rank`.
+
+### Tensors
+
+| name | type | ggml `ne` (numpy shape is the reverse) | for |
+|---|---|---|---|
+| `blk.<l>.ridgefill.weight` | Q8_0 (default; from the dequantised `code × scale` in f32) or `--outtype bf16/f16/f32` | `[n_embd_in, n_embd_out]` = numpy `[out, in]` (HF `Linear` orientation; `x_l = W·h_S + c`) | every `l` in `[S, n_layer)` |
+| `blk.<l>.ridgefill.bias` | F32 | `[n_embd]` | same layers |
+| `blk.<l>.ridgefill.st` | F32 | `[S_k, S_v, H_v]` = `[128, 128, 48]`, i.e. numpy `[H_v, V, K]`: element `st[h, j, i]` adds to llama.cpp's recurrent state `S[i][j]` (i = key index, j = value index) of value head `h` | every late GDN layer (`is_recr(l)`, `l ≥ S`) |
+| `ridgefill.rowsel.score` | F32 | `[n_vocab]`; finite = token is in a class (higher = rarer), non-finite (`-inf`/NaN) = not | once |
+
+Rules for `st`, read before writing the converter:
+- llama.cpp's state memory is `s[h][j][i]` with the key index `i` fastest (`ggml-cpu/ops.cpp`
+  `gated_delta_net`: "state is stored transposed: s_out[j*S_v + i] = S[i][j]"). The oracle's recurrent state is
+  `[H, dk, dv]` (`kva/ops.py delta_rule`, `model.py fill`: `cache["rec"] + st`), so the oracle's `st[h, i, j]` must be
+  written as numpy `[h', j, i]` (swap the last two axes) **if** `correction.safetensors` holds the oracle's
+  orientation. The manifest says `layout "[heads, V, K]"`; check which one `correction.safetensors` actually is
+  (how it is added in `kva`), and say in your report which transform you applied. Since dk = dv the shape cannot tell;
+  only the alpha-1 G1 run with a random, non-symmetric `st` can.
+- Heads: `h'` is llama.cpp's value-head order: apply the converter's grouped→tiled reorder (`_reorder_v_heads`; the
+  inverse of `kva/gguf_ckpt.py _untile`) along the head axis.
+- Missing `weight`+`bias` for a **GDN** layer = identity fill on that layer (`x_l = h_S`), logged once (for the future
+  attention-only projector). Missing for an attention layer, only one of the pair present, a missing `st` for a late
+  GDN layer, any tensor not listed here, or a wrong shape/type: refused by name.
+- The digit set is not in the file: the loader builds it from `model.vocab` (token text contains an ASCII `0-9`;
+  tokens with attribute control / user-defined / unknown / unused excluded).
+
+## 2. The fill graph (L-A implements, L-C calls)
+
+Declared in `src/llama-ridgefill.h`, defined in `src/llama-ridgefill.cpp`. A free function, because it needs the
+delta-net helpers (`build_rs`, `build_conv_state`, `build_delta_net`) that live in `llm_build_delta_net_base`, and
+`src/models/models.h` is not touched. Every member it uses of the builder is public.
+
+```cpp
+struct llm_build_delta_net_base;          // src/models/models.h
+struct llm_graph_input_attn_kv;
+struct llm_graph_input_rs;
+
+// what a filled ubatch does at the late layers
+enum llm_ridgefill_fill : int32_t {
+    LLM_RIDGEFILL_FILL_NONE   = 0, // not filled: stock layers (never passed to build_ridgefill_late)
+    LLM_RIDGEFILL_FILL_BULK   = 1, // speed mode, or a quality ubatch without exact rows: every row bulk
+    LLM_RIDGEFILL_FILL_MASKED = 2, // quality: the rows in `rows` are exact (oracle layer_rows), the others bulk
+};
+
+// graph input of a MASKED ubatch (owned by the graph result like every llm_graph_input_i)
+struct llm_graph_input_ridgefill : public llm_graph_input_i {
+    ggml_tensor * rows   = nullptr; // I32 [n_R]: ubatch row indices of the exact rows R, ascending
+    ggml_tensor * scale  = nullptr; // F32 [H_v, n_seqs, n_late_gdn] correction scale, only on the ubatch that holds
+                                    //     row p_end-1 of a sequence and alpha != 0 (else nullptr, no nodes)
+    // set_input() fills both from llama_context's per-ubatch data
+};
+
+// Builds, for every layer l in [split, n_layer), the cache-writing ops of l from h_S:
+//   x_l = W_l h_S + c_l (or x_mix = set_rows(x_pred, rows, h_R) in MASKED), attn_norm, then
+//   attention layer: K,V via build_qkv (Q never expanded), attn_k_norm, ggml_rope_multi(sections) on K, cpy_k/cpy_v
+//   GDN layer:       wqkv only (no wqkv_gate), beta, alpha -> gate, build_conv_state, ssm_conv + silu, q/k/v views,
+//                    l2 norms, the delta rule continuing the state, the state written back (+ scale * st when the
+//                    `scale` input exists); the rule's output dropped (BULK) or gathered at R (MASKED)
+//   MASKED only, for rows R: attention Q/gate/attention over the cache with the KQ-mask rows of R, wo; GDN: z,
+//                    gated norm, ssm_out; residual, attn_post_norm, MLP; carried as h_R to the next late layer.
+// Bulk rows never get an attention output, an MLP or a residual.
+// Returns nullptr (BULK) or h_R after layer n_layer-1, F32 [n_embd, n_R] (MASKED; for dumps, never logits).
+// Adds no output head: the caller returns before it (as build_ridgefill does for llama/qwen3).
+ggml_tensor * build_ridgefill_late(
+        llm_build_delta_net_base        & g,        // the graph being built (qwen35 graph, or L-C's sweep graph)
+        const llama_model               & model,
+        ggml_tensor                     * h_S,      // F32 [n_embd, n_tokens]: residual entering layer `split`
+        const llm_graph_input_ridgefill * rows_mask,// nullptr for BULK without correction
+        ggml_tensor                     * inp_pos,  // I32 [n_tokens * 4]: build_inp_pos() (M-RoPE, 4 per token)
+        llm_graph_input_attn_kv         * inp_attn, // build_inp_mem_hybrid()->get_attn()
+        llm_graph_input_rs              * inp_rs,   // build_inp_mem_hybrid()->get_recr()
+        llm_ridgefill_fill                mode);
+```
+
+Preconditions (asserted, the context guarantees them): `ubatch.equal_seqs()` (hybrid memory always splits equal),
+every row of the ubatch is filled, no row is an output. The llama/qwen3 path keeps its existing
+`llm_graph_context::build_ridgefill(...)` member unchanged.
+
+The hook in `src/models/qwen35.cpp` `graph::graph` (L-A):
+
+```cpp
+for (int il = 0; il < n_layer; ++il) {
+    if (ridgefill_late_at(il)) {                       // filled ubatch (or L-C's LOWER part) and il == split
+        build_ridgefill_late(*this, model, inpL, build_inp_ridgefill() /* rows + scale, nullptr if neither */,
+                             inp_pos, inp->get_attn(), inp->get_recr(), ridgefill.fill);
+        return;                                        // no output head
+    }
+    ...stock layer...
+```
+
+## 3. Graph params, context fields, API (L-A adds; L-C uses)
+
+### `llm_graph_params` (`src/llama-graph.h`), all part of `allow_reuse()`
+
+```cpp
+// which part of the model this ubatch runs (the two-sweep prefill's graph types)
+enum llm_ridgefill_part : int32_t {
+    LLM_RIDGEFILL_PART_FULL  = 0, // single pass: layers [0, split), then fill or stock late layers
+    LLM_RIDGEFILL_PART_LOWER = 1, // sweep 1: layers [0, split) only; h_S of every row is a graph output
+    LLM_RIDGEFILL_PART_LATE  = 2, // sweeps 2-3: no embedding, no lower layers; h_S is a graph input
+};
+
+struct llm_graph_params_ridgefill {          // value member `ridgefill` of llm_graph_params (replaces the pointer)
+    const llama_ridgefill * rf   = nullptr;  // non-null iff the ubatch is filled or part != FULL
+    llm_ridgefill_fill      fill = LLM_RIDGEFILL_FILL_NONE;
+    llm_ridgefill_part      part = LLM_RIDGEFILL_PART_FULL;
+    int32_t                 n_rows  = 0;     // |R| in this ubatch (shape of the rows input)
+    bool                    correct = false; // the `scale` input exists (correction ubatch, alpha != 0)
+    ggml_tensor *           h_buf   = nullptr; // PART_LOWER: written; PART_LATE: read (see below)
+};
+```
+In PART_LATE with `fill == NONE` the qwen35 graph runs the **stock** late layers from the h_S input and the output
+head (sweep 3: the tail, logits for its output rows); with `fill == BULK/MASKED` it calls `build_ridgefill_late` on the
+h_S input (sweep 2). Stock graphs have `rf == nullptr` and are built and reused exactly as upstream.
+
+### h_S buffer (L-C allocates and owns it)
+
+`h_buf`: a 2-D ggml tensor `[n_embd, n_rows_max]` in any backend buffer, type F32, F16 or BF16; **row `p` holds h_S of
+the sequence's position `p`**. PART_LOWER: after the compute, the context copies the graph's h_S output of each row
+into row `pos` of `h_buf` (`ggml_backend_tensor_copy` on a row view; converts to the buffer's type in-graph).
+PART_LATE: before the compute, the context copies rows `[pos_0, pos_0 + n)` of `h_buf` into the graph's h_S input
+(rows of the ubatch must be consecutive positions of one sequence; the context refuses otherwise). One sequence per
+PART_LOWER/LATE ubatch; other sequences' tokens in the same `llama_decode` batch go to other ubatches (the split is
+homogeneous in the marker below).
+
+### Per-sequence state in `llama_context` (`src/llama-context.{h,cpp}`)
+
+| field | meaning |
+|---|---|
+| `ridgefill_p_end[seq]` (exists) | rows at pos < p_end are filled (bulk or exact R) |
+| `ridgefill_rows[seq]` | `std::vector<llama_pos>`, sorted, ⊂ [0, p_end): the exact rows R. Empty = speed |
+| `ridgefill_part[seq]`, `ridgefill_h_buf[seq]` | the sweep part and buffer for the next decodes of seq |
+| `ridgefill_alpha` | context-wide, default `alpha_default` from the GGUF |
+| `ridgefill_rho` | device tensors D, Nn `[H_v, n_late_gdn, n_seq_max]` F32, the quality ρ accumulators, reset when p_end is set |
+
+The batch marker (`llama_batch_allocr::set_fill`, `std::vector<int8_t>`) becomes a class code per token, and
+`split_simple`/`split_equal` keep a ubatch to one code (they already compare codes for equality): 0 stock,
+1 filled single pass (bulk ∪ R), 2 PART_LOWER, 3 PART_LATE filled (bulk ∪ R), 4 PART_LATE exact (tail). The empty
+vector stays the off path (no allocation, no extra split). The rows input (indices of R inside the ubatch) is built per
+ubatch from `ridgefill_rows[seq]` (binary search over the ubatch's positions; per-ubatch host work only).
+
+### API (`src/llama-ext.h`; L-A adds these, L-C adds its own sweep entries in its own files)
+
+```c
+// existing: llama_ridgefill_init / _free / _split, llama_set_ridgefill, llama_ridgefill_seq_set(ctx, seq, p_end)
+
+// defaults from the GGUF
+LLAMA_API float   llama_ridgefill_alpha_default (const struct llama_ridgefill * rf);
+LLAMA_API int32_t llama_ridgefill_tail_default  (const struct llama_ridgefill * rf);
+LLAMA_API int32_t llama_ridgefill_tail_min      (const struct llama_ridgefill * rf);
+LLAMA_API float   llama_ridgefill_share_default (const struct llama_ridgefill * rf);
+LLAMA_API bool    llama_ridgefill_digits_default(const struct llama_ridgefill * rf);
+LLAMA_API float   llama_ridgefill_qattn_default (const struct llama_ridgefill * rf);
+LLAMA_API const char * llama_ridgefill_desc     (const struct llama_ridgefill * rf); // "name (authors, license, doi)"
+
+LLAMA_API void llama_ridgefill_set_alpha(struct llama_context * ctx, float alpha);
+
+// class + digit rows of a prompt (SPEC §4, per prompt, not per chunk): writes the sorted positions < n_prefix,
+// returns their count (<= n_prefix). tokens[i] is the token at position i.
+LLAMA_API int32_t llama_ridgefill_select_rows(const struct llama_ridgefill * rf, const llama_token * tokens,
+        int32_t n_prefix, float share, bool digits, llama_pos * out);
+
+// the exact rows R of seq (sorted, < p_end; n = 0: speed mode). Set after llama_ridgefill_seq_set, before decoding.
+LLAMA_API void llama_ridgefill_seq_set_rows(struct llama_context * ctx, llama_seq_id seq_id,
+        const llama_pos * rows, int32_t n);
+
+// sweep support: the next decodes of seq run only one part (see §3); h_buf as above. part FULL resets.
+enum llama_ridgefill_part { LLAMA_RIDGEFILL_PART_FULL = 0, LLAMA_RIDGEFILL_PART_LOWER = 1, LLAMA_RIDGEFILL_PART_LATE = 2 };
+LLAMA_API int32_t llama_ridgefill_seq_set_part(struct llama_context * ctx, llama_seq_id seq_id,
+        enum llama_ridgefill_part part, struct ggml_tensor * h_buf); // 0 ok, < 0 refused (logged by name)
+```
+
+For L-C's question-mass graph: upstream already exposes layer inputs on the host
+(`llama_set_embeddings_layer_inp(ctx, lid, true)` / `llama_get_embeddings_layer_inp`, `src/llama-ext.h`), for output
+rows; in PART_LOWER the last 64 rows can be outputs (they are not filled), so the inputs of layers 3/7/11/15 for those
+rows can come from there. The mass graph itself is L-C's (its own `llm_graph_context` subclass and files); it reads
+the attention layers' K cache through `llama_kv_cache` views.
+
+## 4. Ownership reminders and open items
+
+- `tools/server/*` (per-request `ridgefill_mode`, calling `llama_ridgefill_select_rows`) and `llama-perplexity` /
+  `llama-bench` are not assigned in HANDOVER §4. L-A will do the libllama side above; the coordinator should name an
+  owner for the tool-side calls (proposal: L-B, next to the `common/` args).
+- Rollback (`n_rs_seq > 0`): decision pending (T+2:30); either way it is internal to `build_ridgefill_late` and the
+  split, nothing above changes.
+- The rows / scale input shapes may get a dated correction once the masked path is built; the function signature will not.
