@@ -1,5 +1,7 @@
 // Derived from L-B's tests/ridgefill/rf_dump.cpp (rf27-tools e0e1fa9) with --n-rs-seq (recurrent rollback snapshots)
-// and --cross (batches cross the fill end, as the server submits them; no prefix dump then).
+// and --cross (batches cross the fill end, as the server submits them; no prefix dump then), --fa 0|1,
+// --n-seq N (the same prompt on N sequences of a unified KV cache, in the same batches; seq s dumps to <output>.s<s>)
+// and --rows1 (exact rows of sequences >= 1; empty: speed).
 // CPU gate harness. Dump prefix and final sequence state plus tail logits; never score a filled row.
 #include "llama.h"
 #include "llama-ext.h"
@@ -20,13 +22,13 @@ static void write_bytes(const std::string & path, const void * data, size_t size
     }
 }
 
-static void dump_state(llama_context * ctx, const std::string & path) {
-    const size_t size = llama_state_seq_get_size(ctx, 0);
+static void dump_state(llama_context * ctx, const std::string & path, llama_seq_id seq = 0) {
+    const size_t size = llama_state_seq_get_size(ctx, seq);
     if (size == 0) {
         throw std::runtime_error("sequence state is empty");
     }
     std::vector<uint8_t> data(size);
-    if (llama_state_seq_get_data(ctx, data.data(), data.size(), 0) != size) {
+    if (llama_state_seq_get_data(ctx, data.data(), data.size(), seq) != size) {
         throw std::runtime_error("sequence state size changed");
     }
     write_bytes(path, data.data(), data.size());
@@ -36,6 +38,9 @@ static int run(int argc, char ** argv) {
     std::string model_path, tokens_path, output, projector, mode = "off", rows_arg;
     int n_rs_seq = 0;
     bool cross = false;
+    int fa = 0;
+    int n_seq = 1;
+    std::string rows1_arg;
     int tail = 200, keep = 200, n_batch = 700, n_ubatch = 512;
     float alpha = 0;
     bool filled_logit = false;
@@ -61,6 +66,9 @@ static int run(int argc, char ** argv) {
         else if (arg == "--filled-logit") { filled_logit = true; }
         else if (arg == "--n-rs-seq")  { n_rs_seq = std::stoi(next()); }
         else if (arg == "--cross")     { cross = true; }
+        else if (arg == "--fa")        { fa = std::stoi(next()); }
+        else if (arg == "--n-seq")     { n_seq = std::stoi(next()); }
+        else if (arg == "--rows1")     { rows1_arg = next(); }
         else { throw std::invalid_argument("unknown argument " + arg); }
     }
     if (model_path.empty() || tokens_path.empty() || output.empty() || n_batch < 1 || n_ubatch < 1 || tail < 1 || keep < 1 || !(alpha >= 0 && alpha <= 1)) {
@@ -96,13 +104,14 @@ static int run(int argc, char ** argv) {
         if (!rf) { throw std::runtime_error("projector load failed"); }
     }
     auto cp = llama_context_default_params();
-    cp.n_ctx = ((n + 255) / 256) * 256;
-    cp.n_batch = n_batch;
-    cp.n_ubatch = n_ubatch;
-    cp.n_seq_max = 1;
+    cp.n_ctx = ((n + 255) / 256) * 256 * n_seq;
+    cp.n_batch = n_batch * n_seq;
+    cp.n_ubatch = n_ubatch * n_seq;
+    cp.n_seq_max = n_seq;
+    cp.kv_unified = true;
     cp.n_rs_seq = n_rs_seq;
     cp.n_threads = cp.n_threads_batch = 4;
-    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    cp.flash_attn_type = fa ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
     cp.type_k = cp.type_v = GGML_TYPE_F32;
     std::unique_ptr<llama_context, decltype(&llama_free)> ctx(llama_init_from_model(model.get(), cp), llama_free);
     if (!ctx) { throw std::runtime_error("context creation failed"); }
@@ -111,14 +120,16 @@ static int run(int argc, char ** argv) {
 #ifdef RF27_API
         llama_ridgefill_set_alpha(ctx.get(), alpha);
 #endif
-        llama_ridgefill_seq_set(ctx.get(), 0, prefix);
+        for (int seq = 0; seq < n_seq; ++seq) {
+        llama_ridgefill_seq_set(ctx.get(), seq, prefix);
 #ifdef RF27_API
-        if (mode == "quality") {
+        const std::string & arg_rows = seq == 0 ? rows_arg : rows1_arg;
+        if (mode == "quality" && !arg_rows.empty()) {
             std::vector<llama_pos> rows;
             size_t begin = 0;
-            while (begin < rows_arg.size()) {
-                size_t end = rows_arg.find(',', begin);
-                const int row = std::stoi(rows_arg.substr(begin, end - begin));
+            while (begin < arg_rows.size()) {
+                size_t end = arg_rows.find(',', begin);
+                const int row = std::stoi(arg_rows.substr(begin, end - begin));
                 if (row < 0 || row >= prefix || (!rows.empty() && row <= rows.back())) {
                     throw std::invalid_argument("--rows must be sorted unique prefix positions");
                 }
@@ -126,25 +137,32 @@ static int run(int argc, char ** argv) {
                 if (end == std::string::npos) { break; }
                 begin = end + 1;
             }
-            llama_ridgefill_seq_set_rows(ctx.get(), 0, rows.data(), rows.size());
+            if (llama_ridgefill_seq_set_rows(ctx.get(), seq, rows.data(), rows.size()) != 0) {
+                throw std::invalid_argument("llama_ridgefill_seq_set_rows refused the rows");
+            }
         }
 #endif
+        }
     }
-    llama_batch batch = llama_batch_init(n_batch, 0, 1);
-    std::vector<float> logits;
+    llama_batch batch = llama_batch_init(n_batch * n_seq, 0, 1);
+    std::vector<std::vector<float>> logits(n_seq);
     const int vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
+    auto name = [&](int seq) { return n_seq == 1 ? output : output + ".s" + std::to_string(seq); };
     for (int start = 0; start < n;) {
         // Also dump stock at the same boundary, to compare prefix states before the tail overwrites them.
         const int boundary = !cross && start < n - std::min(tail, n) ? n - std::min(tail, n) : n;
         const int count = std::min(n_batch, boundary - start);
-        batch.n_tokens = count;
-        for (int i = 0; i < count; ++i) {
-            const int pos = start + i;
-            batch.token[i] = tokens[pos];
-            batch.pos[i] = pos;
-            batch.n_seq_id[i] = 1;
-            batch.seq_id[i][0] = 0;
-            batch.logits[i] = pos >= n - keep || (filled_logit && pos == 0);
+        batch.n_tokens = count * n_seq;
+        for (int seq = 0; seq < n_seq; ++seq) {
+            for (int i = 0; i < count; ++i) {
+                const int pos = start + i;
+                const int j = seq * count + i;
+                batch.token[j] = tokens[pos];
+                batch.pos[j] = pos;
+                batch.n_seq_id[j] = 1;
+                batch.seq_id[j][0] = seq;
+                batch.logits[j] = pos >= n - keep || (filled_logit && pos == 0);
+            }
         }
         const int result = llama_decode(ctx.get(), batch);
         if (result != 0) {
@@ -152,24 +170,30 @@ static int run(int argc, char ** argv) {
             fprintf(stderr, "llama_decode refused batch: %d\n", result);
             return 2;
         }
-        for (int i = 0; i < count; ++i) {
-            if (start + i >= n - keep) {
-                const float * row = llama_get_logits_ith(ctx.get(), i);
-                if (!row) { throw std::runtime_error("missing tail logits"); }
-                logits.insert(logits.end(), row, row + vocab);
+        for (int seq = 0; seq < n_seq; ++seq) {
+            for (int i = 0; i < count; ++i) {
+                if (start + i >= n - keep) {
+                    const float * row = llama_get_logits_ith(ctx.get(), seq * count + i);
+                    if (!row) { throw std::runtime_error("missing tail logits"); }
+                    logits[seq].insert(logits[seq].end(), row, row + vocab);
+                }
             }
         }
         start += count;
         if (!cross && start == n - std::min(tail, n) && start > 0) {
-            dump_state(ctx.get(), output + ".prefix.kv");
+            for (int seq = 0; seq < n_seq; ++seq) {
+                dump_state(ctx.get(), name(seq) + ".prefix.kv", seq);
+            }
         }
     }
     llama_batch_free(batch);
-    if (logits.size() != static_cast<size_t>(keep) * vocab) {
-        throw std::runtime_error("incomplete tail logits");
+    for (int seq = 0; seq < n_seq; ++seq) {
+        if (logits[seq].size() != static_cast<size_t>(keep) * vocab) {
+            throw std::runtime_error("incomplete tail logits");
+        }
+        write_bytes(name(seq) + ".logits", logits[seq].data(), logits[seq].size() * sizeof(float));
+        dump_state(ctx.get(), name(seq) + ".kv", seq);
     }
-    write_bytes(output + ".logits", logits.data(), logits.size() * sizeof(float));
-    dump_state(ctx.get(), output + ".kv");
     fprintf(stderr, "dumped n=%d prefix=%d keep=%d vocab=%d mode=%s alpha=%g\n", n, prefix, keep, vocab, mode.c_str(), alpha);
     return 0;
 }

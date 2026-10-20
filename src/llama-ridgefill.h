@@ -62,10 +62,14 @@ public:
     bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * rows  = nullptr; // I32 [n_R]: ubatch row indices of the exact rows R, ascending
+    ggml_tensor * pos   = nullptr; // I32 [n_R * n_pos]: their positions, section-major as the model's inp_pos
     ggml_tensor * scale = nullptr; // F32 [H_v, n_seqs, n_gdn_late]: correction scale per head, sequence, late GDN layer
 
     const llm_graph_params_ridgefill params;
 };
+
+// the ubatch row indices of the exact rows (positions in rows_seq[seq], sorted), ascending; returns their count
+int32_t llama_ridgefill_ubatch_rows(const llama_ubatch & ubatch, const std::vector<llama_pos> * rows_seq, std::vector<int32_t> * idx);
 
 struct llm_build_delta_net_base;
 

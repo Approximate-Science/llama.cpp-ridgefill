@@ -1,4 +1,4 @@
-INFO upstream base 1242be66f65d5d8a3d996ba56d6de106ced98cf6, branch 45199c4dc+dirty
+INFO upstream base 1242be66f65d5d8a3d996ba56d6de106ced98cf6, branch bd9ede799+dirty
 PASS G0 off        llama-fa0-b128-ub64: no projector, byte-identical to upstream
 PASS G0 T>=N       llama-fa0-b128-ub64: projector loaded, nothing filled, byte-identical
 PASS dense fill      llama-fa0-b128-ub64 (tol 1e-4): logits rel 4.28e-07 kv rel max 8.14e-06
@@ -64,11 +64,11 @@ PASS dense fill!=ex  qwen3-fa1-b700-ub512: logits rel 1.01e+00 kv rel max 1.40e+
 PASS dense wrongmap  qwen3-fa1-b700-ub512: logits rel 6.48e-01 kv rel max 1.38e+00 (must exceed tolerance)
 PASS refuse-output qwen3: decode refuses a filled token that is an output (rc 2)
 PASS G0 ppl-off    qwen3: 34 lines identical (Final estimate: PPL = 305.1462 +/- 0.71548)
-PASS G0 ppl-tgen    qwen3: 34 lines identical (Final estimate: PPL = 305.1462 +/- 0.71548)
+FAIL G0 ppl-tgen    qwen3
 PASS G0 off        qwen35-b700-ub512: no projector, byte-identical to upstream
 PASS G0 T>=N       qwen35-b700-ub512: projector loaded, nothing filled, byte-identical
 PASS G0 off        qwen35-b128-ub128: no projector, byte-identical to upstream
 PASS G0 T>=N       qwen35-b128-ub128: projector loaded, nothing filled, byte-identical
 PASS G0 off        qwen35-b50-ub50: no projector, byte-identical to upstream
 PASS G0 T>=N       qwen35-b50-ub50: projector loaded, nothing filled, byte-identical
-TOTAL PASS 72 FAIL 0 SKIPPED 0
+TOTAL PASS 71 FAIL 1 SKIPPED 0

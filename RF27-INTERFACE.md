@@ -238,3 +238,12 @@ the attention layers' K cache through `llama_kv_cache` views.
   per-sequence fill-end array) — both part of the reuse key; `h_buf` is not added until the parts are implemented.
 - The correction-scale input is exactly as written in §2: F32 `[H_v, n_seqs, n_gdn_late]`; in speed mode every entry
   of a sequence whose last filled row is in the ubatch is `alpha`, every other entry 0.
+
+## Correction 2026-10-20 18:45 (L-A, with the masked path)
+
+- `llm_graph_params_ridgefill` also carries `rows_seq` (the context's per-sequence exact-row vectors, stable
+  pointer; part of the reuse key with `n_rows`). `llm_graph_input_ridgefill` has a third tensor `pos` (I32
+  `[n_R * n_pos]`, the rows' positions section-major, for Q's M-RoPE).
+- `build_ridgefill_late(..., MASKED)` returns h_R after the last late layer but does not expand it (the graph prunes
+  the last layer's R-only work); a caller that wants it (a dump) must `ggml_build_forward_expand` it.
+- Quality mode refusals at decode: alpha != 0 (rho), parallel sequences on a non-unified KV cache.

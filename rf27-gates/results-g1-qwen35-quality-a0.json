@@ -1,0 +1,156 @@
+{
+  "summary": {
+    "gate": "G1-quality-a0",
+    "result": "PASS",
+    "checks": 27,
+    "passed": 27
+  },
+  "checks": [
+    {
+      "check": "oracle-quality-R1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 4.0518665400668397e-07,
+      "worst": "final.7.k",
+      "arrays": 27
+    },
+    {
+      "check": "oracle-quality-R2-b700-ub512",
+      "result": "PASS",
+      "max_rel": 5.122279276292829e-07,
+      "worst": "prefix.7.k",
+      "arrays": 27
+    },
+    {
+      "check": "quality!=speed-R1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 1.7331947088241577
+    },
+    {
+      "check": "positive-wrong-map-R1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 1.4805277585983276
+    },
+    {
+      "check": "negative-tail-ge-n-b700-ub512",
+      "result": "PASS"
+    },
+    {
+      "check": "oracle-quality-R1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 4.0518665400668397e-07,
+      "worst": "final.7.k",
+      "arrays": 27
+    },
+    {
+      "check": "oracle-quality-R2-b128-ub128",
+      "result": "PASS",
+      "max_rel": 5.122279276292829e-07,
+      "worst": "prefix.7.k",
+      "arrays": 27
+    },
+    {
+      "check": "quality!=speed-R1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 1.7331947088241577
+    },
+    {
+      "check": "positive-wrong-map-R1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 1.4805277585983276
+    },
+    {
+      "check": "negative-tail-ge-n-b128-ub128",
+      "result": "PASS"
+    },
+    {
+      "check": "oracle-quality-R1-b50-ub50",
+      "result": "PASS",
+      "max_rel": 4.0518665400668397e-07,
+      "worst": "final.7.k",
+      "arrays": 27
+    },
+    {
+      "check": "oracle-quality-R2-b50-ub50",
+      "result": "PASS",
+      "max_rel": 5.122279276292829e-07,
+      "worst": "prefix.7.k",
+      "arrays": 27
+    },
+    {
+      "check": "quality!=speed-R1-b50-ub50",
+      "result": "PASS",
+      "max_rel": 1.7331947088241577
+    },
+    {
+      "check": "positive-wrong-map-R1-b50-ub50",
+      "result": "PASS",
+      "max_rel": 1.4805277585983276
+    },
+    {
+      "check": "negative-tail-ge-n-b50-ub50",
+      "result": "PASS"
+    },
+    {
+      "check": "positive-wrong-rows-R1-vs-R2",
+      "result": "PASS",
+      "max_rel": 1.5190482139587402
+    },
+    {
+      "check": "oracle-quality-R1-fa1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 0.0017388142878189683,
+      "tol": 0.01
+    },
+    {
+      "check": "oracle-quality-R1-fa1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 0.0007169006858021021,
+      "tol": 0.01
+    },
+    {
+      "check": "oracle-2seq-R1+R2-seq0-b700-ub512",
+      "result": "PASS",
+      "max_rel": 4.842834755436343e-07
+    },
+    {
+      "check": "oracle-2seq-R1+R2-seq1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 5.122279276292829e-07
+    },
+    {
+      "check": "oracle-2seq-R1+speed-seq0-b700-ub512",
+      "result": "PASS",
+      "max_rel": 4.842834755436343e-07
+    },
+    {
+      "check": "oracle-2seq-R1+speed-seq1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 5.518735406440101e-07
+    },
+    {
+      "check": "oracle-2seq-R1+R2-seq0-b128-ub128",
+      "result": "PASS",
+      "max_rel": 4.842834755436343e-07
+    },
+    {
+      "check": "oracle-2seq-R1+R2-seq1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 5.122279276292829e-07
+    },
+    {
+      "check": "oracle-2seq-R1+speed-seq0-b128-ub128",
+      "result": "PASS",
+      "max_rel": 4.842834755436343e-07
+    },
+    {
+      "check": "oracle-2seq-R1+speed-seq1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 7.095517275956809e-07
+    },
+    {
+      "check": "alpha1-quality-refused",
+      "result": "PASS",
+      "rc": 2
+    }
+  ]
+}

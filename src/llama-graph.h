@@ -805,11 +805,12 @@ struct llm_graph_params_ridgefill {
     bool                    correct = false; // the correction-scale input exists (correction ubatch, alpha != 0)
     float                   alpha   = 0.0f;  // the correction scale of speed mode
 
-    const llama_pos * p_end = nullptr; // [LLAMA_MAX_SEQ] the context's per-sequence fill ends (stable pointer)
+    const llama_pos              * p_end    = nullptr; // [LLAMA_MAX_SEQ] per-sequence fill ends (stable pointer)
+    const std::vector<llama_pos> * rows_seq = nullptr; // [LLAMA_MAX_SEQ] per-sequence exact rows (stable pointer)
 
     bool operator==(const llm_graph_params_ridgefill & o) const {
         return rf == o.rf && fill == o.fill && part == o.part && n_rows == o.n_rows && correct == o.correct &&
-               alpha == o.alpha && p_end == o.p_end;
+               alpha == o.alpha && p_end == o.p_end && rows_seq == o.rows_seq;
     }
 };
 

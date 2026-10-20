@@ -71,3 +71,31 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   needed: stock does not shift snapshot slots either, a rollback is valid only into the tokens of the last ubatch
   ("older slots are caller-owned"), and callers roll back drafts, never prompt rows. Documented in llama-ext.h.
 - rf27-gates/rf_dump_rs.cpp = L-B's rf_dump.cpp + `--n-rs-seq`, `--cross` (L-B's file untouched).
+
+## 18:35-18:45 masked path (quality mode), G1 quality at alpha 0
+- Implemented in `build_ridgefill_late` (MASKED): per late layer `x_mix = set_rows(W h_S + c, h_R, rows)`; norm; K/V
+  (attention) or conv + scan (GDN) for all rows from x_mix; for rows R only: attention Q + output gate via build_qkv
+  on `get_rows(norm(x_mix), rows)`, q-norm, `ggml_rope_multi` at R's positions (an input gathered from the ubatch's
+  section-major pos), attention over the cache with the KQ-mask rows of R (`ggml_get_rows` on the ubatch mask; F16
+  cast with FA), gate, wo; GDN: the scan's output gathered at R, z from wqkv_gate, gated RMS norm, ssm_out; then
+  residual, attn_post_norm, MLP, residual -> h_R. h_R after the last late layer is not expanded, so that layer's
+  R-only attention output / ssm_out / MLP are pruned (they write no cache and a filled ubatch has no logits).
+- What a masked chunk skips (SPEC §4 asks every lane to say): for bulk rows, Q, attention, the output gate, wo, z, the
+  gated norm, ssm_out, the residual and the MLP of every late layer. Computed for all rows: the map, attn_norm, K/V
+  (+ k-norm, RoPE) or the GDN in-projection (qkv, beta, alpha), conv and scan. For rows R: everything except the
+  last late layer's post-mixer part. Not measured for speed yet (lane Q, G4).
+- Context: a ubatch with any exact row gets fill MASKED and n_rows (part of the reuse key); rows are found per
+  ubatch by binary search in the per-sequence sorted R (per-ubatch host work). Refused by name at decode: quality
+  with alpha != 0 (rho-scaled correction not implemented), and quality with parallel sequences on a non-unified KV
+  cache (the KQ-mask rows of R are gathered from one stream).
+- G1 quality alpha 0 (`rf27-gates/g1_quality_a0.py`, L-B's reference/compare unchanged): 27/27. Oracle agreement
+  at 700/512, 128/128, 50/50 for R1 = {0,7,31,127,255,499} (4.05e-07) and R2 = {3,64,65,66,200,383,384,450}
+  (5.12e-07); quality != speed (1.73); wrong map (1.48); R1 run vs the R2 oracle fails (1.52); T >= N byte-identical
+  to stock; FA on agrees at 1e-2 (1.7e-03, 7.2e-04); two sequences in the same ubatches (R1 + R2; R1 + speed) agree
+  per sequence (<= 7.1e-07); alpha 1 refused by name (rc 2).
+- L-B's harness in quality mode stops at its own T >= N control (it passes --rows with no prefix; rf_dump refuses)
+  and would then run alpha 1, which the engine refuses; asked L-B (via the coordinator) for both.
+- G0 rerun: 71/1 — FAIL `ppl-tgen qwen3`: chunks 1-32 identical, [33] and the final line missing on the branch side.
+  Not reproducible (6/6 direct runs complete and identical, ONLY=ppl rerun 4/4); it ran while my quality tests
+  loaded the CPU. Suspected the async log losing its tail at exit; unconfirmed, the script did not keep the exit
+  code. It now records each run's rc and shows it in a FAIL line. Rollback 11/11, G1 speed 27/27 after the change.

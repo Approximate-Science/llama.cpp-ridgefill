@@ -1574,11 +1574,13 @@ llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_uba
         return res;
     }
 
-    res.rf      = ridgefill;
-    res.fill    = LLM_RIDGEFILL_FILL_BULK;
-    res.correct = ridgefill_correct(ubatch);
-    res.alpha   = res.correct ? ridgefill_alpha : 0.0f;
-    res.p_end   = ridgefill_p_end.data();
+    res.rf       = ridgefill;
+    res.n_rows   = llama_ridgefill_ubatch_rows(ubatch, ridgefill_rows.data(), nullptr);
+    res.fill     = res.n_rows > 0 ? LLM_RIDGEFILL_FILL_MASKED : LLM_RIDGEFILL_FILL_BULK;
+    res.correct  = ridgefill_correct(ubatch);
+    res.alpha    = res.correct ? ridgefill_alpha : 0.0f;
+    res.p_end    = ridgefill_p_end.data();
+    res.rows_seq = res.n_rows > 0 ? ridgefill_rows.data() : nullptr;
 
     return res;
 }
@@ -1605,9 +1607,16 @@ bool llama_context::ridgefill_mark() {
         }
 
         if (!ridgefill_rows[batch.seq_id[i][0]].empty()) {
-            LLAMA_LOG_ERROR("%s: seq_id %d has RidgeFill exact rows (quality mode), which this build does not implement yet\n",
-                    __func__, batch.seq_id[i][0]);
-            return false;
+            if (ridgefill_alpha != 0.0f && ridgefill->n_gdn_late > 0) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill quality mode with alpha %g needs the rho-scaled correction, "
+                        "which this build does not implement; use alpha 0\n", __func__, batch.seq_id[i][0], ridgefill_alpha);
+                return false;
+            }
+            if (!cparams.kv_unified && cparams.n_seq_max > 1) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill quality mode with parallel sequences needs a unified KV cache "
+                        "(kv_unified, -kvu)\n", __func__, batch.seq_id[i][0]);
+                return false;
+            }
         }
 
         fill[i]  = 1;

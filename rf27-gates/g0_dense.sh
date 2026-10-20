@@ -74,19 +74,23 @@ for tiny in llama qwen3; do
   fi
 
   # llama-perplexity: per-chunk lines identical (timings stripped)
-  ppl() { "$1" -m $M -f $FIX/work/text.txt -c 256 -b 256 -t 4 "${@:2}" 2>&1 | grep -oE '\[[0-9]+\][0-9.]+|Final estimate.*' ; }  # -o: the async log interleaves lines
-  ppl build-upstream/bin/llama-perplexity > out/ppl-stock-$tiny.txt
-  ppl "$REPO/build-cpu/bin/llama-perplexity" > out/ppl-off-$tiny.txt
-  ppl "$REPO/build-cpu/bin/llama-perplexity" --ridgefill $FIX/work/$PJ-f32.gguf --ridgefill-min-prompt 100000 > out/ppl-tgen-$tiny.txt
+  # -o: the async log interleaves lines; the exit code goes to <out>.rc (a run cut short is visible as such)
+  ppl() { local o=$1; shift; "$1" -m $M -f $FIX/work/text.txt -c 256 -b 256 -t 4 "${@:2}" > $o.log 2>&1; echo $? > $o.rc;
+          grep -oE '\[[0-9]+\][0-9.]+|Final estimate.*' $o.log > $o; }
+  ppl out/ppl-stock-$tiny.txt build-upstream/bin/llama-perplexity
+  ppl out/ppl-off-$tiny.txt  "$REPO/build-cpu/bin/llama-perplexity"
+  ppl out/ppl-tgen-$tiny.txt "$REPO/build-cpu/bin/llama-perplexity" --ridgefill $FIX/work/$PJ-f32.gguf --ridgefill-min-prompt 100000
   for v in off tgen; do
     [ -s out/ppl-stock-$tiny.txt ] && grep -q '^\[33\]' out/ppl-stock-$tiny.txt && cmp -s out/ppl-stock-$tiny.txt out/ppl-$v-$tiny.txt \
       && say "PASS G0 ppl-$v    $tiny: $(grep -c . out/ppl-stock-$tiny.txt) lines identical ($(tail -1 out/ppl-stock-$tiny.txt | tr -s ' ' | cut -c1-60))" \
-      || say "FAIL G0 ppl-$v    $tiny"
+      || say "FAIL G0 ppl-$v    $tiny (rc stock $(cat out/ppl-stock-$tiny.txt.rc) $v $(cat out/ppl-$v-$tiny.txt.rc), lines $(grep -c . out/ppl-stock-$tiny.txt)/$(grep -c . out/ppl-$v-$tiny.txt))"
   done
 done
 # qwen35 (hybrid GDN + M-RoPE), L-B's tiny fixture: G0 rows only (oracle agreement is L-B's run_gate1_qwen35)
 Q35=${Q35:-$HERE/lb/out/gate1-qwen35}
-if [ -s "$Q35/tiny-qwen35-f32.gguf" ] && [ "${ONLY:-}" != ppl ]; then
+if [ "${ONLY:-}" = ppl ]; then
+  :   # perplexity rows only
+elif [ -s "$Q35/tiny-qwen35-f32.gguf" ]; then
   M=$Q35/tiny-qwen35-f32.gguf; T=$Q35/tokens.bin
   for cfg in 700/512 128/128 50/50; do
     b=${cfg%/*}; ub=${cfg#*/}; tag="qwen35-b$b-ub$ub"

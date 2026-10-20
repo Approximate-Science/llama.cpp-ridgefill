@@ -176,8 +176,8 @@ LLAMA_API const char * llama_ridgefill_desc          (const struct llama_ridgefi
 LLAMA_API int32_t llama_ridgefill_set_alpha(struct llama_context * ctx, float alpha);
 
 // the exact rows R of seq_id (sorted, unique, < p_end; n = 0: speed mode); call after llama_ridgefill_seq_set,
-// which clears them. 0 ok, < 0 refused. Until the masked path lands, llama_decode() refuses filled rows of a
-// sequence that has exact rows (quality mode is not implemented in this build).
+// which clears them. 0 ok, < 0 refused. llama_decode() refuses filled rows of a sequence with exact rows when alpha
+// != 0 (the rho-scaled correction is not implemented) or with parallel sequences on a non-unified KV cache.
 LLAMA_API int32_t llama_ridgefill_seq_set_rows(struct llama_context * ctx, llama_seq_id seq_id,
         const llama_pos * rows, int32_t n);
 
