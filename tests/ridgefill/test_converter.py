@@ -12,7 +12,6 @@ from pathlib import Path
 from unittest.mock import patch
 
 import numpy as np
-from safetensors import serialize
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import convert_ridgefill_to_gguf as converter
@@ -20,11 +19,17 @@ from check_converter import verify
 
 
 def save_tensors(path: Path, tensors: dict, metadata: dict | None = None) -> None:
-    data = {}
+    header = {"__metadata__": metadata or {}}
+    buffers = []
+    offset = 0
     for name, (dtype, array) in tensors.items():
-        name_dtype = {"I8": "int8", "BF16": "bfloat16", "F32": "float32"}[dtype]
-        data[name] = dict(dtype=name_dtype, shape=list(array.shape), data=array.tobytes())
-    path.write_bytes(serialize(data, metadata=metadata))
+        buffer = array.tobytes()
+        header[name] = dict(dtype=dtype, shape=list(array.shape), data_offsets=[offset, offset + len(buffer)])
+        buffers.append(buffer)
+        offset += len(buffer)
+    encoded = json.dumps(header).encode("utf-8")
+    encoded += b" " * (-len(encoded) % 8)
+    path.write_bytes(len(encoded).to_bytes(8, "little") + encoded + b"".join(buffers))
 
 
 def seal(folder: Path, manifest: dict) -> None:
