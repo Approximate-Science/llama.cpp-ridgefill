@@ -245,3 +245,25 @@ Implemented `run_g5.py`: git archive into a new clean directory, GIT_CEILING_DIR
 The G5 requirements exposed two earlier gaps. The old common-init compatibility check ran after loading LoRA, so an invalid/missing adapter could hide the intended unsupported-combination error. Moved explicit LoRA/control/embedding/row-split refusals before model/adapter I/O. Nonzero --cache-reuse now refuses there instead of being silently disabled by server setup. Per-request n_cache_reuse also refuses after normal schema validation. Bench explicitly refuses embeddings as well as row split. Kept a late embedding guard for models that enable embeddings automatically. L-C's guarded sweep call remains untouched.
 
 The new live checker passed 15 checks on the rebuilt CPU tools: five named startup refusals, two bench refusals, a stock missing-LoRA loader control, per-request cache-shift refusal, actual fill activation (500/700 rows), filled-slot save refusal with no output file, zero filled rows in off mode, and successful nonempty exact-slot save. Evidence: `out/g5-local-refusals2.log`, `out/g5-local-refusals2/results.json`, and its per-case logs. Source audit preflight examined 35 files and rg returned 1 with empty output (`out/g5-preflight-grep.log`). Type check passed (`out/g5-typecheck.log`). Full clean archive build will run on this committed script/guard revision next; no archive-build pass is claimed by this paragraph.
+
+### G5 CPU archive result and Qwen27 documentation (2026-10-20)
+
+Committed scripts and fail-closed guards in `44832f7161673ea687d093e7aad6c44045056e3a`, then ran the committed gate with system Python/NumPy:
+
+```sh
+python3 tests/ridgefill/run_g5.py --ref 44832f716 --backend cpu --fixture out/gate1-qwen35 --out out/g5-cpu-44832f716 --port 18113
+```
+
+```json
+{"gate":"G5","result":"PASS","backend":"cpu","revision":"44832f7161673ea687d093e7aad6c44045056e3a","checks":10,"refusal_checks":15,"scope":"archive build, source audit, named refusals on selected backend","isolation":"caller environment; container isolation NOT PROVIDED","multi_gpu":"NOT RUN"}
+```
+
+Built all three tools from a clean git archive with -j4, GGML_NATIVE=OFF, GPU backends disabled, tests/examples/UI/OpenSSL disabled. The archive cannot discover the parent checkout; build IDs were explicitly pinned. Server, bench and perplexity all report build 11801, commit 44832f716, GNU 16.2.1, Linux x86_64. The portability grep scanned 35 engine/common/tool/converter/test source files and returned 1 with empty output. Its injected path/hostname/device/TP controls produced four matches; portable code produced none. The archived refusal checker passed all 15 live checks, including actual active fill, refusal without a saved file, and a successful 300876-byte exact-slot save.
+
+Evidence: `out/g5-cpu-44832f716-run.log`, `out/g5-cpu-44832f716/results.json`, `audit.json`, empty `portability-grep.log`, positive/negative grep logs, configure/build command JSON and logs, and `refusals/results.json` plus its per-case logs. The 30 existing live tool checks and 18 argument checks also passed on the local guard build (`out/g5-tool-live.json`, `out/g5-tool-args.log`). Type check and git diff --check passed.
+
+An initial local refusal probe was started before the schema rebuild finished and detected the old request-level cache-shift behavior. Its failed output is retained in `out/g5-local-refusals.log`; the completed rebuild and fresh run in `out/g5-local-refusals2.log` passed. The archive result uses only compiled committed sources, so no stale live binary supplies the accepted result.
+
+For Q, the same command uses --backend vulkan or --backend hip, --gpu-layers 99, a new output directory, the integrated release ref, and explicit toolchain settings through --cmake-arg. The bridge supplies the environment and selected GPU. This lane ran CPU only: clean-container isolation, Vulkan/HIP/CUDA/Metal execution and multi-GPU layer split are NOT RUN here. The scoped CPU pass is not a pass for those remaining G5 hardware/environment gates.
+
+Updated RIDGEFILL.md's Qwen3.8-27B section: distinguish supported speed/off from explicit-row quality engine tests and pending automatic selectors/sweep; state class/digit/qattn row rules and rounding, all knobs/defaults/ranges, exact-tail/cache behavior, startup/request/persistence refusals, quality rho limitation, per-tool mode limits, and G3/G5 commands. Moved the shared flag table there and linked the generic usage section to it to avoid conflicting copies. Real-model result cells remain NOT YET MEASURED; no lane-Q stock/reference numbers were substituted.
