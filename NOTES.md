@@ -171,3 +171,11 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   tests/ridgefill/rf_dump.cpp against build-cpu, fixtures byte-identical to L-B's out/): speed 27/27 (fill worst
   6.31e-07), quality 27/27 (fill worst 4.05e-07, incl. alpha-1 refusal and wrong-rows / speed-instead-of-quality
   controls); G0 72/0; rollback 11/11; G1 quality a0 27/27; dispatch 44/44; select_rows 23/23.
+
+## 19:45-19:55 rf27-integ: rf27-tools be962e03a merged forward
+- Merge 4638252bc (no conflicts): `common_ridgefill_rows` now calls `llama_ridgefill_select_rows` (validated inputs,
+  checked output). Build clean. Canonical G1 speed 27/27, quality 27/27; G0 72/0; select_rows 23/23; L-B's
+  tests/ridgefill/test_row_selection.cpp (built here against build-cpu + libllama-common): "PASS: 21 common
+  class/digit selector checks". Lane T (via the coordinator): the digit rule equals kva's digit_ids on the real
+  Qwen3.8 vocabulary (10 ids, 248,077 pieces, no difference). llama-bench / llama-perplexity quality mode still
+  refused in L-B's files until their next commit.
