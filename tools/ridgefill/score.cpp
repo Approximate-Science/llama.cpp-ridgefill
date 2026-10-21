@@ -108,7 +108,6 @@ static options parse(int argc, char ** argv) {
     require(!o.model.empty() && !o.input.empty() && !o.output.empty(), "--model, --input and --output are required");
     require(o.mode == "off" || o.mode == "speed" || o.mode == "quality" || o.mode == "quality+qattn", "invalid mode");
     require(o.mode == "off" || !o.projector.empty(), "active modes require --projector");
-    require(o.share > 0, "class share must be in (0,1]");
     require((o.mode != "quality" && o.mode != "quality+qattn") || o.alpha == 0,
             "quality modes with nonzero alpha require the rho-scaled correction; use --alpha 0");
     require(o.scored > 0 && o.tail > 0 && o.min_prompt >= 0 && o.window > 0 && o.threads > 0 && o.batch > 0 && o.ubatch > 0 && o.ctx >= 0, "invalid count");

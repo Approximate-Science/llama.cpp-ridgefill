@@ -324,7 +324,7 @@ static void llama_ridgefill_init_impl(const llama_model & model, const char * pa
         rf.digits_default = gguf_get_val_bool(gctx, ridgefill_find(gctx, "adapter.ridgefill.digits_default", GGUF_TYPE_BOOL, true));
 
         if (!(rf.alpha_default >= 0.0f && rf.alpha_default <= 1.0f) || rf.tail_min < 1 || rf.tail_default < rf.tail_min ||
-            !(rf.share_default > 0.0f && rf.share_default <= 1.0f) || !(rf.qattn_default >= 0.0f && rf.qattn_default <= 1.0f)) {
+            !(rf.share_default >= 0.0f && rf.share_default <= 1.0f) || !(rf.qattn_default >= 0.0f && rf.qattn_default <= 1.0f)) {
             throw std::runtime_error("projector defaults (alpha, tail, share, qattn) are out of range");
         }
 

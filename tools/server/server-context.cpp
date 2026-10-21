@@ -3490,6 +3490,7 @@ private:
             int32_t window_begin = -1, int32_t window_end = -1) {
         common_params selection = params_base;
         const auto & tparams = slot.task->params;
+        selection.ridgefill_share = tparams.ridgefill_share;
         selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
         selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
@@ -4120,6 +4121,7 @@ private:
                             if (p_fill > 0 && mode != "speed") {
                                 try {
                                     common_params selection = params_base;
+                                    selection.ridgefill_share = tparams.ridgefill_share;
                                     selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
                                     selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
                                     selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;

@@ -221,8 +221,8 @@ def main() -> int:
         parser.error("tail/context/batch/thread/window/decode counts must be positive; min-prompt nonnegative")
     if args.limit is not None and args.limit < 2:
         parser.error("--limit must be at least 2 for BCa")
-    if not all(math.isfinite(value) and 0 <= value <= 1 for value in (args.share, args.alpha, args.qattn_share)) or args.share == 0:
-        parser.error("share must be in (0,1]; alpha/qattn-share in [0,1]")
+    if not all(math.isfinite(value) and 0 <= value <= 1 for value in (args.share, args.alpha, args.qattn_share)):
+        parser.error("share/alpha/qattn-share must be in [0,1]")
     if not 0 < args.port < 65536 or not all(math.isfinite(value) and value > 0 for value in (args.timeout, args.startup_timeout)):
         parser.error("invalid port or timeout")
     result = run(args)

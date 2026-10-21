@@ -1770,9 +1770,7 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
     } else if (option == "--ridgefill-alpha") {
         params.ridgefill_alpha = number();
     } else if (option == "--ridgefill-share") {
-        const float share = number();
-        if (share == 0) { throw std::invalid_argument("--ridgefill-share must be in (0, 1]"); }
-        params.ridgefill_share = share;
+        params.ridgefill_share = number();
     } else if (option == "--ridgefill-qattn-share") {
         params.ridgefill_qattn_share = number();
     } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind" || option == "--ridgefill-special-exact") {
@@ -1858,8 +1856,8 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
     if (selected_mode == "off" || selected_mode == "speed" || n_prefix == 0) { return {}; }
     common_ridgefill_check_quality_alpha(params, selected_mode);
     if (!rf || !tokens || n_prefix < 0) { throw std::invalid_argument("RidgeFill: class/digit selection requires a projector, tokens and nonnegative prefix length"); }
-    if (!(params.ridgefill_share > 0 && params.ridgefill_share <= 1)) {
-        throw std::invalid_argument("RidgeFill: --ridgefill-share must be resolved and in (0, 1]");
+    if (!(params.ridgefill_share >= 0 && params.ridgefill_share <= 1)) {
+        throw std::invalid_argument("RidgeFill: --ridgefill-share must be resolved and in [0, 1]");
     }
     if (params.ridgefill_digits != 0 && params.ridgefill_digits != 1) {
         throw std::invalid_argument("RidgeFill: --ridgefill-digits must be resolved to on or off");

@@ -448,7 +448,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --ridgefill <file>                          RidgeFill projector: fill the prompt of pp tests (experimental)\n");
     printf("  --ridgefill-tail <n>                        RidgeFill: exact tail (default: projector)\n");
     printf("  --ridgefill-mode <mode>                     off, speed or quality (default: speed)\n");
-    printf("  --ridgefill-share <n>                       class row share in (0, 1] (default: projector)\n");
+    printf("  --ridgefill-share <n>                       class row share in [0, 1] (default: projector)\n");
     printf("  --ridgefill-digits <on|off>                  keep digit rows exact (default: projector)\n");
     printf("  --ridgefill-special-exact <on|off>          keep special rows exact in quality (default: off)\n");
     printf("  --ridgefill-header-rows <K>                 exact rows after each special token (default: 0)\n");

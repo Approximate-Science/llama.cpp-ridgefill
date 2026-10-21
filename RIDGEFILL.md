@@ -35,7 +35,7 @@ The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 5
 
 For a prompt of N tokens and exact tail T, P=max(0,N-T) is the prefix length. Selection is per prompt, not per prefill chunk:
 
-- Class rows qualify when the token's vocabulary score is finite. Keep `rint(share * qualifying_rows)` positions with highest scores, ties by lower position. Rounding is half to even; the default class share is 0.5.
+- Class rows qualify when the token's vocabulary score is finite. Keep `rint(share * qualifying_rows)` positions with highest scores, ties by lower position. Rounding is half to even; the default class share is 0.5. Class share 0 disables only class rows; digit, special, header and question-attention rows still apply. With all row sources disabled and alpha 0, empty quality selection is byte-identical to speed mode on the tiny CPU fixture.
 - Digit rows contain an ASCII digit in their vocabulary token text. Unknown, control, user-defined and unused tokens are excluded. Digits are on by default. Quality uses the sorted union of class and digit positions below P.
 - Question-attention adds `round(qattn_share * P)` prefix positions with highest causal attention mass, ties by lower position and half-even budget rounding. The default share is 20%, using the last 64 prompt rows as queries at attention layers 3, 7, 11 and 15 below split 16. Mass sums causal `softmax(Q K^T / sqrt(head_dim))` over these layers, heads and queries. The union with class/digit rows can exceed 20% of P. `--ridgefill-qattn-blind` places the query window immediately before P instead of at the prompt end. Share 0 runs ordinary quality with identical rows and no sweep allocation.
 
@@ -154,7 +154,7 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-tail N` | projector (27B: 4096) | last prompt tokens computed exactly; at least projector tail_min (27B: 512) |
 | `--ridgefill-min-prompt N` | 8192 | shorter prompts are not filled; CLI/server/perplexity only |
 | `--ridgefill-mode MODE` | speed with a projector | off, speed, quality, quality+qattn; availability above |
-| `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in (0,1] |
+| `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in [0,1] |
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
 | `--ridgefill-special-exact on\|off` | off | keep unknown/control/user-defined token rows exact in quality modes |
 | `--ridgefill-header-rows K` | 0 | keep the next K prefix rows after each special token exact, independently of special-exact |
@@ -177,13 +177,14 @@ Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill
 |---|---|
 | `ridgefill` | boolean; false selects stock processing regardless of mode |
 | `ridgefill_mode` | off, speed, quality or quality+qattn; inherits server mode when omitted |
+| `ridgefill_share` | finite number in [0,1]; inherits the startup class share |
 | `ridgefill_tail` | integer; 0 inherits the server tail, positive values must meet projector tail_min |
 | `ridgefill_special_exact` | boolean; inherits startup setting; quality modes only |
 | `ridgefill_header_rows` | nonnegative integer; inherits startup setting; quality modes only |
 | `ridgefill_qattn_window_mode` | last or turn; inherits startup setting |
 | `ridgefill_qattn_turn_cap` | positive integer; inherits startup turn cap (256) |
 
-Class/digit/alpha settings and question share/window-size/blind are server startup settings. The chat-row and question-window mode/cap fields above can be overridden per request. `ridgefill_mode: "off"` selects stock. Unknown modes, wrong field types, negative tails and tails below tail_min return a named request error.
+Digit/alpha settings and question share/window-size/blind are server startup settings. Class share can also be overridden with `ridgefill_share`. The chat-row and question-window mode/cap fields above can be overridden per request. `ridgefill_mode: "off"` selects stock. Unknown modes, wrong field types, negative tails and tails below tail_min return a named request error.
 
 The RAM prompt cache carries the mode, exact-row set and fill marker. The unchanged fill boundary can reuse its exact cached tail. Changing mode or selected rows in a retained approximate region requires recomputation; a changed boundary restarts a recurrent/hybrid context when it cannot rewind safely. Ordinary cache_prompt reuse and --cache-ram remain available. KV shifting through nonzero --cache-reuse or request n_cache_reuse is refused by name. Slot save of filled rows is refused; an exact slot can be saved.
 
@@ -205,7 +206,7 @@ The following combinations and invalid inputs refuse by name; there is no fallba
 | qattn split without lower attention layers, or a requested layer that is recurrent | names the split/layer; the 27B split-16 projector has four usable layers |
 | h_S exceeding 1 GiB, invalid shape/type, or failed backend allocation | names the sweep buffer dimensions/type/byte limit/allocation; no oversized allocation or host fallback |
 | filled prefix token requesting logits | names the filled token/position; logits must come from the exact tail |
-| invalid mode, nonfinite/out-of-range shares or alpha, nonpositive window/tail, tail below projector minimum | names the invalid mode/flag/default; class share is (0,1], qattn share/alpha are [0,1] |
+| invalid mode, nonfinite/out-of-range shares or alpha, nonpositive window/tail, tail below projector minimum | names the invalid mode/flag/default; class share is [0,1], qattn share/alpha are [0,1] |
 | wrong projector architecture/format/dimensions/layer kinds, model metadata or vocabulary hash | names the mismatched field; qwen35 requires format 2 and the matching model/tokenizer |
 | missing/malformed projector metadata, unknown `model_meta` keys, unknown/malformed tensors | names the key/tensor/shape/type; source checksum failures also stop conversion |
 | malformed replay API calls | names the missing projector, qwen35-only/non-causal context, invalid capture layer/buffer, sequence/order/batch mismatch or incomplete LOWER/LATE transition |
