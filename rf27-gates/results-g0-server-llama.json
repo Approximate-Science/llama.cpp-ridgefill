@@ -1,0 +1,125 @@
+{
+  "summary": {
+    "gate": "G0-server",
+    "parallel": 1,
+    "model": "tiny-llama-f32.gguf",
+    "checks": 8,
+    "passed": 8,
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "check": "response-0-64tok",
+      "result": "PASS",
+      "differing_fields": [],
+      "cached": 79,
+      "n_probs_entries": 0
+    },
+    {
+      "check": "response-1-300tok",
+      "result": "PASS",
+      "differing_fields": [],
+      "cached": 315,
+      "n_probs_entries": 15
+    },
+    {
+      "check": "response-2-700tok",
+      "result": "PASS",
+      "differing_fields": [],
+      "cached": 715,
+      "n_probs_entries": 15
+    },
+    {
+      "check": "response-3-700tok-cachehit",
+      "result": "PASS",
+      "differing_fields": [],
+      "cached": 715,
+      "n_probs_entries": 15
+    },
+    {
+      "check": "props-equal",
+      "result": "PASS",
+      "differing_fields": []
+    },
+    {
+      "check": "signal-sigterm-idle-same-outcome-as-upstream",
+      "result": "PASS",
+      "up": {
+        "rc": 0,
+        "seconds": 0.003,
+        "second_interrupt_message": false
+      },
+      "fork": {
+        "rc": 0,
+        "seconds": 0.015,
+        "second_interrupt_message": false
+      }
+    },
+    {
+      "check": "signal-sigterm-busy-same-outcome-as-upstream",
+      "result": "PASS",
+      "up": {
+        "rc": "hang",
+        "seconds": 20.0,
+        "second_interrupt_message": false
+      },
+      "fork": {
+        "rc": "hang",
+        "seconds": 20.0,
+        "second_interrupt_message": false
+      }
+    },
+    {
+      "check": "signal-sigint-twice-busy-fork-exits-1-promptly",
+      "result": "PASS",
+      "up": {
+        "rc": 1,
+        "seconds": 0.007,
+        "second_interrupt_message": true
+      },
+      "fork": {
+        "rc": 1,
+        "seconds": 0.003,
+        "second_interrupt_message": false
+      }
+    }
+  ],
+  "signals": {
+    "sigterm-idle": {
+      "up": {
+        "rc": 0,
+        "seconds": 0.003,
+        "second_interrupt_message": false
+      },
+      "fork": {
+        "rc": 0,
+        "seconds": 0.015,
+        "second_interrupt_message": false
+      }
+    },
+    "sigterm-busy": {
+      "up": {
+        "rc": "hang",
+        "seconds": 20.0,
+        "second_interrupt_message": false
+      },
+      "fork": {
+        "rc": "hang",
+        "seconds": 20.0,
+        "second_interrupt_message": false
+      }
+    },
+    "sigint-twice-busy": {
+      "up": {
+        "rc": 1,
+        "seconds": 0.007,
+        "second_interrupt_message": true
+      },
+      "fork": {
+        "rc": 1,
+        "seconds": 0.003,
+        "second_interrupt_message": false
+      }
+    }
+  }
+}

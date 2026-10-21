@@ -252,3 +252,32 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   `-DAMDGPU_TARGETS=gfx1201` and requires ROCm 7.10. Product code is unaffected (engine/common/tools: 0 hits); these
   are this box's validation harness, but shipped in tests/ they should take the device-name pattern, the AMDGPU
   target and the SDK version as arguments. L-B's files: reported, not edited.
+
+## 20:25-20:55 rf27-integ: L-C's shutdown fix (rf27-sweep 276da13af) reviewed as an upstream server change, merged
+- (1) Upstream bug, independent of RidgeFill: before this fix the fork had not changed tools/server/server.cpp or
+  server-queue.* at all (diff vs 1242be66f empty). Upstream's signal handler calls `shutdown_handler` synchronously;
+  for a model server that is `ctx_server.terminate()` -> `server_queue::terminate()`, which locks `mutex_tasks`
+  (std::mutex). The main thread holds `mutex_tasks` at 17 sites in server-queue.cpp, including `yield_to_queue()`,
+  which upstream itself calls 5x in normal prompt/decode processing. A signal delivered there self-deadlocks; the
+  handler also calls fprintf/exit (not async-signal-safe). L-C's sweep stages yield once per ubatch (often), which
+  made it frequent; L-C's deterministic negative control compiled against the pre-fix server.cpp (= upstream's)
+  times out. Measured here on upstream 1242be66f without RidgeFill, double SIGINT during a generation (tiny qwen35,
+  10 runs): exit 1 x8, SIGABRT x1, SIGSEGV x1; one further run in the G0 harness hung 20 s. The fork: exit 1, 10/10.
+- (2) Behaviour with RidgeFill off DOES change (upstream llama-server signal handling, every mode):
+  * SIGTERM/SIGINT dispatch: the shutdown callback runs on a dispatcher thread that polls every 100 ms, not in the
+    handler; measured idle exit 15-31 ms (fork) vs 3 ms (upstream);
+  * one extra thread for the server's lifetime, waking every 100 ms;
+  * a second interrupt: `std::_Exit(1)` without the "Received second interrupt, terminating immediately." message
+    (upstream: message + exit(1), which crashed or hung in 2-3 of 11 runs above); exit code 1 either way;
+  * embedded CLI use (is_run_by_cli) unchanged. Windows not run (its console handler calls the same signal_handler).
+  Request/response behaviour unchanged: new `rf27-gates/g0_server.py` (upstream vs fork llama-server, no
+  --ridgefill; 3 prompts + a cache hit, greedy 16 tokens with return_tokens and top-5 probabilities, every field but
+  timings; /props; signals) PASS 8/8 on tiny Llama, tiny qwen35, tiny qwen35 with 2 slots: responses and /props
+  identical; SIGTERM idle exit 0 both; SIGTERM during a generation: both wait for the in-flight request (same);
+  second SIGINT: fork exit 1 in 3 ms. Instrument fixes on the way, none counted as passes: the random per-process
+  media marker (pinned via LLAMA_MEDIA_MARKER), partial-UTF-8 tokens without probabilities (guard on return_tokens),
+  a busy case that was idle (probe /slots), a stray server holding a fixed port (free ports, fail on bind error).
+- L-C's HTTP checks on the merged tree: check-http-sweep 3/3, shutdown-recheck 3/3, check-http-cancel 5/5 plus
+  10/10 with four busy-loop processes running beside the server (the run that stalled before was under load).
+- Quick gates: canonical G1 speed 27/27, quality 27/27; G0 72/0; L-C native Tier-3 G1 12/12 + 3/3; dispatch 44/44;
+  select_rows 23/23.
