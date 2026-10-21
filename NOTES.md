@@ -294,3 +294,7 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   subprocess and this sandbox has no rg executable (only a shell function). An environment dependency, not a logic
   failure: run_g5.py needs ripgrep installed (worth stating in tests/ridgefill/README.md or a grep fallback; L-B's).
   An earlier version of this note said the tests ran; it was written before reading the result.
+
+## 21:00 rf27-integ: rf27-tools c578a8f6c merged (portability audit falls back to Python without ripgrep)
+- Clean merge, tests/ridgefill + notes only (no C++). L-B's GPU smoke unit suite here: 8/8 OK; this sandbox has no rg
+  executable (shutil.which('rg') is None), so the run exercised the Python fallback, including its positive control.
