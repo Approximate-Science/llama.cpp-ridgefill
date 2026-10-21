@@ -1361,9 +1361,9 @@ private:
             }
         }
 
-        if (!params_base.ridgefill_path.empty() && params_base.n_cache_reuse) {
-            params_base.n_cache_reuse = 0;
-            SRV_WRN("%s\n", "cache_reuse is not supported with RidgeFill, it will be disabled");
+        if (!params_base.ridgefill_path.empty() && params_base.ridgefill_mode == "quality+qattn" && params_base.ridgefill_qattn_share > 0) {
+            SRV_ERR("%s", "--ridgefill-mode quality+qattn requires the question-attention sweep driver\n");
+            return false;
         }
 
         if (llama_model_n_swa(model_tgt) == 0) {
@@ -4033,26 +4033,66 @@ private:
 
                         if (!params_base.ridgefill_path.empty()) {
                             const auto & tparams = slot.task->params;
+                            const std::string mode = tparams.ridgefill ? tparams.ridgefill_mode : "off";
+                            auto * rf = llama_init->ridgefill();
+                            if (mode != "off" && tparams.ridgefill_tail > 0 && tparams.ridgefill_tail < llama_ridgefill_tail_min(rf)) {
+                                send_error(slot, "ridgefill_tail is below this projector's tail_min", ERROR_TYPE_INVALID_REQUEST);
+                                slot.release();
+                                return;
+                            }
 
                             // a prompt that needs outputs before its tail cannot be filled
                             const int32_t p_fill = tparams.ridgefill && !slot.need_embd() && !input_tokens.has_mtmd ?
-                                common_ridgefill_p_end(params_base, slot.task->n_tokens(), tparams.ridgefill_tail) : 0;
+                                common_ridgefill_p_end(params_base, slot.task->n_tokens(), tparams.ridgefill_tail, mode) : 0;
+                            if (p_fill > 0 && mode == "quality+qattn" && params_base.ridgefill_qattn_share > 0) {
+                                send_error(slot, "ridgefill_mode quality+qattn requires the question-attention sweep driver", ERROR_TYPE_INVALID_REQUEST);
+                                slot.release();
+                                return;
+                            }
+                            std::vector<llama_pos> rows;
+                            if (p_fill > 0 && mode != "speed") {
+                                try {
+                                    rows = common_ridgefill_rows(params_base, rf, input_tokens.get_tokens().data(), p_fill, mode);
+                                } catch (const std::exception & error) {
+                                    send_error(slot, error.what(), ERROR_TYPE_INVALID_REQUEST);
+                                    slot.release();
+                                    return;
+                                }
+                            }
+                            const int32_t cached_fill = std::min({slot.prompt.n_filled, p_fill, n_past});
+                            if (cached_fill > 0 && (slot.prompt.ridgefill_mode != mode ||
+                                    !std::equal(slot.prompt.ridgefill_rows.begin(), std::lower_bound(slot.prompt.ridgefill_rows.begin(), slot.prompt.ridgefill_rows.end(), cached_fill),
+                                                rows.begin(), std::lower_bound(rows.begin(), rows.end(), cached_fill)))) {
+                                n_past = 0;
+                            }
 
-                            // filled rows in the cache are approximate: reuse them only for a prompt that fills the same rows
-                            if (slot.prompt.n_filled > 0 && n_past > std::min(slot.prompt.n_filled, p_fill)) {
+                            // A changed fill boundary can reuse only the common approximate prefix.
+                            if (slot.prompt.n_filled > 0 && slot.prompt.n_filled != p_fill && n_past > std::min(slot.prompt.n_filled, p_fill)) {
+                                const int32_t keep = ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_FULL ||
+                                                     ctx_tgt_seq_rm_type == COMMON_CONTEXT_SEQ_RM_TYPE_RS ? 0 : std::min(slot.prompt.n_filled, p_fill);
                                 SLT_INF(slot, "RidgeFill: cached tokens up to %d are filled, reusing %d of %d cached tokens\n",
-                                        slot.prompt.n_filled, std::min(slot.prompt.n_filled, p_fill), n_past);
-                                n_past = std::min(slot.prompt.n_filled, p_fill);
+                                        slot.prompt.n_filled, keep, n_past);
+                                n_past = keep;
                             }
 
                             slot.prompt.n_filled = p_fill > n_past ? p_fill : std::min(slot.prompt.n_filled, n_past);
                             slot.stats.n_prompt_filled = std::max(0, p_fill - n_past);
+                            slot.prompt.ridgefill_mode = mode;
+                            slot.prompt.ridgefill_rows = rows;
 
                             llama_ridgefill_seq_set(ctx_tgt, slot.id, p_fill > n_past ? p_fill : 0);
+                            if (p_fill > n_past) {
+                                if (llama_ridgefill_set_alpha(ctx_tgt, params_base.ridgefill_alpha) < 0 ||
+                                        llama_ridgefill_seq_set_rows(ctx_tgt, slot.id, rows.data(), rows.size()) < 0) {
+                                    send_error(slot, "RidgeFill: alpha or quality exact rows were refused", ERROR_TYPE_INVALID_REQUEST);
+                                    slot.release();
+                                    return;
+                                }
+                            }
 
                             if (p_fill > n_past) {
-                                SLT_INF(slot, "RidgeFill: filling prompt tokens [%d, %d) of %d, exact tail %d\n",
-                                        n_past, p_fill, slot.task->n_tokens(), slot.task->n_tokens() - p_fill);
+                                SLT_INF(slot, "RidgeFill: filling prompt tokens [%d, %d) of %d, exact tail %d, mode %s, exact prefix rows %zu\n",
+                                        n_past, p_fill, slot.task->n_tokens(), slot.task->n_tokens() - p_fill, mode.c_str(), rows.size());
                             }
                         }
 
@@ -5415,6 +5455,15 @@ static json get_res_props(const server_context_meta & meta, const common_params 
 
     if (!params.server_connect_code.empty()) {
         props["connect_code"] = params.server_connect_code;
+    }
+    if (!params.ridgefill_path.empty() && params.ridgefill_mode != "off") {
+        props["ridgefill"] = json {
+            { "projector", params.ridgefill_path }, { "mode", params.ridgefill_mode },
+            { "tail", params.ridgefill_tail }, { "min_prompt", params.ridgefill_min_prompt },
+            { "share", params.ridgefill_share }, { "digits", params.ridgefill_digits }, { "alpha", params.ridgefill_alpha },
+            { "qattn_share", params.ridgefill_qattn_share }, { "qattn_window", params.ridgefill_qattn_window },
+            { "qattn_blind", params.ridgefill_qattn_blind },
+        };
     }
     if (params.use_jinja) {
         if (!tmpl_tools.empty()) {

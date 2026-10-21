@@ -333,9 +333,8 @@ static std::vector<int> parse_int_range(const std::string & s, bool allow_negati
     return result;
 }
 
-// RidgeFill (experimental): the pp tests without depth fill all but the last g_ridgefill_tail prompt tokens
-static std::string g_ridgefill_path;
-static int         g_ridgefill_tail = 4096;
+// RidgeFill (experimental): the pp tests without depth fill all but the last g_ridgefill.ridgefill_tail prompt tokens
+static common_params g_ridgefill;
 
 struct cmd_params {
     std::vector<std::string>         model;
@@ -446,7 +445,11 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --progress                                  print test progress indicators\n");
     printf("  --no-warmup                                 skip warmup runs before benchmarking\n");
     printf("  --ridgefill <file>                          RidgeFill projector: fill the prompt of pp tests (experimental)\n");
-    printf("  --ridgefill-tail <n>                        RidgeFill: last prompt tokens computed exactly (default: %d)\n", g_ridgefill_tail);
+    printf("  --ridgefill-tail <n>                        RidgeFill: exact tail (default: projector)\n");
+    printf("  --ridgefill-mode <mode>                     off, speed or quality (default: speed)\n");
+    printf("  --ridgefill-share <n>                       class row share in (0, 1] (default: projector)\n");
+    printf("  --ridgefill-digits <on|off>                  keep digit rows exact (default: projector)\n");
+    printf("  --ridgefill-alpha <n>                       correction scale in [0, 1] (default: projector)\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)\n");
     if (llama_supports_rpc()) {
@@ -1068,14 +1071,16 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                     invalid_param = true;
                     break;
                 }
-                g_ridgefill_path = argv[i];
-            } else if (arg == "--ridgefill-tail") {
+                g_ridgefill.ridgefill_path = argv[i];
+            } else if (arg == "--ridgefill-tail" || arg == "--ridgefill-mode" || arg == "--ridgefill-share" ||
+                       arg == "--ridgefill-digits" || arg == "--ridgefill-alpha" || arg == "--ridgefill-qattn-share" || arg == "--ridgefill-qattn-window") {
                 if (++i >= argc) {
                     invalid_param = true;
                     break;
                 }
-                g_ridgefill_tail = std::stoi(argv[i]);
-                invalid_param = g_ridgefill_tail < 1;
+                common_ridgefill_set_option(g_ridgefill, arg, argv[i]);
+            } else if (arg == "--ridgefill-qattn-blind") {
+                g_ridgefill.ridgefill_qattn_blind = true;
             } else if (arg == "-fitt" || arg == "--fit-target") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -2113,9 +2118,9 @@ struct markdown_printer : public printer {
                 if (t.n_depth > 0) {
                     int len = strlen(buf);
                     snprintf(buf + len, sizeof(buf) - len, " @ d%d", t.n_depth);
-                } else if (!g_ridgefill_path.empty() && t.n_prompt > g_ridgefill_tail) {
+                } else if (!g_ridgefill.ridgefill_path.empty() && g_ridgefill.ridgefill_mode != "off" && t.n_prompt > g_ridgefill.ridgefill_tail) {
                     int len = strlen(buf);
-                    snprintf(buf + len, sizeof(buf) - len, " rf-t%d", g_ridgefill_tail);
+                    snprintf(buf + len, sizeof(buf) - len, " rf-%s-t%d", g_ridgefill.ridgefill_mode.c_str(), g_ridgefill.ridgefill_tail);
                 }
                 value = buf;
             } else if (field == "t/s") {
@@ -2188,7 +2193,7 @@ struct ctx_state {
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
 
-static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, int p_fill = 0) {
+static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, int p_fill = 0, const llama_ridgefill * rf = nullptr) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -2196,14 +2201,31 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     const int32_t       n_vocab = llama_vocab_n_tokens(vocab);
 
     std::vector<llama_token> tokens(n_batch);
+    std::vector<llama_token> quality_tokens;
+    if (rf && p_fill > 0) {
+        llama_ridgefill_seq_set(ctx, 0, p_fill);
+        if (g_ridgefill.ridgefill_mode == "quality") {
+            quality_tokens.resize(n_prompt);
+            for (int i = 0; i < n_prompt; ++i) {
+                quality_tokens[i] = i == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+            }
+            auto rows = common_ridgefill_rows(g_ridgefill, rf, quality_tokens.data(), p_fill);
+            if (llama_ridgefill_seq_set_rows(ctx, 0, rows.data(), rows.size()) < 0) {
+                fprintf(stderr, "RidgeFill: --ridgefill-mode quality exact rows were refused\n");
+                return false;
+            }
+        }
+    }
 
     int n_processed = 0;
 
     while (n_processed < n_prompt) {
         int n_tokens = std::min(n_prompt - n_processed, n_batch);
-        tokens[0]    = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
-        for (int i = 1; i < n_tokens; i++) {
-            tokens[i] = std::rand() % n_vocab;
+        if (!quality_tokens.empty()) {
+            std::copy_n(quality_tokens.data() + n_processed, n_tokens, tokens.data());
+        } else {
+            tokens[0] = n_processed == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
+            for (int i = 1; i < n_tokens; i++) { tokens[i] = std::rand() % n_vocab; }
         }
         common_batch batch = common_batch_get_one(ctx, tokens.data(), n_tokens);
         if (n_processed + n_tokens <= p_fill) {
@@ -2297,6 +2319,14 @@ int llama_bench(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
+    if (g_ridgefill.ridgefill_mode == "quality") {
+        fprintf(stderr, "--ridgefill-mode quality requires llama_ridgefill_select_rows, which is unavailable in this build\n");
+        return 1;
+    }
+    if (g_ridgefill.ridgefill_mode == "quality+qattn") {
+        fprintf(stderr, "--ridgefill-mode quality+qattn requires the server's question-attention sweep\n");
+        return 1;
+    }
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {
@@ -2401,16 +2431,30 @@ int llama_bench(int argc, char ** argv) {
             }
             prev_inst = &inst;
 
-            if (!g_ridgefill_path.empty()) {
+            if (!g_ridgefill.ridgefill_path.empty()) {
+                if (mparams.split_mode == LLAMA_SPLIT_MODE_ROW) {
+                    fprintf(stderr, "RidgeFill does not support --split-mode row; use --split-mode layer\n");
+                    return 1;
+                }
                 llama_ridgefill_free(rf);
-                rf = llama_ridgefill_init(lmodel, g_ridgefill_path.c_str());
+                rf = llama_ridgefill_init(lmodel, g_ridgefill.ridgefill_path.c_str());
                 if (rf == NULL) {
-                    fprintf(stderr, "%s: error: failed to load RidgeFill projector '%s'\n", __func__, g_ridgefill_path.c_str());
+                    fprintf(stderr, "%s: error: failed to load RidgeFill projector '%s'\n", __func__, g_ridgefill.ridgefill_path.c_str());
+                    return 1;
+                }
+                try {
+                    common_ridgefill_resolve(g_ridgefill, rf);
+                } catch (const std::exception & error) {
+                    fprintf(stderr, "RidgeFill: %s\n", error.what());
                     return 1;
                 }
             }
         }
 
+        if (rf && cparams.embeddings) {
+            fprintf(stderr, "RidgeFill does not support embeddings (--embeddings)\n");
+            return 1;
+        }
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
@@ -2422,9 +2466,13 @@ int llama_bench(int argc, char ** argv) {
 
         llama_memory_clear(llama_get_memory(ctx), false);
 
-        const int p_fill = rf && t.n_depth == 0 && t.n_prompt > g_ridgefill_tail ? t.n_prompt - g_ridgefill_tail : 0;
+        const int p_fill = rf && g_ridgefill.ridgefill_mode != "off" && t.n_depth == 0 && t.n_prompt > g_ridgefill.ridgefill_tail ? t.n_prompt - g_ridgefill.ridgefill_tail : 0;
         if (rf) {
             llama_set_ridgefill(ctx, rf);
+            if (g_ridgefill.ridgefill_mode != "off" && llama_ridgefill_set_alpha(ctx, g_ridgefill.ridgefill_alpha) < 0) {
+                fprintf(stderr, "RidgeFill: --ridgefill-alpha was refused\n");
+                return 1;
+            }
             llama_ridgefill_seq_set(ctx, 0, p_fill);
         }
 
@@ -2461,7 +2509,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill, rf);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
                     llama_free(ctx);
@@ -2530,7 +2578,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill, rf);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     llama_free(ctx);

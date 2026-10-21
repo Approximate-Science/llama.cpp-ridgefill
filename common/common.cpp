@@ -1244,6 +1244,28 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    if (!params.ridgefill_path.empty()) {
+        if (params.split_mode == LLAMA_SPLIT_MODE_ROW) {
+            COM_ERR("%s", "RidgeFill does not support --split-mode row; use --split-mode layer\n");
+            return;
+        }
+        if (!params.lora_adapters.empty()) {
+            COM_ERR("%s", "RidgeFill does not support LoRA (--lora)\n");
+            return;
+        }
+        if (!params.control_vectors.empty()) {
+            COM_ERR("%s", "RidgeFill does not support control vectors (--control-vector)\n");
+            return;
+        }
+        if (params.embedding) {
+            COM_ERR("%s", "RidgeFill does not support embeddings (--embeddings)\n");
+            return;
+        }
+        if (params.n_cache_reuse != 0) {
+            COM_ERR("%s", "RidgeFill does not support --cache-reuse; set --cache-reuse 0\n");
+            return;
+        }
+    }
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1383,9 +1405,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     pimpl->context.reset(lctx);
 
     if (!params.ridgefill_path.empty()) {
-        // the projector maps the hidden states of the base model as it is
-        if (!params.lora_adapters.empty() || !params.control_vectors.empty() || cparams.embeddings) {
-            COM_ERR("%s", "RidgeFill cannot be used with LoRA adapters, control vectors or embeddings\n");
+        if (cparams.embeddings) {
+            COM_ERR("%s", "RidgeFill does not support embeddings enabled by the model\n");
             pimpl->context.reset();
             return;
         }
@@ -1397,9 +1418,21 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             return;
         }
 
+        try {
+            common_ridgefill_resolve(params, pimpl->ridgefill.get());
+        } catch (const std::exception & error) {
+            COM_ERR("RidgeFill: %s\n", error.what());
+            pimpl->context.reset();
+            return;
+        }
         llama_set_ridgefill(lctx, pimpl->ridgefill.get());
-
-        COM_INF("RidgeFill on: split %d, exact tail %d tokens, min prompt %d tokens\n",
+        if (params.ridgefill_mode != "off" && llama_ridgefill_set_alpha(lctx, params.ridgefill_alpha) < 0) {
+            COM_ERR("%s", "RidgeFill: --ridgefill-alpha was refused\n");
+            pimpl->context.reset();
+            return;
+        }
+        COM_INF("RidgeFill: %s, mode %s, split %d, exact tail %d, min prompt %d\n",
+                llama_ridgefill_desc(pimpl->ridgefill.get()), params.ridgefill_mode.c_str(),
                 llama_ridgefill_split(pimpl->ridgefill.get()), params.ridgefill_tail, params.ridgefill_min_prompt);
     }
 
@@ -1414,6 +1447,10 @@ llama_model * common_init_result::model() {
 
 llama_context * common_init_result::context() {
     return pimpl->context.get();
+}
+
+llama_ridgefill * common_init_result::ridgefill() {
+    return pimpl->ridgefill.get();
 }
 
 common_sampler * common_init_result::sampler(llama_seq_id seq_id) {
@@ -1683,16 +1720,94 @@ void common_memory::seq_add(llama_seq_id seq_id, llama_pos p0, llama_pos p1, lla
     }
 }
 
-int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, int32_t n_tail) {
+int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, int32_t n_tail, const std::string & mode) {
     if (n_tail <= 0) {
         n_tail = params.ridgefill_tail;
     }
 
-    if (params.ridgefill_path.empty() || n_prompt < params.ridgefill_min_prompt || n_prompt <= n_tail) {
+    if (params.ridgefill_path.empty() || (mode.empty() ? params.ridgefill_mode : mode) == "off" || n_prompt < params.ridgefill_min_prompt) {
         return 0;
     }
+    if (n_tail <= 0) { throw std::invalid_argument("RidgeFill: projector tail_default has not been resolved"); }
+    return std::max(0, n_prompt - n_tail);
+}
 
-    return n_prompt - n_tail;
+bool common_ridgefill_mode_valid(const std::string & mode) {
+    return mode == "off" || mode == "speed" || mode == "quality" || mode == "quality+qattn";
+}
+
+void common_ridgefill_set_option(common_params & params, const std::string & option, const std::string & value) {
+    auto number = [&]() {
+        size_t end = 0;
+        float result;
+        try {
+            result = std::stof(value, &end);
+        } catch (const std::exception &) {
+            throw std::invalid_argument(option + " must be finite and in [0, 1]");
+        }
+        if (end != value.size() || !std::isfinite(result) || result < 0 || result > 1) {
+            throw std::invalid_argument(option + " must be finite and in [0, 1]");
+        }
+        return result;
+    };
+    if (option == "--ridgefill-mode") {
+        if (!common_ridgefill_mode_valid(value)) {
+            throw std::invalid_argument("--ridgefill-mode must be off, speed, quality or quality+qattn");
+        }
+        params.ridgefill_mode = value;
+    } else if (option == "--ridgefill-alpha") {
+        params.ridgefill_alpha = number();
+    } else if (option == "--ridgefill-share") {
+        const float share = number();
+        if (share == 0) { throw std::invalid_argument("--ridgefill-share must be in (0, 1]"); }
+        params.ridgefill_share = share;
+    } else if (option == "--ridgefill-qattn-share") {
+        params.ridgefill_qattn_share = number();
+    } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind") {
+        if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
+        if (option == "--ridgefill-digits") {
+            params.ridgefill_digits = value == "on";
+        } else {
+            params.ridgefill_qattn_blind = value == "on";
+        }
+    } else if (option == "--ridgefill-qattn-window" || option == "--ridgefill-tail") {
+        size_t end = 0;
+        int result;
+        try {
+            result = std::stoi(value, &end);
+        } catch (const std::exception &) {
+            throw std::invalid_argument(option + " must be a positive integer");
+        }
+        if (end != value.size() || result < 1) { throw std::invalid_argument(option + " must be a positive integer"); }
+        if (option == "--ridgefill-tail") {
+            params.ridgefill_tail = result;
+        } else {
+            params.ridgefill_qattn_window = result;
+        }
+    } else {
+        throw std::invalid_argument("unknown RidgeFill option " + option);
+    }
+}
+
+void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf) {
+    if (!common_ridgefill_mode_valid(params.ridgefill_mode)) {
+        throw std::invalid_argument("invalid --ridgefill-mode " + params.ridgefill_mode);
+    }
+    if (params.ridgefill_tail == 0) { params.ridgefill_tail = llama_ridgefill_tail_default(rf); }
+    if (params.ridgefill_alpha < 0) { params.ridgefill_alpha = llama_ridgefill_alpha_default(rf); }
+    if (params.ridgefill_share < 0) { params.ridgefill_share = llama_ridgefill_share_default(rf); }
+    if (params.ridgefill_digits < 0) { params.ridgefill_digits = llama_ridgefill_digits_default(rf); }
+    if (params.ridgefill_qattn_share < 0) { params.ridgefill_qattn_share = llama_ridgefill_qattn_default(rf); }
+    if (params.ridgefill_tail < llama_ridgefill_tail_min(rf)) {
+        throw std::invalid_argument("--ridgefill-tail is below this projector's tail_min");
+    }
+}
+
+std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const llama_ridgefill * rf,
+        const llama_token *, int32_t n_prefix, const std::string & mode) {
+    const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
+    if (!rf || n_prefix <= 0 || selected_mode == "off" || selected_mode == "speed") { return {}; }
+    throw std::runtime_error("RidgeFill: mode " + selected_mode + " requires llama_ridgefill_select_rows, which is unavailable in this build");
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {

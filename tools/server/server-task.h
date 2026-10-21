@@ -76,6 +76,7 @@ struct task_params {
 
     bool    ridgefill      = true; // fill the prompt with RidgeFill, if the server has a projector
     int32_t ridgefill_tail = 0;    // exact tail, 0 = server default
+    std::string ridgefill_mode = "speed";
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
@@ -641,11 +642,15 @@ struct server_prompt {
 
     // the tokens before n_filled may hold approximate RidgeFill rows in the KV cache
     int32_t n_filled = 0;
+    std::string ridgefill_mode;
+    std::vector<llama_pos> ridgefill_rows;
 
     void clear() {
         tokens.clear();
         checkpoints.clear();
         n_filled = 0;
+        ridgefill_mode.clear();
+        ridgefill_rows.clear();
     }
 
     int n_tokens() const {
@@ -657,6 +662,8 @@ struct server_prompt {
             tokens.clone(),
             checkpoints,
             n_filled,
+            ridgefill_mode,
+            ridgefill_rows,
         };
     }
 };

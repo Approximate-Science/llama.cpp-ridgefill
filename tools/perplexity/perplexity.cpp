@@ -441,7 +441,8 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
 }
 
 // RidgeFill: fill at most the first half of each chunk, the scored second half stays exact
-static void ridgefill_set_chunks(llama_context * ctx, const common_params & params, int n_ctx, int n_seq) {
+static void ridgefill_set_chunks(llama_context * ctx, const common_params & params, const llama_ridgefill * rf,
+        int n_ctx, int n_seq, const llama_token * tokens, bool add_bos) {
     const int p_end = std::min(common_ridgefill_p_end(params, n_ctx), n_ctx/2);
     if (p_end <= 0) {
         return;
@@ -451,10 +452,18 @@ static void ridgefill_set_chunks(llama_context * ctx, const common_params & para
 
     for (int seq = 0; seq < n_seq; ++seq) {
         llama_ridgefill_seq_set(ctx, seq, p_end);
+        if (params.ridgefill_mode == "quality") {
+            std::vector<llama_token> prefix(tokens + seq*n_ctx, tokens + seq*n_ctx + p_end);
+            if (add_bos) { prefix[0] = llama_vocab_bos(llama_model_get_vocab(llama_get_model(ctx))); }
+            auto rows = common_ridgefill_rows(params, rf, prefix.data(), p_end);
+            if (llama_ridgefill_seq_set_rows(ctx, seq, rows.data(), rows.size()) < 0) {
+                throw std::runtime_error("RidgeFill: --ridgefill-mode quality exact rows were refused");
+            }
+        }
     }
 }
 
-static results_perplexity perplexity(llama_context * ctx, const common_params & params, const int32_t n_ctx) {
+static results_perplexity perplexity(llama_context * ctx, const common_params & params, const int32_t n_ctx, const llama_ridgefill * rf) {
     if (params.ppl_stride > 0) {
         return perplexity_v2(ctx, params);
     }
@@ -554,8 +563,6 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
     // process the entire prompt.
     const int first = n_ctx/2;
 
-    ridgefill_set_chunks(ctx, params, (int) n_ctx, n_seq);
-
     for (int i = 0; i < n_chunk; i += n_seq) {
         const int start =     i * n_ctx;
         const int end   = start + n_ctx;
@@ -566,6 +573,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
 
         // clear the KV cache
         llama_memory_clear(llama_get_memory(ctx), true);
+        ridgefill_set_chunks(ctx, params, rf, n_ctx, n_seq_batch, tokens.data() + start, add_bos);
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -1689,7 +1697,7 @@ static void multiple_choice_score(llama_context * ctx, const common_params & par
     LOG_INF("\n");
 }
 
-static void kl_divergence(llama_context * ctx, const common_params & params) {
+static void kl_divergence(llama_context * ctx, const common_params & params, const llama_ridgefill * rf) {
     const llama_model * model = llama_get_model(ctx);
     const llama_vocab * vocab = llama_model_get_vocab(model);
 
@@ -1788,8 +1796,6 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
     const int first = n_ctx/2;
 
-    ridgefill_set_chunks(ctx, params, (int) n_ctx, n_seq);
-
     for (int i = 0; i < n_chunk; i += n_seq) {
         const int start =     i * n_ctx;
         const int end   = start + n_ctx;
@@ -1800,6 +1806,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params) {
 
         // clear the KV cache
         llama_memory_clear(llama_get_memory(ctx), true);
+        ridgefill_set_chunks(ctx, params, rf, n_ctx, n_seq_batch, tokens.data() + start, add_bos);
 
         for (int j = 0; j < num_batches; ++j) {
             const int batch_start = start + j * n_batch;
@@ -2017,6 +2024,14 @@ int llama_perplexity(int argc, char ** argv) {
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
         return 1;
     }
+    if (params.ridgefill_mode == "quality") {
+        LOG_ERR("%s: --ridgefill-mode quality requires llama_ridgefill_select_rows, which is unavailable in this build\n", __func__);
+        return 1;
+    }
+    if (params.ridgefill_mode == "quality+qattn") {
+        LOG_ERR("%s: --ridgefill-mode quality+qattn requires the server's question-attention sweep\n", __func__);
+        return 1;
+    }
 
     const int32_t n_ctx = params.n_ctx;
     if (n_ctx <= 0) {
@@ -2084,9 +2099,9 @@ int llama_perplexity(int argc, char ** argv) {
     } else if (params.multiple_choice) {
         multiple_choice_score(ctx, params);
     } else if (params.kl_divergence) {
-        kl_divergence(ctx, params);
+        kl_divergence(ctx, params, llama_init->ridgefill());
     } else {
-        results = perplexity(ctx, params, n_ctx);
+        results = perplexity(ctx, params, n_ctx, llama_init->ridgefill());
     }
 
     LOG("\n");

@@ -2999,7 +2999,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--ridgefill-tail"}, "N",
-        string_format("RidgeFill: number of last prompt tokens computed exactly (default: %d)", params.ridgefill_tail),
+        "RidgeFill: number of last prompt tokens computed exactly (default: projector tail_default)",
         [](common_params & params, int value) {
             if (value < 1) {
                 throw std::invalid_argument("--ridgefill-tail must be at least 1");
@@ -3011,8 +3011,37 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         {"--ridgefill-min-prompt"}, "N",
         string_format("RidgeFill: prompts shorter than N tokens are not filled (default: %d)", params.ridgefill_min_prompt),
         [](common_params & params, int value) {
+            if (value < 0) { throw std::invalid_argument("--ridgefill-min-prompt must be nonnegative"); }
             params.ridgefill_min_prompt = value;
         }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-mode"}, "MODE", "RidgeFill: off|speed|quality|quality+qattn (default: speed with --ridgefill)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-mode", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-share"}, "N", "RidgeFill: class row share in (0, 1] (default: projector)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-share", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-digits"}, "on|off", "RidgeFill: keep digit rows exact (default: projector)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-digits", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-alpha"}, "N", "RidgeFill: correction scale in [0, 1] (default: projector)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-alpha", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-qattn-share"}, "N", "RidgeFill: question-attention row share in [0, 1] (default: projector)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-qattn-share", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-qattn-window"}, "N", "RidgeFill: number of question query rows (default: 64)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-qattn-window", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-qattn-blind"}, "RidgeFill: take question queries immediately before the prefix end",
+        [](common_params & params) { params.ridgefill_qattn_blind = true; }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--control-vector"}, "FNAME",

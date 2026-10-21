@@ -75,6 +75,16 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
         ->set_hard_limits(0, INT32_MAX)
         ->set_desc("RidgeFill: number of last prompt tokens computed exactly, 0 = the server's --ridgefill-tail"));
 
+    add((new field_str("ridgefill_mode"))
+        ->set_desc("RidgeFill mode: off, speed, quality or quality+qattn")
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto mode = data.at("ridgefill_mode").get<std::string>();
+            if (!common_ridgefill_mode_valid(mode)) {
+                throw std::invalid_argument("ridgefill_mode must be off, speed, quality or quality+qattn");
+            }
+            ctx.params.ridgefill_mode = mode;
+        }));
+
     // TODO: implement t_max_prompt_ms
     // add((new field_num("t_max_prompt_ms", params.t_max_prompt_ms))
 
@@ -485,6 +495,7 @@ task_params eval_llama_cmpl_schema(
     params.n_predict     = params_base.n_predict;
     params.n_cache_reuse = params_base.n_cache_reuse;
     params.ridgefill_tail = params_base.ridgefill_tail;
+    params.ridgefill_mode = params_base.ridgefill_mode;
     params.cache_prompt  = params_base.cache_prompt;
     params.antiprompt    = params_base.antiprompt;
     params.sse_ping_interval = params_base.sse_ping_interval;
@@ -516,6 +527,9 @@ task_params eval_llama_cmpl_schema(
                 params.sampling.reasoning_budget_forced.size());
     }
 
+    if (!params_base.ridgefill_path.empty() && params.n_cache_reuse != 0) {
+        throw std::invalid_argument("RidgeFill does not support n_cache_reuse (--cache-reuse); set it to 0");
+    }
     return params;
 }
 
