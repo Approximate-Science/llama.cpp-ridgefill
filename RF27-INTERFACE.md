@@ -320,3 +320,17 @@ For L-B (proposal; names are L-B's to settle): `--ridgefill-special-exact on|off
 with them or refuse them by name (never ignore them); refused with mode speed (no exact rows). For L-C: a question
 window mode `last` (today) / `turn` (above) with a cap, window buffers sized per prompt.
 Gate: rf27-gates/g1_select_chat.py, 42/42.
+
+## Correction 2026-10-20 23:10 (L-A): the last-user-turn window as implemented (L-C 51d57b1fd)
+Supersedes the H3 bullet of the 22:50 addition (the driver's rule, which lane T's oracle mirrors):
+- `server_ridgefill_sweep_params.qattn_window_mode` = "last" (default: [max(0, end - qattn_window), end), as before) or
+  "turn"; `qattn_turn_cap` (int32, default 256, > 0). end = qattn_end if set, else the prompt end (blind: prefix end).
+- turn: marker = llama_tokenize("<|im_start|>user\n", add_special = false, parse_special = true) (n tokens, 1..64);
+  start = llama_ridgefill_last_marker(tokens, end, marker, n) (search over [0, end) only);
+  window = [max(start + n, end - qattn_turn_cap), end) — the header tokens themselves are not in the window.
+- Named refusals: no marker before end; empty window (start + n >= end); turn with blind selection; mode other than
+  last / turn; cap <= 0. No fallback to "last".
+- Caveat for prompts: the marker must tokenize identically inside the prompt; a user turn whose content begins with a
+  newline merges "\n\n" in the Qwen pre-tokenizer and is then refused (not silently misplaced).
+- llama-ridgefill-score: --qattn-window-mode / --qattn-turn-cap, --special-exact / --header-rows (select_rows_ext);
+  the chat options are refused with mode speed, turn needs quality+qattn.
