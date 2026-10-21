@@ -117,9 +117,25 @@ def run(args) -> dict:
                  "--flash-attn", args.flash_attn], "refusals", env)
         refusals = json.loads((args.out / "refusals/results.json").read_text())
         record("named-refusal-controls", refusals["result"] == "PASS" and refusals["checks"] > 0, checks=refusals["checks"])
+        smoke = None
+        if args.smoke_model:
+            checker = source / "tests/ridgefill/check_gpu_smoke.py"
+            if not checker.is_file():
+                raise ValueError("SKIPPED: archived revision lacks tests/ridgefill/check_gpu_smoke.py")
+            if args.backend == "hip":
+                command(["hipcc", "--version"], "hipcc-version", env)
+                sdk = env.get("ROCM_PATH")
+                if sdk:
+                    version = Path(sdk) / ".info/version"
+                    (args.out / "rocm-sdk-version.log").write_text(version.read_text())
+            command([sys.executable, str(checker), "--bin-dir", str(build / "bin"), "--expect-commit", revision,
+                     "--backend", args.backend, "--model", str(args.smoke_model), "--projector", str(args.smoke_projector),
+                     "--out", str(args.out / "gpu-smoke")], "gpu-smoke", env)
+            smoke = json.loads((args.out / "gpu-smoke/results.json").read_text())
+            record("real-model-speed-smoke", smoke["result"] == "PASS", devices=smoke["devices"])
         result = dict(gate="G5", result="PASS", scope="archive build, source audit, named refusals on selected backend", backend=args.backend,
                       revision=revision, checks=len(records), refusal_checks=refusals["checks"], records=records, versions=versions,
-                      isolation="caller environment; container isolation NOT PROVIDED", multi_gpu="NOT RUN")
+                      isolation="caller environment; container isolation NOT PROVIDED", multi_gpu="NOT RUN", gpu_smoke=smoke)
         (args.out / "results.json").write_text(json.dumps(result, indent=2) + "\n")
         return result
     except Exception as error:
@@ -138,8 +154,16 @@ if __name__ == "__main__":
     parser.add_argument("--gpu-layers", type=int, default=0)
     parser.add_argument("--flash-attn", choices=("off", "on", "auto"), default="off")
     parser.add_argument("--port", type=int, default=18110)
+    parser.add_argument("--smoke-model", type=Path, help="GPU only: finish with a short 27B speed-mode benchmark")
+    parser.add_argument("--smoke-projector", type=Path)
     args = parser.parse_args()
     args.out, args.fixture = args.out.resolve(), args.fixture.resolve()
+    if bool(args.smoke_model) != bool(args.smoke_projector):
+        parser.error("--smoke-model and --smoke-projector must be supplied together")
+    if args.smoke_model:
+        if args.backend == "cpu" or args.gpu_layers != 99:
+            parser.error("real-model smoke requires a GPU backend and --gpu-layers 99")
+        args.smoke_model, args.smoke_projector = args.smoke_model.resolve(), args.smoke_projector.resolve()
     if not 1 <= args.jobs <= 4:
         parser.error("--jobs must be in [1,4]")
     reserved = r"-D(?:GGML_(?:HIP|VULKAN|CUDA|METAL|NATIVE)|LLAMA_(?:BUILD_(?:COMMIT|NUMBER|TESTS|EXAMPLES|TOOLS|SERVER|UI)|OPENSSL))(?::|=)"

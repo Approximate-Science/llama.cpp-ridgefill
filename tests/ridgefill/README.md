@@ -50,7 +50,7 @@ The common class/digit helper calls the real `llama_ridgefill_select_rows` API (
 
 Speed cases compare tail logits, every layer's final KV/conv/recurrent state, and every late layer's prefix state at N=700/T=200 over batch/ubatch pairs 700/512, 128/128 and 50/50. Prefix dumps are necessary to expose a wrong alpha correction before tail decay. Alpha is 0 and 1. Controls require byte-identical mode-off and T>=N outputs, a wrong map that fails by over 100x tolerance, a wrong correction orientation at alpha 1, and refusal of a filled row asking for logits. The tolerance is 1e-4 relative F32.
 
-The same harness is the canonical G1 for quality with hand-picked rows through the RF27 API. It compares alpha-0 inference against the oracle and requires wrong maps, wrong exact rows and speed-instead-of-quality to fail that comparison. Its T>=N control supplies no exact rows because the prefix is empty. Quality alpha 1 is an expected refusal (rc 2 naming the rho-scaled correction), not a passing inference comparison. Speed retains its alpha-0/1 inference and wrong-correction-orientation checks. The quality+qattn sweep integration remains pending and returns nonzero SKIPPED. Split 4 is already available for L-C's mass comparison.
+The same harness is the canonical G1 for quality with hand-picked rows through the RF27 API. It compares alpha-0 inference against the oracle and requires wrong maps, wrong exact rows and speed-instead-of-quality to fail that comparison. Its T>=N control supplies no exact rows because the prefix is empty. Quality alpha 1 is an expected refusal (rc 2 naming the rho-scaled correction), not a passing inference comparison. Speed retains its alpha-0/1 inference and wrong-correction-orientation checks. The canonical shell harness still returns nonzero SKIPPED for quality+qattn. L-C's separate native/HTTP sweep gates now pass on split 4, including real class/digit selection, question mass/rows, 25 cache/state/logit arrays, zero-share equality, cancellation/reuse and shutdown. Those gate measurements are recorded in NOTES-sweep.md on rf27-sweep; the shell harness does not claim to execute them.
 
 ## Paired server evaluation
 
@@ -126,3 +126,32 @@ python3 tests/ridgefill/check_refusals.py --bin-dir build/bin --fixture out/gate
 ```
 
 It requires named startup refusals for LoRA, control vectors, embeddings, nonzero --cache-reuse and -sm row; bench must refuse embeddings and row split. Per-request n_cache_reuse must refuse. A live speed prompt must fill before slot save is refused without creating a file. Mode off must fill nothing and save a nonempty exact slot. Missing LoRA/control files are intentional: the RidgeFill combination must be rejected before file I/O, while stock with the same missing LoRA must reach its normal loader. Ordinary cache_prompt reuse and RAM prompt caching remain supported; cache-reuse means KV shifting.
+
+### GPU G5 commands
+
+Use the host bridge for both backends. `run_g5_gpu.sh` takes a pinned commit, the tiny refusal fixture, the real 27B model/projector and a new output directory. The archived commit must contain these scripts and the bench completion marker. It runs the archive build/source audit/refusal gate, then one pp8192 speed-mode llama-bench with T=4096, alpha 0, F16 KV, FA off, batch 512, ubatch 128, four threads and no warmup. This is a short execution smoke, not a timing table or numerical equivalence gate.
+
+```sh
+# Each command runs as one kind=host bridge job, with its existing one-card pinning.
+tests/ridgefill/run_g5_gpu.sh vulkan COMMIT out/gate1-qwen35 model.gguf projector.gguf out/g5-vulkan-COMMIT
+tests/ridgefill/run_g5_gpu.sh hip COMMIT out/gate1-qwen35 model.gguf projector.gguf out/g5-hip-COMMIT /path/to/rocm-sdk
+```
+
+HIP requires the host ROCm 7.10 SDK, not the campaign's container (which lacks hipBLAS/rocBLAS). The wrapper exports ROCM_PATH, HIP_PATH, CMAKE_PREFIX_PATH, PATH and LD_LIBRARY_PATH from its explicit SDK argument and configures gfx1201. The campaign SDK version is ROCm 7.10.0a20251120. `hipcc-version.log` and `rocm-sdk-version.log` preserve compiler/SDK version evidence. The wrapper does not change visible-device variables; lane Q's bridge selects its single GPU. Paths and actual bridge commands are in NOTES-tools.md.
+
+The smoke checks the model's qwen35 architecture, 64 trunk layers (excluding an optional MTP layer) and width 5120, the projector's split/tail metadata, the pinned build, exactly one visible backend device, finite positive samples, actual model tensors on that GPU and the completed filled prefix. It records model/projector SHA256, device inventory, benchmark JSON, stderr and argv. Missing GPU, CPU fallback, inactive fill and an unexpected model fail nonzero. Archive and smoke outputs share one results.json; a smoke failure cannot leave a passing overall G5 result.
+
+The coordinator runs this separately outside the single-card bridge, reusing the clean Vulkan build:
+
+```sh
+tests/ridgefill/run_g5_two_card.sh out/g5-vulkan-COMMIT/build/bin COMMIT model.gguf projector.gguf out/g5-two-card-COMMIT
+```
+
+This discovers both visible AMD Radeon AI PRO 9700/R9700 Vulkan devices by their names, requires at least 3 GiB free on each, and passes their discovered names with `-sm layer -ts 1/1`. It refuses a one-card bridge or a different device set. Both devices must hold nontrivial model buffers; a single-card run cannot pass the two-card check. Backend IDs and visible-device masks are never fixed in these scripts. Two-card output is separate from the one-card archive result; no container isolation or long-context quality claim follows from a smoke.
+
+CPU validation of evidence/refusal parsing uses synthetic GPU records and explicitly makes no GPU execution claim:
+
+```sh
+python3 tests/ridgefill/test_gpu_smoke.py -v
+bash -n tests/ridgefill/run_g5_gpu.sh tests/ridgefill/run_g5_two_card.sh
+```

@@ -20,7 +20,7 @@ RidgeFill is by Dylan Johnston and tcclaviger. Method, reference implementation 
 
 ## Qwen3.8-27B (`qwen35`): development status
 
-The Qwen3.8-27B port is in progress. The format-2 projector converter and tiny Qwen3.5 fixtures are available. On engine `3ac42957d`, the canonical tiny CPU G1 passed 27 checks each for speed (alpha 0/1) and quality with explicit exact rows (alpha 0), across three chunk sizes. The gates compare logits, KV caches, convolution state and recurrent state with the oracle and require positive/negative controls. Quality alpha 1 is refused by name until the rho-scaled correction is implemented. Real-model results below are **NOT YET MEASURED** for this port; the later Llama/Qwen3 tables are earlier measurements on different models.
+The Qwen3.8-27B port implements speed, class/digit quality and server question-attention quality prefill. The format-2 projector converter and tiny Qwen3.5 fixtures are available. On engine `3ac42957d`, the canonical tiny CPU G1 passed 27 checks each for speed (alpha 0/1) and quality with explicit exact rows (alpha 0), across three chunk sizes. The gates compare logits, KV caches, convolution state and recurrent state with the oracle and require positive/negative controls. Quality alpha 1 is refused by name until the rho-scaled correction is implemented. Real-model results below are **NOT YET MEASURED** for this port; the later Llama/Qwen3 tables are earlier measurements on different models.
 
 The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 512, and minimum prompt 8192. Defaults come from the projector: alpha 0, class share 0.5, digits on, question-attention share 0.2. A format-2 GGUF checks every model fingerprint field and the vocabulary token hash; the tokenizer JSON hash and source file hashes are retained as provenance. A different quantization of the same base model is allowed.
 
@@ -29,9 +29,17 @@ The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 5
 | `off` | all prompt rows run stock | no approximate prefill; tiny off controls passed |
 | `speed` | empty | tiny CPU G1 passed at alpha 0/1; row-selector flags do not add exact rows |
 | `quality` | union of class and digit rows | tiny CPU server, bench, perplexity and paired G3 passed at alpha 0; real-model results pending |
-| `quality+qattn` | intended quality rows plus question-attention rows | tools refuse by name until selector and sweep integration are available |
+| `quality+qattn` | quality rows plus question-attention rows | server implemented at alpha 0; tiny native oracle and HTTP gates passed; bench/perplexity refuse this mode |
 
-Class/digit selection is per prompt: a class row qualifies when its vocabulary score is finite; keep `rint(share * qualifying_rows)` positions with the highest scores, ties by lower position. Rounding is half to even. Digit rows contain an ASCII digit in the vocabulary token text, with added/special tokens excluded. The engine API and common helper are tested against hand-computed tiny-fixture rows. The intended question-attention rule adds `round(qattn_share * prefix_length)` prefix rows by causal attention mass from the last `qattn_window` prompt rows at attention layers 3, 7, 11 and 15 below split 16, summed over layers, heads and queries, ties by lower position. `--ridgefill-qattn-blind` moves the query window immediately before the prefix end. The sweep integration remains pending; its caller adds question rows to the common helper's class/digit base rows. Zero qattn share requires the quality path rather than substituting speed.
+For a prompt of N tokens and exact tail T, P=max(0,N-T) is the prefix length. Selection is per prompt, not per prefill chunk:
+
+- Class rows qualify when the token's vocabulary score is finite. Keep `rint(share * qualifying_rows)` positions with highest scores, ties by lower position. Rounding is half to even; the default class share is 0.5.
+- Digit rows contain an ASCII digit in their vocabulary token text. Unknown, control, user-defined and unused tokens are excluded. Digits are on by default. Quality uses the sorted union of class and digit positions below P.
+- Question-attention adds `round(qattn_share * P)` prefix positions with highest causal attention mass, ties by lower position and half-even budget rounding. The default share is 20%, using the last 64 prompt rows as queries at attention layers 3, 7, 11 and 15 below split 16. Mass sums causal `softmax(Q K^T / sqrt(head_dim))` over these layers, heads and queries. The union with class/digit rows can exceed 20% of P. `--ridgefill-qattn-blind` places the query window immediately before P instead of at the prompt end. Share 0 runs ordinary quality with identical rows and no sweep allocation.
+
+Positive-share question-attention runs lower layers over the whole prompt first, saves h_S on the backend, selects rows, then replays the late prefix and exact tail. It never transfers the full h_S through host memory. The server yields between sweep steps; slot cancellation and shutdown release the buffers while the context is alive. Question-dependent requests recompute their prompt rather than reuse a stale question-selected prefix. L-C's tiny split-4 native G1 compared 25 cache/state/logit arrays at three chunk sizes (worst relative error 6.64e-7, threshold 1e-4); its HTTP gate passed 17 comparisons, cancellation/reuse and shutdown controls. These are CPU fixture checks, not 27B measurements.
+
+The server stores h_S as F16, with a checked 1 GiB maximum per active sweep: `N * n_embd * sizeof(element) <= 1073741824`. At width 5120, F16 admits at most 104857 rows; 104858 refuses before allocating h_S. A 32768-row h_S is 320 MiB. F32/BF16 buffers are available through the engine API, with the same byte bound (F32 admits 52428 rows). Window captures, attention scratch space, projector and model/KV buffers add memory outside that h_S bound.
 
 Speed mode writes attention KV and GDN convolution/recurrent state from each predicted layer input. Quality mode mixes predicted bulk inputs with the carried exact-row residuals, then restricts the remaining late-layer work to exact rows. The terminal GDN correction is applied once at the prefix boundary in speed mode. Quality needs scaling by the gate-decayed bulk share; this rho-scaled correction is pending, so nonzero quality alpha is refused. The source package already stores corrections as `[heads, V, K]`; GGUF conversion reorders value heads into llama.cpp order without transposing K/V again.
 
@@ -45,17 +53,18 @@ Speed mode writes attention KV and GDN convolution/recurrent state from each pre
 
 Machine/backend, build revision, cache precision and paired 95% BCa intervals will accompany each measured row. The reference package's quality numbers are not engine measurements and are not substituted here.
 
-| Qwen35 RidgeFill backend gate | status |
-|---|---|
-| CPU | tiny oracle gates and archive/refusal checks passed; real-model results NOT YET MEASURED |
-| Vulkan | NOT YET MEASURED |
-| HIP/ROCm | NOT YET MEASURED |
-| CUDA | NOT RUN |
-| Metal | NOT RUN |
+| backend / placement | build configuration | validation status |
+|---|---|---|
+| CPU | Release, `GGML_NATIVE=OFF`, GPU backends off | tiny oracle/tool gates and clean archive/refusal checks passed; 27B NOT YET MEASURED |
+| Vulkan / one GPU | Release, `GGML_VULKAN=ON`, layer split, F16 KV, FA off | archive build + short 27B speed smoke script available; NOT YET MEASURED |
+| HIP / one GPU | Release, `GGML_HIP=ON`, `AMDGPU_TARGETS=gfx1201`, ROCm 7.10.0a20251120 SDK, F16 KV, FA off | host archive build + short 27B speed smoke script available; NOT YET MEASURED |
+| Vulkan / two GPUs | same archived Vulkan build, `-sm layer`, equal layer weights | separate two-R9700 speed smoke script available; NOT YET MEASURED |
+| CUDA | no Qwen35 RidgeFill backend gate run | NOT RUN |
+| Metal | no Qwen35 RidgeFill backend gate run | NOT RUN |
 
 ### Projector conversion
 
-The planned release location is `TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8`; publication is pending. The expected GGUF filename is `ridgefill-projector-qwen3.8-27b-i8-S16.gguf`.
+The planned release location is `TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8`; publication is pending. Projector: Dylan Johnston and tcclaviger, Apache-2.0, DOI `10.5281/zenodo.23179168`. The converted artifact is `ridgefill-projector-qwen3.8-27b-i8-S16.gguf`: Q8_0 maps, F32 biases/corrections/row scores, 1452188032 bytes, SHA256 `8646d41a5a28d60ef53cc5e1fee4b2bfb20d0775db88d3f89d0731ad9f6b629d`.
 
 ```sh
 # Once the release is published:
@@ -69,7 +78,7 @@ Folder conversion needs no torch and defaults to Q8_0 maps. `--outtype f32|f16|b
 
 ### Options and evaluation
 
-With no projector, processing is stock. `--ridgefill FILE` defaults to speed mode; `--ridgefill-mode off` keeps the projector loaded and requests stock processing. All flags below are parsed, but an unavailable quality/selector/sweep path refuses by name.
+With no projector, processing is stock. `--ridgefill FILE` defaults to speed mode; `--ridgefill-mode off` keeps the projector loaded and requests stock processing. Mode availability is listed above; unsupported combinations below refuse by name.
 
 | option | default | meaning |
 |---|---|---|
@@ -80,25 +89,54 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in (0,1] |
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
 | `--ridgefill-alpha N` | projector (27B: 0) | state correction scale in [0,1]; quality currently requires 0 |
-| `--ridgefill-qattn-share N` | projector (27B: 0.2) | question-attention share in [0,1]; sweep pending |
-| `--ridgefill-qattn-window N` | 64 | positive query-window size; sweep pending |
-| `--ridgefill-qattn-blind` | off | use queries immediately before the prefix end; sweep pending |
+| `--ridgefill-qattn-share N` | projector (27B: 0.2) | question-attention prefix share in [0,1]; server only |
+| `--ridgefill-qattn-window N` | 64 | positive query-window size; server only |
+| `--ridgefill-qattn-blind` | off | use queries immediately before the prefix end; server only |
 
 ```sh
 llama-server -m model.gguf -c 32768 -ngl 99 --ridgefill projector.gguf --ridgefill-mode speed --ridgefill-tail 4096
 ```
 
-The intended quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. They are not a measured recommendation for this engine yet. Per request, `ridgefill: false` overrides the requested mode and selects stock processing; `ridgefill_mode: "off"` also selects stock. `ridgefill_tail` overrides the exact tail, with 0 inheriting the server default. An eligible unavailable quality mode returns an error instead of using speed.
+Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. For question-attention, use `--ridgefill-mode quality+qattn --ridgefill-qattn-share 0.2 --ridgefill-qattn-window 64 --ridgefill-alpha 0` on llama-server. These defaults are not yet measured recommendations for this engine.
+
+| per-request field | effect |
+|---|---|
+| `ridgefill` | boolean; false selects stock processing regardless of mode |
+| `ridgefill_mode` | off, speed, quality or quality+qattn; inherits server mode when omitted |
+| `ridgefill_tail` | integer; 0 inherits the server tail, positive values must meet projector tail_min |
+
+Class/digit/alpha/question knobs are server startup settings, not per-request overrides. `ridgefill_mode: "off"` selects stock. Unknown modes, wrong field types, negative tails and tails below tail_min return a named request error.
 
 The RAM prompt cache carries the mode, exact-row set and fill marker. The unchanged fill boundary can reuse its exact cached tail. Changing mode or selected rows in a retained approximate region requires recomputation; a changed boundary restarts a recurrent/hybrid context when it cannot rewind safely. Ordinary cache_prompt reuse and --cache-ram remain available. KV shifting through nonzero --cache-reuse or request n_cache_reuse is refused by name. Slot save of filled rows is refused; an exact slot can be saved.
 
-With a projector configured, LoRA (--lora), control vectors (--control-vector), embeddings (--embeddings), nonzero --cache-reuse and row splitting (-sm row) refuse before model/adapter I/O. This also applies when that loaded projector is in mode off. Layer split is the intended placement mode, but multi-GPU layer split is NOT RUN in the CPU gate. A filled prefix row requesting logits is refused. Short prompts and T>=N run stock. Multimodal chunks do not fill, and this text-only port has no multimodal RidgeFill validation.
+The following combinations and invalid inputs refuse by name; there is no fallback to a different RidgeFill mode:
+
+| request or setting | refusal / supported alternative |
+|---|---|
+| LoRA (`--lora`), control vectors (`--control-vector`), embeddings/reranking (`--embeddings`) | `RidgeFill does not support` the named setting; model-enabled embeddings also refuse |
+| nonzero `--cache-reuse` or request `n_cache_reuse` | names the cache-shift setting; set it to 0; ordinary `cache_prompt` and RAM prompt cache remain available |
+| `-sm row` | names `--split-mode row`; use layer split |
+| save a slot containing filled rows | names `save slot`; an exact slot can be saved |
+| alpha != 0 in either quality mode | names the missing rho-scaled correction; use `--ridgefill-alpha 0` |
+| parallel quality with non-unified KV | names unified KV and `-kvu`; enable `--kv-unified` |
+| bench/perplexity `quality+qattn` | names the server question-attention sweep; use the server or ordinary quality |
+| positive-share server qattn with shared/parent/child prompts, speculative decoding, LoRA or a non-completion task | names the requirement for an independent text completion without speculative decoding or LoRA |
+| qattn replay with recurrent rollback (`n_rs_seq > 0`) | names recurrent rollback snapshots; disable that combination |
+| qattn split without lower attention layers, or a requested layer that is recurrent | names the split/layer; the 27B split-16 projector has four usable layers |
+| h_S exceeding 1 GiB, invalid shape/type, or failed backend allocation | names the sweep buffer dimensions/type/byte limit/allocation; no oversized allocation or host fallback |
+| filled prefix token requesting logits | names the filled token/position; logits must come from the exact tail |
+| invalid mode, nonfinite/out-of-range shares or alpha, nonpositive window/tail, tail below projector minimum | names the invalid mode/flag/default; class share is (0,1], qattn share/alpha are [0,1] |
+| wrong projector architecture/format/dimensions/layer kinds, model metadata or vocabulary hash | names the mismatched field; qwen35 requires format 2 and the matching model/tokenizer |
+| missing/malformed projector metadata, unknown `model_meta` keys, unknown/malformed tensors | names the key/tensor/shape/type; source checksum failures also stop conversion |
+| malformed replay API calls | names the missing projector, qwen35-only/non-causal context, invalid capture layer/buffer, sequence/order/batch mismatch or incomplete LOWER/LATE transition |
+
+Startup combination guards apply even when a loaded projector is in mode off. Short prompts (`N < min-prompt`) and `T >= N` run stock. Decode remains stock. Multimodal chunks do not fill; this text-only port has no multimodal RidgeFill validation.
 
 Perplexity and bench support off, speed and quality at alpha 0. Both still refuse quality+qattn by name. Perplexity fills at most the unscored first half of each chunk, so its effective tail is `max(T, n_ctx/2)`; it selects quality rows separately for each chunk, including its actual BOS token. Parallel quality chunks require --kv-unified (-kvu). Failed decoding and a missing/nonfinite perplexity score exit nonzero. Bench selects rows from its full generated prompt and logs the exact-prefix row count. Startup and per-request quality with nonzero alpha refuse by name until the rho-scaled correction is implemented. Tiny CPU integration checks cover actual quality runs and these refusals, without establishing real-model quality or performance.
 
 The paired client and CPU gates are documented in [tests/ridgefill/README.md](tests/ridgefill/README.md). `run_g3.py --mode ... --docs ... --needles ... --out ...` runs NLL, needles, TTFT and native bench against one build's mode-off arm. NLL uses only the last 512 teacher-forced targets and keeps the approximate prefix fixed; it requires T-512 >= tail_min and N-512 >= min-prompt. Needle evaluation removes appended answer IDs, applies the loaded Qwen chat template with `enable_thinking=false`, generates greedily, and checks seven digits at digit boundaries. Timing runs alternate off and candidate for at least three repeats. Paired 95% BCa intervals use the oracle's `finals/stats.py`; an inactive eligible fill or missing probability fails the run. Tiny instrumentation checks are not real-model quality/speed measurements.
 
-`run_g5.py --ref COMMIT --backend cpu|vulkan|hip --fixture ... --out ...` audits and builds a clean git archive, then tests named refusals and exact/filled slot-save controls. It uses the caller's environment and does not provide container isolation. Container, GPU backend and multi-GPU gates must be reported separately; the CPU archive result does not establish them.
+`run_g5.py --ref COMMIT --backend cpu|vulkan|hip --fixture ... --out ...` audits and builds a clean git archive, then tests named refusals and exact/filled slot-save controls. It uses the caller's environment and does not provide container isolation. The host wrappers `run_g5_gpu.sh` and `run_g5_two_card.sh` add single-GPU archive builds/27B speed smokes and the separate two-R9700 layer-split smoke. See [GPU G5 commands](tests/ridgefill/README.md#gpu-g5-commands). They require real device enumeration, model tensors on every selected GPU and a completed filled prefix. Container isolation and numerical/performance validation remain separate; the CPU archive result does not establish them.
 
 ## Earlier measured results: dense Llama and Qwen3
 
