@@ -3505,6 +3505,9 @@ private:
         slot.stats.n_prompt_processed += after - before;
         slot.stats.update_prompt_last();
         if (result != server_ridgefill_sweep_result::ready || batch.size() != 0) {
+            if (slot.task->params.stream && slot.task->params.return_progress) {
+                send_partial_response(slot, {}, true);
+            }
             return false;
         }
 
@@ -5054,6 +5057,12 @@ bool server_context::load_model(common_params & params) {
 void server_context::start_loop() {
     auto & params = impl->params_base;
     impl->queue_tasks.start_loop(params.sleep_idle_seconds * 1000);
+    for (auto & slot : impl->slots) {
+        if (slot.ridgefill_sweep && slot.is_processing()) {
+            impl->send_error(slot, "RidgeFill quality+qattn: server is shutting down", ERROR_TYPE_SERVER);
+            slot.release();
+        }
+    }
 }
 
 void server_context::terminate() {

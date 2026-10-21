@@ -364,3 +364,36 @@ Commands: CPU `cmake --build build-sweep --target server-context -j4`; recompile
 Wired `quality+qattn` with positive share and an eligible prefix into the slot-owned driver. Each server update runs one step through `ridgefill_sweep_prompt`, using the existing queue yield mechanism; pending work leaves the slot processing. The ready state appends the already-computed prompt metadata through N-2, then the normal batch decodes N-1 and the lifecycle hook restores FULL. Active sweeps cannot share that final batch with another sequence, as required by the engine's replay contract. Prompt metrics count each input once despite the replay. Question-dependent requests restart their prompt rather than reuse stale question-selected rows. Shared/child prompts, speculative decoding, non-completion tasks and LoRA refuse by name on this path; zero share takes the existing quality route.
 
 `cmake --build build-sweep --target llama-server -j4` and `git diff --check` pass (`build-sweep/build-server-sweep.log`). This commit records wiring/build only, not an HTTP pass. L-B's helper has just landed as `be962e03a`; next import its intervening committed changes and run the real HTTP checks. No common helper or class selector was reimplemented here.
+
+## 2026-10-20: HTTP end-to-end and active lifecycle gates pass
+
+Imported L-B's five committed changes after its prior handoff, through helper `be962e03a` (local import `eac6ccf9b`). The only conflict was the adjacent startup-refusal block in server-context: retained L-B's removal of silent cache-reuse disabling and this lane's removal of the now-implemented qattn-driver refusal. Other imported files are L-B's verbatim changes. The guarded hook is `53aa3a4ca`; the lifecycle commit remains separately reviewable as `643903107`, and the engine-window adaptation is `47dcad484`. L-A's source is unchanged relative to engine `ff598e03d`; the superseded proposal is no longer in the implementation stack.
+
+HTTP uses the shared tiny split-4 model/projector, N=700/P=500, F32 weights/KV, default F16 h_S, FA off and four CPU threads. The independent native executable uses the same F16 h_S for its HTTP reference; FP32 acceptance remains the separately passing 25-array G1 against `finish(exact_rows=R)`. Seventeen HTTP comparisons cover positive qattn, ordinary quality, zero qattn share, repeated cached requests, two concurrent slots with unified KV, and disconnect/reuse. Each sampled token's pre-sampling log probability is compared to the native 300-token-vocabulary logits; worst absolute difference is 2.066796929156567e-7 (limit 1e-5). Positive qattn logs 217 exact prefix rows and counts the 700 prompt inputs once. Zero-share quality and qattn responses have byte-identical serialized probability fields. Positive question-selected requests deliberately recompute the prompt on cache reuse.
+
+```text
+PASS HTTP share=0.2 parallel=1: native logits, filled/processed counts, repeat, cancellation/reuse
+PASS HTTP share=0.0 parallel=1: native logits, filled/processed counts, repeat, cancellation/reuse, zero == quality
+PASS HTTP share=0.2 parallel=2: native logits, filled/processed counts, repeat, cancellation/reuse
+PASS active HTTP cancellation: 3500-token sweep released with zero finalized prompt rows; next request matches native logits
+PASS active shutdown with client stream still open: terminal response and clean exit
+PASS active HTTP shutdown: incomplete sweep buffer released while context is alive; clean exit
+[100%] Built target llama-server
+```
+
+The concurrent requests are assigned slot 0 and slot 1; the server log confirms both start before either finishes. A non-unified two-slot probe correctly hit the existing engine refusal requiring `-kvu`; the positive parallel gate uses `-kvu`. The first zero-share cache-repeat assertion incorrectly expected 500 newly filled rows; corrected the harness to require zero newly filled rows on that ordinary quality cache hit, while still checking its native logits. No implementation threshold was loosened.
+
+The stronger cancellation probe found two missing lifecycle notifications, now fixed in server-context. Pending sweep stages bypass normal post_decode, so they now send the existing progress notification when requested. A 3500-token prompt with batch/ubatch 8 can then be disconnected and released before any prompt row is finalized, followed by a numerically correct reused slot. A second probe kept its client stream open during SIGTERM: shutdown initially waited over 10 seconds for the incomplete request (a mode-off control did not reproduce it). After the server processing loop stops, active sweep requests now receive a terminal shutdown error and release their buffers before HTTP shutdown waits for them. The same open-stream probe now exits cleanly; no client close is needed to unblock it. The earlier failure is preserved in `check-http-cancel-open-stream.log`.
+
+Commands:
+
+```sh
+cmake --build build-sweep --target llama-server -j4
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-cancel.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-shutdown-recheck.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+git diff --check
+git merge-base --is-ancestor rf27-engine HEAD
+```
+
+Evidence: `build-sweep/http-sweep-results.json`, `check-http-sweep.log`, `http-sweep-{0.2,0.0}-{1,2}.log`, `check-http-cancel.log`, `http-cancel-active.log`, `check-http-shutdown-recheck.log`, `http-shutdown-open-recheck.log`, `build-server-helper.log`, `build-server-progress.log`, and `build-server-shutdown.log`. Native and HTTP harnesses remain ignored local files for L-B to adopt; no tests/ridgefill files were authored by this lane. Source review checked batch isolation, per-slot buffer ownership, cleanup before callbacks/unload, no stale question-row cache reuse, one-ubatch scheduling, and single counting of prompt metrics. All required CPU/tiny checks described here pass. GPU, full 27B NLL/TTFT and release portability are outside this CPU lane and are not claimed. L-B's imported RIDGEFILL.md still labels server sweep integration pending; it needs its status updated from this evidence. No push or external writes.
