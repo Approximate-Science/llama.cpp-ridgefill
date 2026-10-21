@@ -37,8 +37,8 @@ struct options {
     int32_t threads = 4, batch = 512, ubatch = 512, ctx = 0, gpu_layers = 0;
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
     bool digits = true, special_exact = false, diagnostics = false;
-    bool s1 = false, vtail = false, explicit_window_end = false;
-    int32_t s1_window = 256, vtail_rows = 512;
+    bool vtail = false, explicit_window_end = false;
+    int32_t s1_window = 0, vtail_rows = 512;
     double s1_factor = 1.0;
 };
 
@@ -79,17 +79,18 @@ static options parse(int argc, char ** argv) {
         else if (key == "--tail") { o.tail = integer(value); }
         else if (key == "--min-prompt") { o.min_prompt = integer(value); }
         else if (key == "--qattn-window") { o.window = integer(value); }
-        else if (key == "--s1" || key == "--vtail") {
-            require(value == "on" || value == "off", key + " must be on or off");
-            (key == "--s1" ? o.s1 : o.vtail) = value == "on";
+        else if (key == "--s1") {
+            require(value == "on" || value == "off", "--s1 must be on or off");
+            o.s1_window = value == "on" ? (o.s1_window > 0 ? o.s1_window : 256) : 0;
         }
-        else if (key == "--s1-window") { o.s1_window = integer(value); }
-        else if (key == "--vtail-rows") { o.vtail_rows = integer(value); }
-        else if (key == "--s1-factor") {
-            size_t end = 0;
-            try { o.s1_factor = std::stod(value, &end); }
-            catch (const std::exception &) { throw std::runtime_error("ridgefill-score: --s1-factor must be finite and nonnegative"); }
-            require(end == value.size() && std::isfinite(o.s1_factor) && o.s1_factor >= 0, "--s1-factor must be finite and nonnegative");
+        else if (key == "--ridgefill-s1-window" || key == "--s1-window" || key == "--ridgefill-s1-factor" || key == "--s1-factor" ||
+                 key == "--ridgefill-vtail" || key == "--vtail" || key == "--ridgefill-vtail-rows" || key == "--vtail-rows") {
+            common_params selection;
+            common_ridgefill_set_option(selection, key.find("--ridgefill-") == 0 ? key : "--ridgefill-" + key.substr(2), value);
+            if (key == "--ridgefill-s1-window" || key == "--s1-window") { o.s1_window = selection.ridgefill_s1_window; }
+            if (key == "--ridgefill-s1-factor" || key == "--s1-factor") { o.s1_factor = selection.ridgefill_s1_factor; }
+            if (key == "--ridgefill-vtail" || key == "--vtail") { o.vtail = selection.ridgefill_vtail; }
+            if (key == "--ridgefill-vtail-rows" || key == "--vtail-rows") { o.vtail_rows = selection.ridgefill_vtail_rows; }
         }
         else if (key == "--qattn-window-mode" || key == "--ridgefill-qattn-window-mode") { o.window_mode = value; }
         else if (key == "--qattn-turn-cap" || key == "--ridgefill-qattn-turn-cap") { o.turn_cap = integer(value); }
@@ -130,17 +131,19 @@ static options parse(int argc, char ** argv) {
     require(o.mode == "off" || o.tail > o.scored, "tail must exceed scored so the first prediction row is exact");
     require(o.flash == "off" || o.flash == "on" || o.flash == "auto", "invalid flash-attn mode");
     common_params selection;
+    selection.ridgefill_qattn_share = o.qattn_share;
+    selection.ridgefill_s1_window = o.s1_window;
+    selection.ridgefill_s1_factor = o.s1_factor;
+    selection.ridgefill_vtail = o.vtail;
+    selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_special_exact = o.special_exact;
     selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
     selection.ridgefill_qattn_turn_cap = o.turn_cap;
     common_ridgefill_validate_options(selection, o.mode);
-    require(o.s1_window > 0 && o.vtail_rows > 0, "--s1-window and --vtail-rows must be positive");
-    require(!o.s1 || o.mode == "off" || o.mode == "quality+qattn", "--s1 requires quality+qattn mode");
-    require(!o.s1 || o.header_rows == 0, "--s1 base selection does not support header rows");
-    require(!o.s1 || o.qattn_share > 0, "--s1 base selection requires positive qattn share");
-    if ((o.s1 || o.vtail) && !o.explicit_window_end) { o.window_end = -2; }
-    require(o.mode == "off" || (!o.s1 && !o.vtail) || server_ridgefill_sweep_api_version() >= 2,
+    common_ridgefill_require_api_v2(selection, o.mode);
+    if ((o.s1_window > 0 || o.vtail) && !o.explicit_window_end) { o.window_end = -2; }
+    require(o.mode == "off" || (o.s1_window == 0 && !o.vtail) || server_ridgefill_sweep_api_version() >= 2,
             "S1/vtail requires libllama C API v2");
     tensor_type(o.cache); tensor_type(o.hidden);
     return o;
@@ -195,7 +198,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     const int32_t n = doc.ids.size(), begin = n - o.scored - 1, end = n - 1;
     const int32_t prefix = o.mode != "off" && n >= o.min_prompt ? std::max(0, n - o.tail) : 0;
     const bool qattn = prefix > 0 && o.mode == "quality+qattn" && o.qattn_share > 0;
-    const bool s1 = prefix > 0 && o.s1, vtail = prefix > 0 && o.vtail;
+    const bool s1 = prefix > 0 && (o.s1_window > 0), vtail = prefix > 0 && o.vtail;
     const int32_t window_end = o.window_end == -2 ? n - o.scored : (o.window_end == -1 ? n : o.window_end);
     require(!qattn || o.window_mode != "last" || window_end >= o.window, "--qattn-window-end is shorter than --qattn-window");
     const int32_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
@@ -204,9 +207,18 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     common_params selection;
     selection.ridgefill_mode = o.mode; selection.ridgefill_share = o.share;
     selection.ridgefill_digits = o.digits; selection.ridgefill_alpha = o.alpha;
+    selection.ridgefill_qattn_share = o.qattn_share;
+    selection.ridgefill_s1_window = o.s1_window;
+    selection.ridgefill_s1_factor = o.s1_factor;
+    selection.ridgefill_vtail = o.vtail;
+    selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_special_exact = o.special_exact; selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
     selection.ridgefill_qattn_turn_cap = o.turn_cap;
+    if (o.mode != "off" && (o.s1_window > 0 || o.vtail)) {
+        selection.n_batch = llama_n_batch(ctx);
+        common_ridgefill_validate_sweep(selection, n, prefix, window_end, llama_n_ubatch(ctx));
+    }
     auto rows = common_ridgefill_rows(selection, rf, doc.ids.data(), prefix, o.mode);
     require(llama_ridgefill_seq_set_rows(ctx, 0, rows.data(), rows.size()) == 0, "exact row setup failed");
     std::vector<double> logprobs, logsumexp;
@@ -284,17 +296,27 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
             {"alpha", o.alpha}, {"cache_type", o.cache}, {"h_type", o.hidden}, {"flash_attn", o.flash}}},
         {"prefills", 1}, {"wall_s", std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()},
         {"build", {{"commit", llama_commit()}, {"build", llama_build_number()}}}};
-    auto report_selection = selection;
-    if (s1) {
-        report_selection.ridgefill_share = 0; report_selection.ridgefill_digits = false; report_selection.ridgefill_header_rows = 0;
-    }
-    auto report = common_ridgefill_get_report(model, rf, report_selection, doc.ids.data(), n, prefix, rows, o.mode,
-            qattn ? sweep.window_begin() : -1, qattn ? sweep.window_end() : -1);
     const auto & cost = sweep.get_cost();
-    report.macs_ridgefill += cost.s1_fill_macs + cost.s1_probe_macs + cost.vtail_macs;
+    common_ridgefill_sweep_report completed;
+    if (s1) {
+        completed.s1_begin = window_end - o.s1_window; completed.s1_end = window_end;
+        completed.s1_probe_kv_pairs = cost.s1_probe_kv_pairs;
+    }
+    if (vtail) { completed.vtail_rows = cost.vtail_rows; }
+    const auto report = common_ridgefill_get_report(model, rf, selection, doc.ids.data(), n, prefix, rows, o.mode,
+            qattn ? sweep.window_begin() : -1, qattn ? sweep.window_end() : -1, 0, -1, s1 || vtail ? &completed : nullptr);
+    const double modeled = report.macs_s1_fill + report.macs_s1_probe + report.macs_vtail;
+    const double observed = cost.s1_fill_macs + cost.s1_probe_macs + cost.vtail_macs;
+    require(std::abs(modeled - observed) <= 1e-12 * std::max(1.0, observed), "S1/vtail driver/report cost mismatch");
+    if (o.s1_window != 0 || o.s1_factor != 1 || o.vtail || o.vtail_rows != 512) {
+        result["parameters"]["s1_window"] = o.s1_window;
+        result["parameters"]["s1_factor"] = o.s1_factor;
+        result["parameters"]["vtail"] = o.vtail;
+        result["parameters"]["vtail_rows"] = o.vtail_rows;
+    }
     result["ridgefill"] = json::parse(report.to_json().dump());
-    if (o.s1 || o.vtail) {
-        result["parameters"].update({{"s1", o.s1}, {"s1_window", o.s1_window}, {"s1_factor", o.s1_factor},
+    if ((o.s1_window > 0) || o.vtail) {
+        result["parameters"].update({{"s1", (o.s1_window > 0)}, {"s1_window", o.s1_window}, {"s1_factor", o.s1_factor},
                 {"vtail", o.vtail}, {"vtail_rows", o.vtail_rows}});
         result["s1"] = {{"enabled", s1}, {"n_base", sweep.base_row_count()},
                 {"window", s1 ? json::array({window_end - o.s1_window, window_end}) : json(nullptr)},
@@ -305,11 +327,6 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         result["vtail"] = {{"enabled", vtail}, {"rows", cost.vtail_rows}, {"macs", cost.vtail_macs}, {"scales", sweep.get_vtail_scales()},
                 {"cache_rows", cost.vtail_cache_rows}, {"cache_elements_scaled", cost.vtail_cache_elements},
                 {"cache_read_bytes", cost.vtail_cache_read_bytes}, {"cache_write_bytes", cost.vtail_cache_write_bytes}};
-        if (s1) {
-            auto & sources = result["ridgefill"]["n_exact_prefix_by_source"];
-            sources["s1"] = sources["qattn"]; sources["qattn"] = 0;
-        }
-        result["ridgefill"]["mac_model"] = "kva analytic cold prefill + S1 linear/GDN and dense all-cell attention + recomputed prefix projector/KV + vtail projector and two V projections; V cache traffic reported separately";
         if (o.diagnostics && s1) { result["s1_mass"] = sweep.get_s1_mass(); }
     }
     if (o.diagnostics && qattn) { result["question_mass"] = sweep.get_mass(); }
@@ -330,7 +347,7 @@ int main(int argc, char ** argv) {
                 "--qattn-end is an alias. NLL with endpoint N reads scored targets; the G3 wrapper uses N-K.\n"
                 "Chat: --special-exact off --header-rows 0 --qattn-window-mode last --qattn-turn-cap 256\n"
                 "turn uses [max(after_last_user_header,END-cap),END), searching only before END; missing/empty turns are refused.\n"
-                "S1/vtail (C API v2): --s1 off --s1-window 256 --s1-factor 1 --vtail off --vtail-rows 512\n"
+                "S1/vtail (C API v2): --ridgefill-s1-window 0 (use 256 to enable) --ridgefill-s1-factor 1 --ridgefill-vtail off --ridgefill-vtail-rows 512\n"
                 "S1/vtail default to endpoint N-K in this scorer; vtail calibration must precede scored targets.\n"
                 "Runtime: --gpu-layers 0 --threads 4 --batch 512 --ubatch 512 --ctx-size 0 --cache-type f16 --h-type f16 --flash-attn auto\n"
                 "JSON: token ID array, {name,ids}, array of documents, or one document per JSONL line. No tokenization.\n";
@@ -356,6 +373,11 @@ int main(int argc, char ** argv) {
         auto mp = llama_model_default_params(); mp.n_gpu_layers = o.gpu_layers;
         std::unique_ptr<llama_model, decltype(&llama_model_free)> model(llama_model_load_from_file(o.model.c_str(), mp), llama_model_free);
         require(bool(model), "model load failed");
+        if (o.mode != "off" && (o.s1_window > 0 || o.vtail)) {
+            char architecture[32] = {};
+            require(llama_model_meta_val_str(model.get(), "general.architecture", architecture, sizeof(architecture)) > 0 &&
+                    std::string(architecture) == "qwen35", "S1/vtail two-sweep prefill supports qwen35 only");
+        }
         const int32_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
         for (const auto & doc : docs) { for (auto id : doc.ids) { require(id < vocab, "token ID outside model vocabulary"); } }
         std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(

@@ -82,6 +82,10 @@ struct task_params {
     int32_t ridgefill_header_rows = 0;
     std::string ridgefill_qattn_window_mode = "last";
     int32_t ridgefill_qattn_turn_cap = 256;
+    int32_t ridgefill_s1_window = 0;
+    double ridgefill_s1_factor = 1.0;
+    bool ridgefill_vtail = false;
+    int32_t ridgefill_vtail_rows = 512;
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit
@@ -650,6 +654,7 @@ struct server_prompt {
     int32_t ridgefill_fill_start = 0;
     std::string ridgefill_mode;
     std::vector<llama_pos> ridgefill_rows;
+    int32_t ridgefill_vtail_rows = 0;
 
     void clear() {
         tokens.clear();
@@ -658,6 +663,7 @@ struct server_prompt {
         ridgefill_fill_start = 0;
         ridgefill_mode.clear();
         ridgefill_rows.clear();
+        ridgefill_vtail_rows = 0;
     }
 
     int n_tokens() const {
@@ -672,6 +678,7 @@ struct server_prompt {
             ridgefill_fill_start,
             ridgefill_mode,
             ridgefill_rows,
+            ridgefill_vtail_rows,
         };
     }
 };

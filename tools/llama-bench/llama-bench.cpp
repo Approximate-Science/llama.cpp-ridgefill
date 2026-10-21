@@ -448,6 +448,10 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --ridgefill <file>                          RidgeFill projector: fill the prompt of pp tests (experimental)\n");
     printf("  --ridgefill-tail <n>                        RidgeFill: exact tail (default: projector)\n");
     printf("  --ridgefill-mode <mode>                     off, speed or quality (default: speed)\n");
+    printf("  --ridgefill-s1-window <W>                  late probe rows (0: off; two-sweep tools only)\n");
+    printf("  --ridgefill-s1-factor <F>                  S1 budget factor (default: 1.0)\n");
+    printf("  --ridgefill-vtail <on|off>                  bulk V rescale (default: off; two-sweep tools only)\n");
+    printf("  --ridgefill-vtail-rows <C>                  first tail rows for V rescale (default: 512)\n");
     printf("  --ridgefill-share <n>                       class row share in [0, 1] (default: projector)\n");
     printf("  --ridgefill-digits <on|off>                  keep digit rows exact (default: projector)\n");
     printf("  --ridgefill-special-exact <on|off>          keep special rows exact in quality (default: off)\n");
@@ -1087,7 +1091,8 @@ static cmd_params parse_cmd_params(int argc, char ** argv, bool validate_only = 
                     break;
                 }
                 g_ridgefill.ridgefill_path = argv[i];
-            } else if (arg == "--ridgefill-tail" || arg == "--ridgefill-mode" || arg == "--ridgefill-share" ||
+            } else if (arg == "--ridgefill-s1-window" || arg == "--ridgefill-s1-factor" || arg == "--ridgefill-vtail" || arg == "--ridgefill-vtail-rows" ||
+                       arg == "--ridgefill-tail" || arg == "--ridgefill-mode" || arg == "--ridgefill-share" ||
                        arg == "--ridgefill-special-exact" || arg == "--ridgefill-header-rows" || arg == "--ridgefill-qattn-window-mode" ||
                        arg == "--qattn-window-mode" || arg == "--qattn-turn-cap" || arg == "--ridgefill-qattn-turn-cap" ||
                        arg == "--ridgefill-digits" || arg == "--ridgefill-alpha" || arg == "--ridgefill-qattn-share" || arg == "--ridgefill-qattn-window") {
@@ -1146,6 +1151,10 @@ static cmd_params parse_cmd_params(int argc, char ** argv, bool validate_only = 
     }
     if (!g_ridgefill.lora_adapters.empty() || !g_ridgefill.control_vectors.empty() || g_ridgefill.n_cache_reuse != 0) {
         fprintf(stderr, "llama-bench does not support --lora, --control-vector or --cache-reuse\n");
+        exit(1);
+    }
+    if (g_ridgefill.ridgefill_mode != "off" && (g_ridgefill.ridgefill_s1_window > 0 || g_ridgefill.ridgefill_vtail)) {
+        fprintf(stderr, "llama-bench: S1/vtail requires the server/scorer two-sweep flow; unavailable in llama-bench\n");
         exit(1);
     }
     if (g_ridgefill.ridgefill_mode == "quality+qattn") {

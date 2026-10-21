@@ -92,10 +92,10 @@ def main():
                 arm = ("S1gw" if s1 else "T3s") + ("-vtail-k72" if vtail else "")
                 ref = np.load(args.reference / f"{name}-{arm}.npz")
                 logits = ref["logits"][-65:-1].astype(np.float64)
-                lse = np.logaddexp.reduce(logits, axis=-1)
+                lse = np.max(logits, axis=-1) + np.log(np.exp(logits - np.max(logits, axis=-1, keepdims=True)).sum(axis=-1))
                 lp = logits[np.arange(64), values[-64:]] - lse
                 for chunk in (50, 128, 512):
-                    extra = ["--special-exact", "on", "--s1", "on" if s1 else "off", "--s1-window", w,
+                    extra = ["--special-exact", "on", "--s1", "on" if s1 else "off", "--s1-window", w if s1 else 0,
                              "--vtail", "on" if vtail else "off", "--vtail-rows", 128]
                     got = run(name, extra, chunk=chunk)
                     error = max(np.max(np.abs(got["logprobs"] - lp)), np.max(np.abs(got["logsumexp"] - lse)))
@@ -144,7 +144,7 @@ def main():
             extra = (["--s1-window", w, "--s1-k", int(ref["n_rows_ref"]), "--s1-special", 1] if arm.startswith("S1gw")
                      else ["--rows", ",".join(map(str, ref["rows"]))])
             if "vtail" in arm:
-                extra += ["--vtail", 200 - int(arm.rsplit("-k", 1)[1])]
+                extra += ["--vtail", str(200 - int(arm.rsplit("-k", 1)[1]))]
             command = [args.native_dump, "--model", args.fixture / "tiny-qwen35-f32.gguf", "--projector", args.fixture / "projector-s4-f32.gguf",
                        "--tokens", args.work / (name + ".bin"), "--output", out, "--mode", "quality", "--tail", 200,
                        "--keep", 200, "--ubatch", 512, "--sweep", "--sweep-boundary", *extra]
@@ -192,6 +192,7 @@ def main():
     projector = oracle.Projector(split, {il: torch.from_numpy(pair[0]) for il, pair in maps.items()},
                                  {il: torch.from_numpy(pair[1]) for il, pair in maps.items()})
     scores = load_file(str(package / "rowsel.safetensors"))["score"]
+    assert tokenizer is not None, "reference tokenizer failed to load"
     special_ids = set(tokenizer.added_tokens_decoder)
     digit_ids = oracle.SEL.digit_ids(tokenizer)
     for name, values in prompts.items():
@@ -219,7 +220,7 @@ def main():
                 assert got["s1"]["window"] == [end - w, end]
                 assert np.max(np.abs(got["s1_mass"] - mass_s1)) < 1e-4
                 logits = ref["logits"][-65:-1].astype(np.float64)
-                lse = np.logaddexp.reduce(logits, axis=-1)
+                lse = np.max(logits, axis=-1) + np.log(np.exp(logits - np.max(logits, axis=-1, keepdims=True)).sum(axis=-1))
                 lp = logits[np.arange(64), values[-64:]] - lse
                 assert max(np.max(np.abs(got["logprobs"] - lp)), np.max(np.abs(got["logsumexp"] - lse))) < 1e-4
                 future = values.copy(); future[-64:] = (future[-64:] + 17) % dm.V
@@ -239,7 +240,7 @@ def main():
         want = sorted(set(sorted(range(p), key=lambda r: (-ref["mass_s1"][r], r))[:count]) | special)
         assert got["exact_rows"] == want
     print("PASS S1 factor: zero minimum, ties-to-even budgets 108.5/325.5, saturation at P", flush=True)
-    run("fixture", ["--s1", "on", "--s1-window", 201], refused="window entirely in the known exact tail")
+    run("fixture", ["--s1", "on", "--s1-window", 201], refused="S1 window")
     run("fixture", ["--vtail", "on", "--vtail-rows", 200], refused="would read scored NLL targets")
     result = dict(result="PASS", checks=checks, native_checks=native_checks, worst_logprob_lse=float(worst), worst_mass_relative=float(mass_error),
                   cost="includes recomputed prefix projector/KV, dense all-cell probe attention, two vtail V projections and cache read/write bytes",

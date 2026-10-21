@@ -1830,6 +1830,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             /*.ridgefill_fill_start =*/ prompt.ridgefill_fill_start,
             /*.ridgefill_mode =*/ prompt.ridgefill_mode,
             /*.ridgefill_rows =*/ prompt.ridgefill_rows,
+            /*.ridgefill_vtail_rows =*/ prompt.ridgefill_vtail_rows,
         },
         /*.data   =*/ {
             /*.main =*/ std::move(state_data_tgt),

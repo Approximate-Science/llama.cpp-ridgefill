@@ -1413,6 +1413,11 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             return;
         }
 
+        if (params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail) && model->arch != LLM_ARCH_QWEN35) {
+            COM_ERR("%s", "RidgeFill: S1/vtail two-sweep prefill supports qwen35 only\n");
+            pimpl->context.reset();
+            return;
+        }
         pimpl->ridgefill.reset(llama_ridgefill_init(model, params.ridgefill_path.c_str()));
         if (!pimpl->ridgefill) {
             COM_ERR("failed to load RidgeFill projector '%s'\n", params.ridgefill_path.c_str());
@@ -1767,16 +1772,36 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         catch (const std::exception &) { throw std::invalid_argument(option + " must be a nonnegative integer"); }
         if (end != value.size() || result < 0) { throw std::invalid_argument(option + " must be a nonnegative integer"); }
         params.ridgefill_header_rows = result;
+    } else if (option == "--ridgefill-s1-factor") {
+        size_t end = 0;
+        double factor;
+        try { factor = std::stod(value, &end); }
+        catch (const std::exception &) { throw std::invalid_argument(option + " must be finite and nonnegative"); }
+        if (end != value.size() || !std::isfinite(factor) || factor < 0) {
+            throw std::invalid_argument(option + " must be finite and nonnegative");
+        }
+        params.ridgefill_s1_factor = factor;
+    } else if (option == "--ridgefill-s1-window" || option == "--ridgefill-vtail-rows") {
+        size_t end = 0;
+        int count;
+        const int minimum = option == "--ridgefill-s1-window" ? 0 : 1;
+        try { count = std::stoi(value, &end); }
+        catch (const std::exception &) { throw std::invalid_argument(option + " has an invalid row count"); }
+        if (end != value.size() || count < minimum) { throw std::invalid_argument(option + " has an invalid row count"); }
+        if (option == "--ridgefill-s1-window") { params.ridgefill_s1_window = count; }
+        else { params.ridgefill_vtail_rows = count; }
     } else if (option == "--ridgefill-alpha") {
         params.ridgefill_alpha = number();
     } else if (option == "--ridgefill-share") {
         params.ridgefill_share = number();
     } else if (option == "--ridgefill-qattn-share") {
         params.ridgefill_qattn_share = number();
-    } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind" || option == "--ridgefill-special-exact") {
+    } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind" || option == "--ridgefill-special-exact" || option == "--ridgefill-vtail") {
         if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
         if (option == "--ridgefill-digits") {
             params.ridgefill_digits = value == "on";
+        } else if (option == "--ridgefill-vtail") {
+            params.ridgefill_vtail = value == "on";
         } else if (option == "--ridgefill-special-exact") {
             params.ridgefill_special_exact = value == "on";
         } else {
@@ -1824,12 +1849,60 @@ void common_ridgefill_validate_options(const common_params & params, const std::
         if (selected_mode != "quality+qattn") { throw std::invalid_argument("RidgeFill: --qattn-window-mode turn requires quality+qattn"); }
         if (params.ridgefill_qattn_blind) { throw std::invalid_argument("RidgeFill: --qattn-window-mode turn does not support --ridgefill-qattn-blind"); }
     }
+    if (params.ridgefill_s1_window < 0) { throw std::invalid_argument("RidgeFill: --ridgefill-s1-window must be nonnegative"); }
+    if (!std::isfinite(params.ridgefill_s1_factor) || params.ridgefill_s1_factor < 0) {
+        throw std::invalid_argument("RidgeFill: --ridgefill-s1-factor must be finite and nonnegative");
+    }
+    if (params.ridgefill_vtail_rows < 1) { throw std::invalid_argument("RidgeFill: --ridgefill-vtail-rows must be positive"); }
+    if (selected_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail)) {
+        if (selected_mode != "quality+qattn") {
+            throw std::invalid_argument("RidgeFill: S1/vtail requires the quality+qattn two-sweep flow");
+        }
+        if (params.speculative.need_n_rs_seq() > 0) {
+            throw std::invalid_argument("RidgeFill: S1/vtail does not support recurrent rollback snapshots (n_rs_seq > 0)");
+        }
+        if (params.attention_type == LLAMA_ATTENTION_TYPE_NON_CAUSAL) {
+            throw std::invalid_argument("RidgeFill: S1/vtail does not support non-causal contexts");
+        }
+        if (params.ridgefill_s1_window > 0 && params.ridgefill_header_rows > 0) {
+            throw std::invalid_argument("RidgeFill: S1 base selection does not support --ridgefill-header-rows");
+        }
+        if (params.ridgefill_s1_window > 0 && params.ridgefill_qattn_share == 0) {
+            throw std::invalid_argument("RidgeFill: S1 base selection requires positive --ridgefill-qattn-share");
+        }
+        if (params.ridgefill_s1_window > 0 && params.ridgefill_qattn_blind) {
+            throw std::invalid_argument("RidgeFill: S1 does not support --ridgefill-qattn-blind (window overlaps the prefix)");
+        }
+    }
     if (!params.ridgefill_path.empty()) {
         if (params.split_mode == LLAMA_SPLIT_MODE_ROW) { throw std::invalid_argument("RidgeFill does not support --split-mode row; use --split-mode layer"); }
         if (!params.lora_adapters.empty()) { throw std::invalid_argument("RidgeFill does not support LoRA (--lora)"); }
         if (!params.control_vectors.empty()) { throw std::invalid_argument("RidgeFill does not support control vectors (--control-vector)"); }
         if (params.embedding) { throw std::invalid_argument("RidgeFill does not support embeddings (--embeddings)"); }
         if (params.n_cache_reuse != 0) { throw std::invalid_argument("RidgeFill does not support --cache-reuse; use --cache-reuse 0"); }
+    }
+}
+
+void common_ridgefill_require_api_v2(const common_params & params, const std::string & mode) {
+    const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
+    if (selected_mode == "off" || (params.ridgefill_s1_window == 0 && !params.ridgefill_vtail)) { return; }
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+    if (llama_ridgefill_api_version() >= 2) { return; }
+#endif
+    throw std::invalid_argument("RidgeFill: S1/vtail requires C API v2; unavailable in this build");
+}
+
+void common_ridgefill_validate_sweep(const common_params & params, int32_t n_prompt, int32_t n_prefix,
+        int32_t selector_end, int32_t n_ubatch) {
+    common_ridgefill_validate_options(params);
+    if (params.ridgefill_mode == "off" || (params.ridgefill_s1_window == 0 && !params.ridgefill_vtail)) { return; }
+    if (n_prefix <= 0 || n_prefix >= n_prompt) { throw std::invalid_argument("RidgeFill: S1/vtail requires a nonempty filled prefix and exact tail"); }
+    if (params.ridgefill_s1_window > 0 && (selector_end > n_prompt || selector_end <= n_prefix ||
+            params.ridgefill_s1_window > selector_end - n_prefix)) {
+        throw std::invalid_argument("RidgeFill: S1 window must be nonempty, within LOWER rows and not overlap the prefix");
+    }
+    if (params.ridgefill_vtail && std::min(n_ubatch, params.n_batch) < std::min(params.ridgefill_vtail_rows, n_prompt - n_prefix)) {
+        throw std::invalid_argument("RidgeFill: vtail first tail ubatch must hold min(--ridgefill-vtail-rows, exact tail) rows; increase --ubatch-size and --batch-size");
     }
 }
 
@@ -1847,6 +1920,7 @@ void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf
     }
     common_ridgefill_check_quality_alpha(params, params.ridgefill_mode);
     common_ridgefill_validate_options(params);
+    common_ridgefill_require_api_v2(params);
 }
 
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const llama_ridgefill * rf,
@@ -1881,7 +1955,7 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
 
 common_json common_ridgefill_report::to_json() const {
     const int32_t filled = n_prefix - n_exact_prefix;
-    return common_json {
+    common_json result {
         {"n_prompt", n_prompt}, {"n_prefix", n_prefix}, {"n_filled", filled},
         {"n_exact_prefix", n_exact_prefix}, {"n_cached_exact_prefix", n_cached_exact_prefix}, {"n_exact_tail", n_prompt - n_prefix},
         {"n_exact_prefix_by_source", {{"class", exact_by_source[0]}, {"digit", exact_by_source[1]},
@@ -1892,12 +1966,22 @@ common_json common_ridgefill_report::to_json() const {
         {"scope", "prompt coverage including cached rows; analytic cold prefill"},
         {"mac_model", "kva/compute.py: efficient bypass, actual exact-row positions, actual query window, one lm_head"},
     };
+    if (s1_begin >= 0) {
+        result["n_exact_prefix_by_source"]["s1"] = exact_by_source[5];
+        result["s1"] = common_json {{"window", std::vector<int32_t>{s1_begin, s1_end}}, {"macs_fill", macs_s1_fill},
+            {"macs_probe", macs_s1_probe}, {"probe_kv_pairs", s1_probe_kv_pairs}, {"fill_recomputed", true}};
+    }
+    if (vtail_rows > 0) { result["vtail"] = common_json {{"rows", vtail_rows}, {"macs_measure", macs_vtail}}; }
+    if (s1_begin >= 0 || vtail_rows > 0) {
+        result["mac_model"] = "kva cold prefill + S1 dense probe pairs and recomputed prefix projector/KV + vtail projector and two V projections";
+    }
+    return result;
 }
 
 common_ridgefill_report common_ridgefill_get_report(const llama_model * model, const llama_ridgefill * rf,
         const common_params & params, const llama_token * tokens, int32_t n_prompt, int32_t n_prefix,
         const std::vector<llama_pos> & selected_rows, const std::string & mode, int32_t window_begin, int32_t window_end,
-        int32_t filled_begin, int32_t filled_end) {
+        int32_t filled_begin, int32_t filled_end, const common_ridgefill_sweep_report * sweep) {
     auto require = [](bool ok, const char * message) {
         if (!ok) { throw std::runtime_error(std::string("RidgeFill reporting: ") + message); }
     };
@@ -1927,9 +2011,39 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
     report.n_prompt = n_prompt;
     report.n_prefix = n_prefix;
     report.n_exact_prefix = rows.size();
+    const bool s1 = mode != "off" && params.ridgefill_s1_window > 0;
+    const bool vtail = mode != "off" && params.ridgefill_vtail;
+    if (s1 || vtail) {
+        require(rf && tokens && model->arch == LLM_ARCH_QWEN35, "S1/vtail requires qwen35 and a projector");
+        require(sweep != nullptr, "S1/vtail needs completed sweep metadata");
+        require(n_prefix > 0 && n_prefix < n_prompt, "S1/vtail needs a nonempty prefix and exact tail");
+        if (s1) {
+            require(sweep->s1_begin >= n_prefix && sweep->s1_end <= n_prompt &&
+                    int64_t(sweep->s1_end) - sweep->s1_begin == params.ridgefill_s1_window, "invalid completed S1 window");
+            report.s1_begin = sweep->s1_begin;
+            report.s1_end = sweep->s1_end;
+            const uint64_t width = params.ridgefill_s1_window;
+            require(sweep->s1_probe_kv_pairs >= width * uint64_t(n_prefix) + width * (width + 1) / 2,
+                    "S1 probe needs the dense query/key pair count from the completed driver");
+            report.s1_probe_kv_pairs = sweep->s1_probe_kv_pairs;
+        } else { require(sweep->s1_begin == -1 && sweep->s1_end == -1 && sweep->s1_probe_kv_pairs == 0, "unexpected S1 work"); }
+        if (vtail) {
+            require(sweep->vtail_rows == std::min(params.ridgefill_vtail_rows, n_prompt - n_prefix), "invalid completed vtail row count");
+            report.vtail_rows = sweep->vtail_rows;
+        } else { require(sweep->vtail_rows == 0, "unexpected vtail work"); }
+    } else { require(!sweep || (sweep->s1_begin == -1 && sweep->s1_end == -1 && sweep->s1_probe_kv_pairs == 0 && sweep->vtail_rows == 0), "unexpected sweep work"); }
     double exact_keys = 0;
     for (auto row : rows) { exact_keys += double(row) + 1; }
-    if (n_prefix > 0 && (mode == "quality" || mode == "quality+qattn")) {
+    if (s1) {
+        for (int32_t i = 0; i < n_prefix; ++i) {
+            const bool selected = std::binary_search(rows.begin(), rows.end(), i);
+            const bool special = params.ridgefill_special_exact && llama_ridgefill_token_is_special(rf, tokens[i]);
+            require(!special || selected, "S1 special rows differ from the reported exact rows");
+            if (!selected) { continue; }
+            if (i < filled_begin || i >= filled_end) { ++report.n_cached_exact_prefix; }
+            else { ++report.exact_by_source[special ? 2 : 5]; }
+        }
+    } else if (n_prefix > 0 && (mode == "quality" || mode == "quality+qattn")) {
         require(rf && tokens, "quality breakdown needs the projector and prompt tokens");
         std::vector<llama_pos> classes(n_prefix);
         const int32_t count = llama_ridgefill_select_rows(rf, tokens, n_prefix, params.ridgefill_share, false, classes.data());
@@ -2015,11 +2129,25 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
                 report.macs_ridgefill += window * query + hq * dim * window * (double(window_begin) + window_end + 1) / 2;
             }
         }
+        if (il >= split) {
+            if (s1) {
+                const double window = report.s1_end - report.s1_begin;
+                report.macs_s1_probe += window * (linear + mlp);
+                if (!hp.is_recr(il)) {
+                    report.macs_s1_fill += p * (hidden * hidden + fill);
+                    report.macs_s1_probe += 2.0 * hp.n_head(il) * hp.n_embd_head_k(il) * report.s1_probe_kv_pairs;
+                }
+            }
+            if (vtail && !hp.is_recr(il)) {
+                report.macs_vtail += report.vtail_rows * (hidden * hidden + fill);
+            }
+        }
         const double exact = n * (linear + mlp) + context;
         report.macs_exact += exact;
         report.macs_ridgefill += il < split ? exact :
             (n - p) * (linear + mlp) + tail_context + filled * (fill + hidden * hidden) + r * (linear + mlp) + row_context;
     }
+    report.macs_ridgefill += report.macs_s1_fill + report.macs_s1_probe + report.macs_vtail;
     require(std::isfinite(report.macs_exact) && std::isfinite(report.macs_ridgefill) && report.macs_exact > 0,
             "nonfinite analytic MAC count");
     return report;
