@@ -208,3 +208,122 @@ The local ignored `build-sweep/check-driver.cpp` is ready for L-B to adopt. It r
 Recompiled `check-sweep`, `check-question`, `check-cache`, and `check-rows` against the rebased internal headers, then reran the storage checks, live FP32/FP16 cache runs, and `check-frozen.py`. Results are unchanged: question graph max relative error 1.763e-7, live FP32 cache 3.017e-7, selected rows 100/100, and the FP16-vs-FP32 1e-4 gate still fails at 2.319e-4. Logs: `build-rebased.log`, `configure-server.log`, `build-server.log`, `check-driver.log`, and `check-frozen-rebased.log` under `build-sweep/`.
 
 Self-review checked scope, dimensions before allocation, lifetime, ASCII comments, and the server's one-ubatch scheduling requirement. `git diff --check` passed. Rejected: copying L-B's uncommitted plumbing, bypassing missing engine stages with stock/speed execution, allocating the sweep buffer for zero share, and blocking the server loop for a complete prompt. Remaining numerical and server integration checks stay SKIPPED until L-A's hooks and L-B's committed fields are available. The coordinator has relayed the part-aware extraction and lower-state/KV-cell preservation requirements to L-A.
+
+## 2026-10-20 18:25: dispatch proposal scope and FP16 row-set gate
+
+The coordinator authorized L-C to propose the part dispatch, API, extraction and replay changes in one separate commit for L-A review after speed G1. Rebased onto the current `rf27-engine` tip `f1b92645f`; no conflicts. Current prior commits are `bce3791cd`, `86e2e9502`, `c57cf886d`, and `976a2298a` (the accepted driver skeleton was previously `70a55d624`).
+
+Completed the requested FP16 selected-row check with `build-sweep/check-f16-rows.py`. It uses the shared tiny GGUF token text/types, the split-4 `rowsel.safetensors`, and the real engine's FP32/FP16 mass dumps. The C++ selector chooses 100 question rows; oracle `top_rows` independently agrees. Class selection keeps 127 of 254 finite-score prefix rows at share 0.5 with position ties; digit selection returns 20 prefix rows. The union is checked after question rows, so class/digit overlap cannot hide a changed question set.
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-f16-rows.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+```
+
+```text
+PASS f32 controls: repeated rows identical; wrong-map union symmetric difference=123
+PASS f16 controls: repeated rows identical; wrong-map union symmetric difference=123
+PASS FP16/F32 question rows: f32=100 f16=100 symmetric_difference=0
+PASS FP16/F32 exact-row union: f32=217 f16=217 symmetric_difference=0 class=127 digits=20
+```
+
+Per the coordinator, FP16 mass versus the FP32 oracle (2.319e-4) is informational. The required FP16 row-set check above passes. G1 remains a FP32 gate; no tolerance was weakened. Log: `build-sweep/check-f16-rows.log`. This does not claim that the quality engine or a two-byte h_S replay was executed.
+
+Dispatch inspection found one additional memory API needed outside the files named in the ownership/interface note. `llama_kv_cache_context::apply()` calls `llama_kv_cache::apply_ubatch()`. The latter removes occupied destination cells and purges positions up to the overwritten maximum (currently lines 1138-1198). Calling it with the existing lower-sweep cells loses prompt positions. Skipping `apply()` also does not work: `n_kv` is private and is not initialized by the batch-processing constructor, but the graph needs its valid value.
+
+Prepared, but did NOT apply, `build-sweep/proposed-kv-replay.patch`: a narrow `llama_kv_cache_context::apply_replay()` method in `src/llama-kv-cache.{h,cpp}` that refreshes `n_kv` from the already-mapped slot info without allocating/removing cells. It returns false for a non-successful or empty processing context. `git apply --check` passes. A sweep-specific hybrid context in L-C's own files can call this method and configure the existing recurrent cell for graph inputs without `find_slot()` advancing its position. The first LATE graph must zero only late-layer recurrent/conv state via its existing graph state inputs; lower-layer state remains at the end of the prompt.
+
+Blocked on scope confirmation for those two extra KV files: the latest task says to touch L-A's files minimally and "only where the interface says", and the interface/ownership list does not name them. Rejected const-casting/private-field access, writing into occupied cells through normal `apply_ubatch`, and adding a duplicate cache implementation. No production dispatch files have been modified yet, and the requested single proposal commit has not been created. Lower h_S and all-rows late-replay gates are SKIPPED until this memory transition can be implemented.
+
+## 2026-10-20 18:47: proposed LOWER/LATE dispatch and existing-cell replay
+
+The coordinator approved the narrow `src/llama-kv-cache.{h,cpp}` addition and requested one proposal commit for L-A to review. Implemented the part setter, per-sequence cursors/buffer, homogeneous part codes, lower graph stop/capture, late graph entry, part-aware layer-input extraction, and replay memory context. Rebased the four accepted L-C commits onto `rf27-engine` `3ac42957d` after its rollback and masked-quality changes landed. Resolved the context/graph parameter overlaps by retaining L-A's `rows_seq`, row counting, alpha/rho and non-unified parallel refusals. The accepted driver skeleton is now `6c5cc6a5b`.
+
+`apply_replay()` only refreshes `n_kv` from existing mapped cells. Normal `apply_ubatch()` cannot be used: it removes occupied destination cells and purges existing positions up to the overwritten maximum. The replay context maps logical positions to those cells, refuses shared/missing cells, preserves recurrent metadata at the full prompt end, and uses existing graph state inputs to zero only the late layers on the first replay ubatch. It calls the mutable attention context owned by its base through the existing const graph-facing getter; no private cache member is accessed. A per-sequence replay cursor supplies the batch validator's next position while the stored memory position remains N-1. Normal batches retain normal validation and application.
+
+LOWER computes [0, S), writes h_S to its position-indexed device buffer with an in-graph copy, and has no output head. LATE starts at S and uses L-A's fill builder for BULK/MASKED prefix ubatches, then stock late layers for the tail. When every row in a LATE ubatch is exact, the stock late-layer path avoids a redundant gather/scatter; it has no prefix output head. The global R=all-prefix case has rho=0, so alpha=1 is neutral. Partial exact rows with nonzero alpha still refuse by name until L-A supplies rho correction. The buffer pointer and slice position are in the graph reuse key; reserving graphs uses FULL, avoiding an out-of-bounds dummy slice.
+
+The part setter refuses unsupported LoRA/control-vector, embedding, non-causal, MTP-context and recurrent rollback configurations. LOWER requires an empty sequence; LATE requires the complete LOWER prompt in the same buffer; FULL requires completed replay or an explicitly cleared sequence. Aborted part execution clears the sequence because its recurrent state cannot be rolled back. Missing layer inputs are skipped and return null when absent throughout the batch, with zero rows for absent ubatches in a mixed batch. The availability vector is allocated only when layer-input extraction is enabled. A loaded projector with no filled/part rows leaves the marker vector empty without allocating it.
+
+Interface clarification for L-A: the current upstream layer-input extraction copies all token rows, independent of logits flags. LOWER therefore refuses requested logits and still exposes the requested lower-layer inputs (including the input to S). No output flags are needed for the question window. The direct in-graph h_buf view/copy implements the row-position contract without a host h_S transfer; only CPU was tested.
+
+The local ignored harnesses are `build-sweep/check-dispatch.cpp`, `check-dispatch-prefix.py`, and `check-dispatch-refusal.cpp`, ready for L-B to adopt. N=700, P=500, split=4, F32 model/KV/h_S, CPU four threads, FA disabled, shared L-B fixture. Stock and replay use the same chunk boundaries. The prefix parser independently checks each KV, conv and recurrent array using L-B's `read_state`, rather than accepting a nonempty dump as a pass. The two all-row runs use alpha 0/1; the positive control corrupts h_S[0] before replay. A six-row R={0,7,31,127,255,499} replay also matches a single-pass quality run byte-for-byte, including resumed decode.
+
+Commands (all exit zero):
+
+```sh
+cmake --build build-sweep --target server-context -j4
+c++ -std=c++17 -O2 -I src -I include -I ggml/include build-sweep/check-dispatch.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-dispatch
+c++ -std=c++17 -O2 -I src -I include -I ggml/include build-sweep/check-dispatch-refusal.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-dispatch-refusal
+build-sweep/check-dispatch ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/projector-s4-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/dispatch-50 50 50
+build-sweep/check-dispatch ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/projector-s4-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/dispatch-128 128 128
+build-sweep/check-dispatch ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/projector-s4-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/dispatch-700 700 512
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-dispatch-prefix.py ../llama.cpp-ridgefill-tools build-sweep/dispatch-50 build-sweep/dispatch-128 build-sweep/dispatch-700
+build-sweep/check-dispatch-refusal ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/projector-s4-f32.gguf
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-f16-rows.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+build-sweep/check-driver
+git diff --cached --check
+```
+
+```text
+[100%] Built target llama
+[100%] Built target server-context
+PASS dispatch b50/ub50: h_S, final KV/conv/state, tail logits, resumed decode byte-identical; six-row LATE equals quality; loaded/no-fill equals off; all-exact alpha=1 unchanged; corrupted h_S changes caches
+PASS dispatch b128/ub128: h_S, final KV/conv/state, tail logits, resumed decode byte-identical; six-row LATE equals quality; loaded/no-fill equals off; all-exact alpha=1 unchanged; corrupted h_S changes caches
+PASS dispatch b700/ub512: h_S, final KV/conv/state, tail logits, resumed decode byte-identical; six-row LATE equals quality; loaded/no-fill equals off; all-exact alpha=1 unchanged; corrupted h_S changes caches
+PASS build-sweep/dispatch-50: prefix late KV/conv/state 8/8 arrays byte-identical to stock; lower 8/8 unchanged through prefix and tail; corrupt-h_S changes 2 late arrays
+PASS build-sweep/dispatch-128: prefix late KV/conv/state 8/8 arrays byte-identical to stock; lower 8/8 unchanged through prefix and tail; corrupt-h_S changes 2 late arrays
+PASS build-sweep/dispatch-700: prefix late KV/conv/state 8/8 arrays byte-identical to stock; lower 8/8 unchanged through prefix and tail; corrupt-h_S changes 2 late arrays
+PASS refusals: missing projector/buffer, invalid sequence, oversized prefix, LOWER logits/nonconsecutive rows, partial exact rows with alpha=1 preserve cache; LATE abort clears sequence; n_rs_seq=4 refused
+PASS FP16/F32 question rows: f32=100 f16=100 symmetric_difference=0
+PASS FP16/F32 exact-row union: f32=217 f16=217 symmetric_difference=0 class=127 digits=20
+```
+
+Logs: `build-sweep/build-dispatch-rebased.log`, `check-dispatch-{50,128,700}.log`, `check-dispatch-prefix.log`, `check-dispatch-refusal.log`, `check-f16-rows.log`. The selected-row check still includes repeated-row and wrong-key-order controls (wrong-map union symmetric difference 123). FP16 mass drift remains informational, as requested; the byte-equality replay gates use F32 h_S/KV. The driver zero-share routing/no-allocation and 1 GiB boundary checks were rerun and pass.
+
+Self-review covered scope, buffer lifetime/index bounds, graph reuse, skipped layer inputs, pure part ubatches, named refusals, and stock/off behavior. Initial probes caught a missing LOWER loop hook and then M-RoPE's stock past-position rejection; both were fixed before the passing runs. Rejected normal cache insertion during replay, clearing/re-running lower state, weakening byte equality, and silently accepting partial-quality alpha correction.
+
+Still SKIPPED: integrated server sweeps and the numerical server qattn-share=0 versus quality gate; driver functions remain explicit stubs pending integration with committed mode plumbing. This proposal does not claim the full question-selected G1 against `finish(exact_rows=R)`, multi-slot replay, two-byte h_S replay, or GPU validation. Next: L-A reviews/merges the proposal; L-C wires the existing server driver and runs the question-selected oracle gate. No push or external writes.
+
+Before handoff, rebased once more onto `rf27-engine` `d3b20e862`. That additional engine commit only changes its G0 harness/logs and NOTES; the tested production source content is unchanged. The rebase completed without conflicts.
+
+## 2026-10-20 18:58: executable sweep driver and split-4 question-selected G1
+
+The dispatch proposal is `8de161386`. Imported L-B's committed plumbing through `f57291696` by cherry-picking its nine commits after `bd9ede799` (local import tip `0bfb45a68`). No L-B source was edited beyond those verbatim commits. L-A's current tip remains `d3b20e862`; the new driver is tested on the gated proposal dispatch while L-A prepares its implementation.
+
+Implemented the previously named driver stages in `tools/server/server-ridgefill-sweep.{h,cpp}`. Each step runs at most one ubatch, or one mass/selection stage. LOWER stores h_S and captures only the question window at the oracle's lower attention layers in {3,7,11,15}. The runtime question graph in `src/llama-ridgefill-sweep.{h,cpp}` uses the context's existing backends in a separate scheduler, gathers logical cache rows, and sums its FP32 group results in FP64. It does not reset the context's scheduler or transfer h_S through the host. The driver unions supplied class/digit rows with its question rows, sets R, replays the prefix, then runs the exact tail and restores FULL. Query extraction flags are restored after capture.
+
+The driver supports a deferred final token so the server can put that token in its normal output/sampling batch. The caller must then call `finish_external_tail`; an interrupted slot must call `cancel` before freeing its buffer. The deferred-token variant is independently run through the same numerical gate. HTTP wiring is not yet applied.
+
+Native G1 uses the shared split-4 fixture, N=700/P=500, F32 model/KV/h_S, FA off, four CPU threads, alpha=0. The Python oracle independently selects 127 class rows plus 20 digit rows (147 distinct base rows), then 100 question rows, making a union of 217. Those 147 base rows are supplied to the driver because L-A's class/digit selector API is still missing; the driver computes mass and the question union itself. Mass is compared first to the shared `qattn-s4-oracle.npz`; exact R is checked next; then 25 arrays (late prefix KV/conv/recurrent states, all final caches, and 200 tail logits) are compared against a fresh `finish(exact_rows=R)` reference. Prefix snapshots retain N lower-cache cells, so the parser compares the late KV prefix slices [0,P), not the unused future late rows.
+
+```text
+PASS qattn b50/ub50:   mass relative error 2.659567080398772e-7; rows 217/217; 25 arrays; worst relative error 6.630082225456135e-7
+PASS qattn b128/ub128: mass relative error 2.659567080398772e-7; rows 217/217; 25 arrays; worst relative error 6.630082225456135e-7
+PASS qattn b700/ub512: mass relative error 2.659567080398772e-7; rows 217/217; 25 arrays; worst relative error 6.630082225456135e-7
+PASS deferred-final-token variant: same bound at all three chunk sizes
+PASS repeated qattn: prefix/final state and tail logits byte-identical at all three chunk sizes
+PASS qattn-share=0 versus quality: prefix/final state and tail logits byte-identical at all three chunk sizes
+PASS wrong-projector positive control: mass/R unchanged; worst cache/state error 1.337659239768982 at all three chunk sizes
+PASS zero-share routing: no allocation/context access; base rows unchanged
+PASS 1 GiB bound: width 5120/F16 admits 104857 rows and refuses 104858 before allocation
+[100%] Built target server-context
+```
+
+Correct comparisons retain the 1e-4 FP32 threshold. The wrong-projector control must exceed 1e-2; its pass means it was detected, not that it agrees. The selected-row equality is exact. No F16 h_S replay or GPU numerical claim is made here; the earlier FP16-cache row-selection gate remains recorded above.
+
+Commands:
+
+```sh
+cmake --build build-sweep --target server-context -j4
+c++ -std=c++17 -O2 -I tools/server -I src -I include -I ggml/include build-sweep/g1-sweep.cpp tools/server/server-ridgefill-sweep.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/g1-sweep
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/g1-sweep-oracle.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+c++ -std=c++17 -O2 -Wall -Wextra -I tools/server -I include -I ggml/include build-sweep/check-driver.cpp tools/server/server-ridgefill-sweep.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-driver
+build-sweep/check-driver
+git diff --check
+```
+
+Evidence: `build-sweep/g1-sweep-results.json`, `g1-sweep-oracle.log`, `g1-{50,128,700}-{qattn,defer,repeat,zero,quality,wrong}.{log,prefix.kv,kv,logits}`, `check-driver-current.log`, and `build-driver-final.log`. The new harness sources are local/ignored and ready for L-B to adopt. A stale aggregate initializer in the small routing harness failed compilation after adding `split`; updated it, recompiled, and reran successfully. The stale binary's intermediate output was not accepted as a new pass.
+
+Server integration has two remaining dependencies. First, `common_ridgefill_rows()` in the imported plumbing still unconditionally refuses eligible quality requests because `llama_ridgefill_select_rows` is not declared/implemented in the current engine. L-A must provide the selector and L-B must restore the common helper. No class/digit selector was duplicated in this lane. Second, the earlier ownership grant covers the single guarded driver call, but the asynchronous server also needs slot-owned state, cancellation before prompt clearing/reset, completion after the deferred token, and suppression of cache truncation/checkpoints during replay. Prepared `build-sweep/proposed-server-lifecycle.patch` for those narrow extra hunks; `git apply --check` passes, but it is NOT applied, built or tested. It contains no sweep algorithm, only ownership/lifetime plumbing.
+
+SKIPPED: HTTP/server integration, live request cancellation/concurrency, and server-level zero-share equality. The native driver and its deferred-token contract pass; the server's existing named refusals remain until the dependency and ownership items above are resolved. Rejected a blocking full-prompt server loop, a temporary local h_S owner, a duplicate class selector, and resetting the main context scheduler to compute mass.

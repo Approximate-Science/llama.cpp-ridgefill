@@ -1,6 +1,7 @@
 #include "llama-ridgefill-sweep.h"
 
 #include "llama-graph.h"
+#include "llama-context.h"
 #include "llama-impl.h"
 #include "llama-kv-cache.h"
 #include "llama-model.h"
@@ -14,6 +15,99 @@
 #include <numeric>
 #include <stdexcept>
 #include <string>
+
+std::vector<double> llama_ridgefill_sweep_question_mass(
+        llama_context & ctx, int32_t seq_id, int32_t n_tokens, int32_t window_end,
+        const std::vector<int32_t> & layers, const std::vector<std::vector<float>> & windows) {
+    const auto & model = ctx.get_model();
+    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(ctx.get_memory());
+    if (!hybrid || layers.empty() || layers.size() != windows.size() || n_tokens <= 0 || window_end <= 0 || window_end > n_tokens) {
+        throw std::runtime_error("RidgeFill quality+qattn: invalid question window or hybrid cache");
+    }
+    const size_t width = model.hparams.n_embd;
+    const size_t count = windows[0].size() / width;
+    if (count == 0 || count > size_t(window_end)) {
+        throw std::runtime_error("RidgeFill quality+qattn: empty or oversized question window");
+    }
+    for (size_t i = 0; i < layers.size(); ++i) {
+        if (layers[i] < 0 || layers[i] >= (int32_t) model.hparams.n_layer() || model.hparams.is_recr(layers[i]) ||
+                windows[i].size() != count * width) {
+            throw std::runtime_error("RidgeFill quality+qattn: question layer/window shape mismatch");
+        }
+    }
+    ctx.synchronize();
+    auto & cache = *hybrid->get_mem_attn();
+    const auto rows = llama_ridgefill_sweep_key_rows(cache, seq_id, n_tokens);
+    std::vector<ggml_backend_t> backends;
+    ggml_backend_t cpu = nullptr;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(ctx.get_sched()); ++i) {
+        auto * backend = ggml_backend_sched_get_backend(ctx.get_sched(), i);
+        backends.push_back(backend);
+        if (ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) {
+            cpu = backend;
+        }
+    }
+    const size_t graph_size = 512 * layers.size();
+    llm_graph_result result(graph_size);
+    llama_adapter_loras loras;
+    llm_graph_params params = {};
+    params.arch = model.arch;
+    params.hparams = model.hparams;
+    params.cparams = ctx.get_cparams();
+    params.ubatch.n_tokens = params.ubatch.n_seq_tokens = count;
+    params.ubatch.n_seqs = params.ubatch.n_seqs_unq = 1;
+    params.loras = &loras;
+    params.backend_cpu = cpu;
+    params.res = &result;
+    llm_graph_context g(params);
+    auto * row_input = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, n_tokens);
+    auto * positions = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, count * model.hparams.n_pos_per_embd());
+    ggml_set_input(row_input);
+    ggml_set_input(positions);
+    auto * rotation = cache.build_input_k_rot(g.ctx0);
+    std::vector<ggml_tensor *> inputs, outputs;
+    for (int32_t il : layers) {
+        auto * input = ggml_new_tensor_2d(g.ctx0, GGML_TYPE_F32, width, count);
+        ggml_set_input(input);
+        auto * keys = build_ridgefill_sweep_keys(g.ctx0, cache, seq_id, il, model.hparams.n_embd_head_k(il), row_input);
+        auto * mass = build_ridgefill_question_mass(g, model.layers[il], input, positions, keys, window_end, il, rotation);
+        ggml_set_output(mass);
+        ggml_build_forward_expand(g.gf, mass);
+        inputs.push_back(input);
+        outputs.push_back(mass);
+    }
+    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(), nullptr, backends.size(), graph_size, false, true));
+    if (!sched || !ggml_backend_sched_alloc_graph(sched.get(), g.gf)) {
+        throw std::runtime_error("RidgeFill quality+qattn: question graph allocation failed");
+    }
+    ggml_backend_tensor_set(row_input, rows.data(), 0, rows.size() * sizeof(int32_t));
+    std::vector<int32_t> pos(ggml_nelements(positions));
+    for (size_t i = 0; i < pos.size(); ++i) {
+        pos[i] = window_end - count + i % count;
+    }
+    ggml_backend_tensor_set(positions, pos.data(), 0, pos.size() * sizeof(int32_t));
+    for (size_t i = 0; i < inputs.size(); ++i) {
+        ggml_backend_tensor_set(inputs[i], windows[i].data(), 0, windows[i].size() * sizeof(float));
+    }
+    if (rotation) {
+        cache.set_input_k_rot(rotation);
+    }
+    if (ggml_backend_sched_graph_compute(sched.get(), g.gf) != GGML_STATUS_SUCCESS) {
+        throw std::runtime_error("RidgeFill quality+qattn: question graph execution failed");
+    }
+    std::vector<double> mass(n_tokens, 0.0);
+    for (auto * output : outputs) {
+        std::vector<float> groups(ggml_nelements(output));
+        ggml_backend_tensor_get(output, groups.data(), 0, groups.size() * sizeof(float));
+        for (size_t i = 0; i < groups.size(); ++i) {
+            if (!std::isfinite(groups[i])) {
+                throw std::runtime_error("RidgeFill quality+qattn: question mass is non-finite");
+            }
+            mass[i % n_tokens] += groups[i];
+        }
+    }
+    return mass;
+}
 
 size_t llama_ridgefill_sweep_buffer::required_bytes(int32_t n_embd, int32_t n_tokens, ggml_type type, size_t max_bytes) {
     if (n_embd <= 0 || n_tokens <= 0) {
