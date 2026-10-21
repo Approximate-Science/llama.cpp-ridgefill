@@ -66,7 +66,7 @@ def main():
     version = int(subprocess.check_output([args.binary, "--ridgefill-api-version"], text=True))
     if version < 2:
         for option in ("--s1", "--vtail"):
-            run("fixture", [option, "on"], refused="requires libllama C API v2")
+            run("fixture", [option, "on"], refused="RidgeFill: S1/vtail requires C API v2; unavailable in this build")
         result = dict(result="SKIPPED", reason="libllama C API v2 is not available", api_version=version,
                       defaults="PASS", named_api_refusals="PASS", s1_mass_rows_logits="SKIPPED", s1_cost="SKIPPED", vtail="SKIPPED")
         (args.work / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
@@ -240,7 +240,7 @@ def main():
         want = sorted(set(sorted(range(p), key=lambda r: (-ref["mass_s1"][r], r))[:count]) | special)
         assert got["exact_rows"] == want
     print("PASS S1 factor: zero minimum, ties-to-even budgets 108.5/325.5, saturation at P", flush=True)
-    run("fixture", ["--s1", "on", "--s1-window", 201], refused="S1 window")
+    run("fixture", ["--s1", "on", "--s1-window", 201], refused="RidgeFill: S1 window must be nonempty, within LOWER rows and not overlap the prefix")
     run("fixture", ["--vtail", "on", "--vtail-rows", 200], refused="would read scored NLL targets")
     result = dict(result="PASS", checks=checks, native_checks=native_checks, worst_logprob_lse=float(worst), worst_mass_relative=float(mass_error),
                   cost="includes recomputed prefix projector/KV, dense all-cell probe attention, two vtail V projections and cache read/write bytes",
