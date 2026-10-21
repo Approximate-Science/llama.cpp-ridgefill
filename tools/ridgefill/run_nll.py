@@ -50,7 +50,8 @@ def run(args):
         for mode in ("off", "quality+qattn"):
             output = args.out / (mode + ".jsonl")
             command = [str(args.binary), "--model", str(args.model), "--projector", str(args.projector),
-                       "--input", str(input_path), "--output", str(output), "--mode", mode, "--qattn-end", "known"]
+                       "--input", str(input_path), "--output", str(output), "--mode", mode,
+                       "--qattn-window-end", str(args.length - args.scored)]
             for option in ("scored", "tail", "min_prompt", "share", "digits", "alpha", "qattn_share", "qattn_window",
                            "gpu_layers", "threads", "batch", "ubatch", "cache_type", "h_type", "flash_attn", "ctx_size"):
                 command += ["--" + option.replace("_", "-"), str(getattr(args, option))]

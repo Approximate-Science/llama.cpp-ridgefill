@@ -47,12 +47,15 @@ def main():
     excluded = {TokenType.UNKNOWN, TokenType.CONTROL, TokenType.USER_DEFINED, TokenType.UNUSED}
     digit_ids = {i for i, p in enumerate(pieces) if types[i] not in excluded and any('0' <= c <= '9' for c in p)}
 
-    def run(mode, k, tail, chunk, suffix="", extra=(), source=input_path):
+    def run(mode, k, tail, chunk, suffix="", extra=(), source=input_path, window_end="known"):
         label = f"{mode}-k{k}-u{chunk}{suffix}"
         output = args.work / (label + ".jsonl")
         cmd = [args.binary, "--model", args.fixture / "tiny-qwen35-f32.gguf", "--projector", args.fixture / "projector-s4-f32.gguf",
                "--input", source, "--output", output, "--mode", mode, "--scored", k, "--tail", tail, "--min-prompt", 1,
-               "--cache-type", "f32", "--h-type", "f32", "--flash-attn", "off", "--batch", 700, "--ubatch", chunk, "--diagnostics", *extra]
+               "--cache-type", "f32", "--h-type", "f32", "--flash-attn", "off", "--batch", 700, "--ubatch", chunk, "--diagnostics"]
+        if window_end is not None:
+            cmd += ["--qattn-window-end", len(ids) - k if window_end == "known" else window_end]
+        cmd += extra
         with (args.work / (label + ".log")).open("w") as log:
             subprocess.run(list(map(str, cmd)), stdout=log, stderr=subprocess.STDOUT, check=True, timeout=60)
         return json.loads(output.read_text())
@@ -61,9 +64,10 @@ def main():
     with torch.no_grad():
         for k, tail in ((64, 200), (512, 600)):
             n, prefix, end = len(ids), len(ids) - tail, len(ids) - k
-            win = {}
+            win, layer_inputs = {}, {}
             def hook(il, h):
                 if il == 3:
+                    layer_inputs[il] = h.clone()
                     win[il] = h[end - 64:end].clone()
             hs, lower = run_lower(model, tokens, {4}, hook=hook)
             mass = window_mass(model, win, lower, [3], end=end).numpy()
@@ -123,6 +127,29 @@ def main():
             assert altered["question_mass"] == original["question_mass"] and altered["exact_rows"] == original["exact_rows"]
             assert altered["logsumexp"][0] == original["logsumexp"][0]
             print(f"PASS no target leakage K={k}: replacing all scored tokens preserves selector mass/rows and first predictive LSE", flush=True)
+        boundaries = {}
+        for boundary, endpoint in ((None, n), (n, n), (n - 32, n - 32)):
+            result = run("quality+qattn", k, tail, 128, f"-end-{boundary}", window_end=boundary)
+            mass = window_mass(model, {3: layer_inputs[3][endpoint - 64:endpoint]}, lower, [3], end=endpoint)
+            rows = sorted(set(base) | set(top_rows(mass, prefix, round(0.2 * prefix))))
+            logits, _, _ = finish(model, tokens, hs[4], lower, arm, keep=k + 1, exact_rows=rows, keep_cache=False)
+            logits = logits[:-1].double()
+            lse = torch.logsumexp(logits, -1).numpy()
+            lp = logits[torch.arange(k), tokens[-k:]].numpy() - lse
+            assert np.max(np.abs(result["question_mass"] - mass.numpy())) / mass.abs().max().item() < 1e-4
+            assert result["exact_rows"] == rows and result["qattn_window"] == [endpoint - 64, endpoint]
+            assert result["selector_excludes_targets"] == (endpoint <= n - k)
+            assert np.max(np.abs(result["logprobs"] - lp)) < 1e-4
+            assert np.max(np.abs(result["logsumexp"] - lse)) < 1e-4
+            boundaries[boundary] = result
+        for key in ("question_mass", "exact_rows", "logprobs", "logsumexp"):
+            assert boundaries[None][key] == boundaries[n][key]
+        assert boundaries[n - 32]["question_mass"] != boundaries[n]["question_mass"]
+        for flag in ("--qattn-window-end", "--qattn-end"):
+            alias = run("quality+qattn", k, tail, 128, f"-alias{flag}", [flag, "known"], window_end=None)
+            for key in ("question_mass", "exact_rows", "logprobs", "logsumexp"):
+                assert alias[key] == by_chunk[128]["quality+qattn"][key]
+        print("PASS window endpoints: default == N; N and N-32 match oracle mass/rows/logits; known and legacy alias == N-K", flush=True)
     changed = ids[::-1].copy()
     changed[-16:] = changed[:16]
     docs_path = args.work / "paired-docs.jsonl"
@@ -138,6 +165,9 @@ def main():
     summary = json.loads((paired_dir / "summary.json").read_text())
     assert summary["summaries"][0]["units"] == 2 and summary["summaries"][0]["resamples"] == 5000
     assert summary["summaries"][0]["seed"] == 20261004
+    provenance = json.loads((paired_dir / "provenance.json").read_text())
+    for command in provenance["commands"]:
+        assert command[command.index("--qattn-window-end") + 1] == str(len(ids) - 512)
     paired = [json.loads(line) for line in (paired_dir / "nll.jsonl").read_text().splitlines()]
     paired = [row for row in paired if row["kind"] == "nll"]
     for row in paired:
@@ -162,6 +192,13 @@ def main():
         result = subprocess.run(list(map(str, base_command + extra)), capture_output=True, text=True, timeout=15)
         assert result.returncode != 0 and message in result.stderr, (extra, result.stderr)
     print("PASS named refusals: prediction outside exact tail, unsupported rho correction, invalid mode, nonfinite share", flush=True)
+    for endpoint, message in (("0", "positive row index"), ("-1", "positive row index"), ("bad", "positive row index"),
+                              ("12x", "positive row index"), (str(1 << 40), "positive row index"),
+                              ("701", "exceeds document length"), ("63", "shorter than --qattn-window")):
+        extra = ["--tail", "600", "--min-prompt", "1", "--qattn-window-end", endpoint]
+        result = subprocess.run(list(map(str, base_command + extra)), capture_output=True, text=True, timeout=15)
+        assert result.returncode != 0 and message in result.stderr, (endpoint, result.stderr)
+    print("PASS window refusals: zero, negative, malformed, overflowing, beyond document and insufficient history", flush=True)
     for bad_id in (-1, True, 1 << 40, 300):
         invalid = ids.tolist(); invalid[0] = bad_id
         path = args.work / "invalid-tokens.json"

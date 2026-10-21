@@ -513,3 +513,23 @@ PASS existing HTTP: 17 comparisons, zero-share equality, repeat and concurrent-s
 Commands: `cmake -S . -B build-sweep`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; compile the existing tests/ridgefill/rf_dump.cpp against build-sweep/bin as score-stock-dump (README command); run tools/ridgefill/check_score.py with `--binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --stock-dump build-sweep/score-stock-dump --work build-sweep/score-gate-common`; rebuild the local g1-sweep harness against the extended driver and run g1-sweep-oracle.py and check-http-sweep.py. Evidence: build-sweep/check-score-common.log, check-score-driver-regression.log, check-score-http-regression.log, and score-gate-common/paired/summary.json. The committed gate also checks malformed/out-of-vocabulary token IDs; the final post-commit run is recorded in check-score-release.log.
 
 Rejected options: 512 truncated HTTP prompts (512 prefills and a changing selector); a last-64-document selector for the primary result (target leakage); retaining logits for all T tail rows (unneeded output-head work and memory); substituting another bootstrap implementation (would change the registered interval). JSON/JSONL avoids adding an NPY parser. GPU/full-27B validation belongs to lane Q and was not run in this CPU sandbox.
+
+## 2026-10-20: explicit selector endpoint for NLL and prompt protocols
+
+Coordinator's reference relay matches `ridgefill-tune/REFERENCE-ARMS.md`, "For the engine lanes". Added `--qattn-window-end END`, accepting a positive exclusive row index, `document` (N), or `known` (N-K for each document). The default is now document end, matching server semantics; this supersedes the previous scorer-default statement above. `--qattn-end` remains an alias. G3's paired wrapper explicitly passes the numeric N-K endpoint and validates the resulting window and target exclusion. Its full-model command in tools/ridgefill/README.md is unchanged. A direct NLL invocation must pass `--qattn-window-end known` or the numeric endpoint, e.g. 15872 for N=16384/K=512. Teacher-forced needles can pass N-answer_length; G2 uses N. No server or driver default changes were needed.
+
+For N=16384/K=512/T=4096 the NLL path still uses P=12288, question rows [15808,15872), prediction rows [15871,16383), and target IDs [15872,16384). Computing only the 512 prediction logits is equivalent to the reference's last 513 logits with the final unused row discarded. Lower computation and the frozen selector occur once per document.
+
+Validation (CPU, split 4, FP32 model/KV/h_S, alpha=0, flash attention off):
+
+```text
+[100%] Built target llama-ridgefill-score
+PASS native scorer: 24/24 four-mode oracle comparisons, two K values, three chunk sizes
+worst absolute logprob/logsumexp error: 1.81e-7; tolerance: 1e-4
+PASS window endpoints: default == N; N and N-32 match oracle mass/rows/logits; known and legacy alias == N-K
+PASS paired wrapper: real BCa, novel mask 496/512, multi-document reuse equals fresh contexts
+PASS window refusals: zero, negative, malformed, overflowing, beyond document and insufficient history
+PASS existing zero-share, stock scoring, target replacement and invalid-input controls
+```
+
+Commands: `cmake --build build-sweep --target llama-ridgefill-score -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_score.py --binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-endpoint --stock-dump build-sweep/score-stock-dump`; `git diff --check`. Logs: build-sweep/build-score-endpoint.log and build-sweep/check-score-endpoint.log. The gate also verifies the wrapper command's numeric endpoint in provenance.json. Invalid numeric endpoints fail with the option name. No GPU or 27B run, and no quality/noninferiority verdict.

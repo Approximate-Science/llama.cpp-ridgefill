@@ -10,13 +10,17 @@ cmake --build build --target llama-ridgefill-score -j4
 
 Input may be a JSON token-ID array, a `{ "name": "doc", "ids": [...] }` object, an array of document objects, or JSONL with one document object per line. Output is JSONL with one record per document: target positions, raw full-vocabulary next-token log-probabilities, full-vocabulary logsumexp, all-token mean NLL, selected exact rows, the selector window, and build/settings metadata. Only the K prediction rows have logits enabled. Full logits are reduced in float64 on the host and are not retained. Invalid tokens, incomplete output, non-finite logits, and unsupported settings fail with a nonzero exit code; partial output is not a completed run.
 
-Defaults match the server recipe: split from the projector, tail 4096, min prompt 8192, class share 0.5, digits on, qattn share 0.2, window 64, alpha 0, F16 KV and h_S. The scorer supports `--cache-type` and `--h-type` f32/f16/bf16. CPU is the default; pass `--gpu-layers 99` in lane Q's assigned GPU environment. `--help` lists runtime controls. JSON/JSONL is the supported interchange format; no NPY dependency is needed.
+Defaults match the server recipe: split from the projector, tail 4096, min prompt 8192, class share 0.5, digits on, qattn share 0.2, window 64 ending at N, alpha 0, F16 KV and h_S. The scorer supports `--cache-type` and `--h-type` f32/f16/bf16. CPU is the default; pass `--gpu-layers 99` in lane Q's assigned GPU environment. `--help` lists runtime controls. JSON/JSONL is the supported interchange format; no NPY dependency is needed.
 
 ## The NLL selector window excludes targets
 
 `q27/rf27_quality.py` sets `known = N - scored` and captures `[known-window, known)`. Its `finish(..., keep=K+1)` result is passed to `score_tokens()`, which drops the final logit row and scores IDs `[N-K,N)`. This is also the target exclusion documented in `kva/select.py`; `q27/drive.py` delegates quality work to the quality steps rather than defining a different qattn NLL rule.
 
-For N=16384 and K=512, the exact fill boundary is P=12288, the selector reads **[15808,15872)**, prediction logits come from **[15871,16383)**, and their target IDs are **[15872,16384)**. Intervals are zero-based and half-open. The selection is frozen once before scoring all 512 targets. Using the document's final 64 rows would expose scored targets and does not match the reference. `--qattn-end document` is available only for that explicit diagnostic; its output marks `selector_excludes_targets=false`. The paired wrapper always uses `known` and rejects target exposure.
+`--qattn-window-end END` sets the exclusive endpoint of `[END-window,END)`. It accepts a positive row index, `document` (N, the default), or `known` (N-K for each document). `--qattn-end` remains an alias. The default matches the server's prompt-end selector; G3 must explicitly choose N-K. The paired wrapper passes that numeric endpoint and rejects target exposure.
+
+For N=16384 and K=512, use `--qattn-window-end 15872`: the exact fill boundary is P=12288, the selector reads **[15808,15872)**, prediction logits come from **[15871,16383)**, and their target IDs are **[15872,16384)**. Intervals are zero-based and half-open. The selection is frozen once before scoring all 512 targets. Using the document's final 64 rows exposes scored targets, does not match the NLL reference, and marks `selector_excludes_targets=false` in the output.
+
+These boundaries match `ridgefill-tune/REFERENCE-ARMS.md`, "For the engine lanes": G2 uses the prompt's last 64 rows, and teacher-forced needles use the 64 rows before the appended answer (`END=N-answer_length`). The S=16 projector selects attention layers 3, 7, 11 and 15; the split-4 tiny gate uses layer 3.
 
 The reference's primary document NLL averages only the novel tokens selected by `kva.data.novel_mask(ids, K)` (no repeated 8-token span). The existing HTTP `run_g3.py` averages all K targets and changes the qattn window for each truncation. Those are different estimators. The wrapper reports reference-compatible novel-token NLL as `metric=nll`, and retains `metric=nll_all` as an all-token diagnostic. Both summaries use the same `paired_summary` helper and `finals/stats.py` BCa implementation as `run_g3.py`: document weighting, 5000 resamples, seed 20261004. It makes no noninferiority verdict; unmeasured metrics are SKIPPED.
 
@@ -46,7 +50,7 @@ build/bin/llama-ridgefill-score \
   --model /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf \
   --projector /var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf \
   --input tokens.jsonl --output scores.jsonl --mode quality+qattn \
-  --scored 512 --tail 4096 --qattn-end known --gpu-layers 99
+  --scored 512 --tail 4096 --qattn-window-end known --gpu-layers 99
 ```
 
 ## Tiny CPU gate
@@ -64,4 +68,4 @@ python3 tools/ridgefill/check_score.py \
   --stock-dump build/score-stock-dump --work build/score-gate
 ```
 
-The gate covers all four modes against FP32 `finish()` logits at K=64/T=200 and K=512/T=600 with ubatches 50/128/512. It also compares selector mass and row sets, zero-share versus quality, off versus stock next-token scoring, and changes all targets to prove they do not affect selection or the first predictive distribution. The paired wrapper should also be checked on at least two documents, including repeated spans, before a full-model run. Tiny CPU agreement does not establish GPU or full-model quality.
+The gate covers all four modes against FP32 `finish()` logits at K=64/T=200 and K=512/T=600 with ubatches 50/128/512. It also compares selector mass and row sets, zero-share versus quality, off versus stock next-token scoring, and changes all targets to prove they do not affect selection or the first predictive distribution. Endpoint controls compare the default with explicit N, compare N and N-32 with the oracle, verify the known/legacy aliases, and reject invalid endpoints. The paired wrapper runs on two documents, including repeated spans, and verifies its explicit N-K endpoint and real BCa summary. Tiny CPU agreement does not establish GPU or full-model quality.

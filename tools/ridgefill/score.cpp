@@ -7,6 +7,7 @@
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <cmath>
 #include <fstream>
@@ -27,7 +28,8 @@ static void require(bool value, const std::string & message) {
 
 struct options {
     std::string model, projector, input, output;
-    std::string mode = "quality+qattn", cache = "f16", hidden = "f16", flash = "auto", window_end = "known";
+    std::string mode = "quality+qattn", cache = "f16", hidden = "f16", flash = "auto";
+    int32_t window_end = -1; // -1: document end; -2: start of scored tokens.
     int32_t scored = 512, tail = 4096, min_prompt = 8192, window = 64;
     int32_t threads = 4, batch = 512, ubatch = 512, ctx = 0, gpu_layers = 0;
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
@@ -71,7 +73,15 @@ static options parse(int argc, char ** argv) {
         else if (key == "--tail") { o.tail = integer(value); }
         else if (key == "--min-prompt") { o.min_prompt = integer(value); }
         else if (key == "--qattn-window") { o.window = integer(value); }
-        else if (key == "--qattn-end") { o.window_end = value; }
+        else if (key == "--qattn-window-end" || key == "--qattn-end") {
+            if (value == "document") { o.window_end = -1; }
+            else if (value == "known") { o.window_end = -2; }
+            else {
+                const auto parsed = std::from_chars(value.data(), value.data() + value.size(), o.window_end);
+                require(parsed.ec == std::errc() && parsed.ptr == value.data() + value.size() && o.window_end > 0,
+                        "--qattn-window-end must be a positive row index, document or known");
+            }
+        }
         else if (key == "--threads" || key == "-t") { o.threads = integer(value); }
         else if (key == "--batch" || key == "-b") { o.batch = integer(value); }
         else if (key == "--ubatch" || key == "-ub") { o.ubatch = integer(value); }
@@ -95,7 +105,6 @@ static options parse(int argc, char ** argv) {
     require(o.scored > 0 && o.tail > 0 && o.min_prompt >= 0 && o.window > 0 && o.threads > 0 && o.batch > 0 && o.ubatch > 0 && o.ctx >= 0, "invalid count");
     require(o.mode == "off" || o.tail > o.scored, "tail must exceed scored so the first prediction row is exact");
     require(o.flash == "off" || o.flash == "on" || o.flash == "auto", "invalid flash-attn mode");
-    require(o.window_end == "known" || o.window_end == "document", "qattn-end must be known or document");
     tensor_type(o.cache); tensor_type(o.hidden);
     return o;
 }
@@ -149,8 +158,8 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     const int32_t n = doc.ids.size(), begin = n - o.scored - 1, end = n - 1;
     const int32_t prefix = o.mode != "off" && n >= o.min_prompt ? std::max(0, n - o.tail) : 0;
     const bool qattn = prefix > 0 && o.mode == "quality+qattn" && o.qattn_share > 0;
-    const int32_t window_end = o.window_end == "known" ? n - o.scored : n;
-    require(!qattn || window_end >= o.window, "known context is shorter than the question window");
+    const int32_t window_end = o.window_end == -2 ? n - o.scored : (o.window_end == -1 ? n : o.window_end);
+    require(!qattn || window_end >= o.window, "--qattn-window-end is shorter than --qattn-window");
     const int32_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_ridgefill_seq_set(ctx, 0, prefix);
@@ -240,7 +249,9 @@ int main(int argc, char ** argv) {
         if (argc == 2 && std::string(argv[1]) == "--help") {
             std::cout << "llama-ridgefill-score --model MODEL --projector GGUF --input JSON/JSONL --output JSONL [--mode off|speed|quality|quality+qattn]\n"
                 "Defaults: --scored 512 --tail 4096 --min-prompt 8192 --share 0.5 --digits on --qattn-share 0.2 --qattn-window 64 --alpha 0\n"
-                "--qattn-end known uses [N-K-window,N-K); document uses [N-window,N) and reads targets.\n"
+                "--qattn-window-end END uses [END-window,END), with an exclusive zero-based endpoint.\n"
+                "Default: document (N, server semantics). For NLL use known (N-K), or an explicit row index.\n"
+                "--qattn-end is an alias. NLL with endpoint N reads scored targets; the G3 wrapper uses N-K.\n"
                 "Runtime: --gpu-layers 0 --threads 4 --batch 512 --ubatch 512 --ctx-size 0 --cache-type f16 --h-type f16 --flash-attn auto\n"
                 "JSON: token ID array, {name,ids}, array of documents, or one document per JSONL line. No tokenization.\n";
             return 0;
@@ -250,6 +261,7 @@ int main(int argc, char ** argv) {
         int32_t max_n = 0;
         for (const auto & doc : docs) {
             require(doc.ids.size() > size_t(o.scored), "document must contain more than K tokens");
+            require(o.window_end < 0 || size_t(o.window_end) <= doc.ids.size(), "--qattn-window-end exceeds document length");
             max_n = std::max(max_n, int32_t(doc.ids.size()));
         }
         require(o.ctx == 0 || o.ctx >= max_n, "ctx-size is smaller than a document");
