@@ -397,3 +397,27 @@ git merge-base --is-ancestor rf27-engine HEAD
 ```
 
 Evidence: `build-sweep/http-sweep-results.json`, `check-http-sweep.log`, `http-sweep-{0.2,0.0}-{1,2}.log`, `check-http-cancel.log`, `http-cancel-active.log`, `check-http-shutdown-recheck.log`, `http-shutdown-open-recheck.log`, `build-server-helper.log`, `build-server-progress.log`, and `build-server-shutdown.log`. Native and HTTP harnesses remain ignored local files for L-B to adopt; no tests/ridgefill files were authored by this lane. Source review checked batch isolation, per-slot buffer ownership, cleanup before callbacks/unload, no stale question-row cache reuse, one-ubatch scheduling, and single counting of prompt metrics. All required CPU/tiny checks described here pass. GPU, full 27B NLL/TTFT and release portability are outside this CPU lane and are not claimed. L-B's imported RIDGEFILL.md still labels server sweep integration pending; it needs its status updated from this evidence. No push or external writes.
+
+## 2026-10-20: native G1 now executes the libllama class/digit selector
+
+Addressed the coordinator's dispatch/selector relay. All four production port requirements were already present in `47dcad484` plus the integrated server stack through `6b37c11ab`: parameter-struct seq_set_part with nullptr for FULL, caller-owned device window captures, one sequence/ubatch per replay decode, and `common_ridgefill_rows(..., effective_request_mode)` from L-B's `be962e03a` feeding the driver. Verified engine `ff598e03d` is an ancestor, proposal `8de161386` is absent, and L-A's context, model, RidgeFill and replay-memory source files have no differences from that engine revision.
+
+The remaining difference was the local native harness: it still consumed the oracle's class/digit rows as input. Updated `build-sweep/g1-sweep.cpp` to call `llama_ridgefill_select_rows(rf, ids, 500, 0.5f, true, out)` itself. Its CLI no longer takes a base-row input file; it writes `.base.rows` for independent verification. Updated `g1-sweep-oracle.py` and `check-http-sweep.py` accordingly. The Python oracle still independently computes expected class/digit/question rows; those values are never passed into the native execution. On positive-qattn runs, compare mass first, then the engine's 147 class/digit rows, the 217-row union, and finally caches/states/logits. The wrong-projector and zero-share arms also call the real selector.
+
+Fresh CPU rerun on L-A's dispatch, split 4, N=700/P=500, FP32 model/KV/h_S, alpha=0, FA off:
+
+```text
+PASS b50/ub50:   base rows 147/147; union 217/217; mass 2.65956708e-7; 25 arrays; worst 6.63008223e-7
+PASS b128/ub128: base rows 147/147; union 217/217; mass 2.65956708e-7; 25 arrays; worst 6.63008223e-7
+PASS b700/ub512: base rows 147/147; union 217/217; mass 2.65956708e-7; 25 arrays; worst 6.63008223e-7
+PASS deferred final token and repeated execution at all three chunk sizes
+PASS wrong-projector control at all three chunk sizes: mass/R unchanged; worst error 1.337659239768982
+PASS qattn-share=0 versus quality: prefix/final caches and 200 tail logits byte-identical at all three chunk sizes
+PASS HTTP: 17 comparisons; worst logprob difference 2.066796929156567e-7
+PASS active HTTP cancellation/reuse and open-stream shutdown
+[100%] Built target llama-server
+```
+
+HTTP uses the real common helper for both quality modes and compares against the newly rebuilt native harness; its default F16 h_S reference and F32 acceptance distinction remain as documented above. The HTTP runs cover one slot, two concurrent unified-KV slots, repeated requests, and zero-share equality. L-T's real-vocabulary digit-set result (10 ids equal to kva) is accepted as relayed evidence, not a measurement performed in this CPU/tiny lane.
+
+Commands: `cmake --build build-sweep --target llama-server -j4`; compile `build-sweep/g1-sweep.cpp` with `tools/server/server-ridgefill-sweep.cpp` against the current libllama/ggml; run `g1-sweep-oracle.py`, `check-http-sweep.py`, `check-http-cancel.py`, and `check-http-shutdown-recheck.py` with PYTHONDONTWRITEBYTECODE=1 and the shared fixture. The native CLI is now `g1-sweep MODEL PROJECTOR TOKENS OUTPUT_PREFIX BATCH UBATCH MODE f32|f16`. Logs: `build-selector-g1.log`, `g1-sweep-engine-selector.log`, `check-http-selector.log`, `check-http-selector-cancel.log`, and `check-http-selector-shutdown.log` in build-sweep. Updated native/HTTP harness sources remain local/ignored for L-B to adopt. No further production changes were necessary; no GPU/full-27B claims or pushes.
