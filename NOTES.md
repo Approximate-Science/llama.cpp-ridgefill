@@ -441,3 +441,12 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
 - Observation (not new): llama-ext.h is upstream's C++-only extension header, so the whole RidgeFill "C API" (v1 and
   v2) has C++ linkage (mangled symbols). Every current caller is C++; a C caller or FFI binding would need extern "C"
   wrappers. Not changed: an API decision for the coordinator.
+
+## 2026-10-21 rf27-s1: L-C 7e6d00dc8 (check_s1_score.py refusal strings) merged
+- Test-only (2 lines): the window and API-v2 refusal expectations are the common validator's exact messages again
+  (both strings present verbatim in common/common.cpp; the window one observed in the run's result log). The API-v2
+  branch only runs on a build below v2, so this build does not exercise it. L-C acknowledged L-B's edits to its files.
+  Merged as 0fb1ab69e (tree == 7e6d00dc8).
+- On the merged tree (CPU, -j4 build clean): check_s1_score PASS 24 + 12 native (worst logprob 1.76e-07, mass
+  1.36e-07); check_s1_tools 115/115 (architecture controls 3/3); check_s1_http 72/72; check_s1_reporting 91 checks /
+  16 configs, worst relative error 0. Full gate set not rerun (only this test file changed since d5916c0cf's run).
