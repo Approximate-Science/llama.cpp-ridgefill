@@ -1520,6 +1520,11 @@ void llama_context::ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end) {
 
     ridgefill_p_end[seq_id] = p_end;
     ridgefill_rows[seq_id].clear();
+
+    // per prompt, as the rows: no S1 mass yet, vtail off until set again (a request's vtail never leaks into the next)
+    ridgefill_s1_mass[seq_id].clear();
+    ridgefill_s1_mass_ok[seq_id] = false;
+    ridgefill_vtail[seq_id] = ridgefill_vtail_state();
 }
 
 int32_t llama_context::ridgefill_set_alpha(float alpha) {
@@ -1598,7 +1603,8 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
     if (cparams.embeddings || !cparams.causal_attn) {
         return refuse("embeddings / non-causal contexts are not supported");
     }
-    if (p->part != LLAMA_RIDGEFILL_PART_LOWER && p->part != LLAMA_RIDGEFILL_PART_LATE) {
+    if (p->part != LLAMA_RIDGEFILL_PART_LOWER && p->part != LLAMA_RIDGEFILL_PART_LATE &&
+        p->part != LLAMA_RIDGEFILL_PART_S1_FILL && p->part != LLAMA_RIDGEFILL_PART_S1_PROBE) {
         return refuse("unknown part");
     }
 
@@ -1617,21 +1623,57 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
     }
 
     llama_ridgefill_part_state next;
-    next.part  = p->part == LLAMA_RIDGEFILL_PART_LOWER ? LLM_RIDGEFILL_PART_LOWER : LLM_RIDGEFILL_PART_LATE;
+    next.part  = p->part == LLAMA_RIDGEFILL_PART_LOWER    ? LLM_RIDGEFILL_PART_LOWER    :
+                 p->part == LLAMA_RIDGEFILL_PART_LATE     ? LLM_RIDGEFILL_PART_LATE     :
+                 p->part == LLAMA_RIDGEFILL_PART_S1_FILL  ? LLM_RIDGEFILL_PART_S1_FILL  : LLM_RIDGEFILL_PART_S1_PROBE;
     next.h_buf = p->h_buf;
+
+    // the first position of the attention cache (the hybrid memory's seq_pos_min is the recurrent cell's position)
+    const llama_pos attn_min = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->seq_pos_min(seq_id);
+    const bool lower_done = ps.lower_end > 0 && ps.lower_end == memory->seq_pos_max(seq_id) + 1;
+    const llama_pos p_end = ridgefill_p_end[seq_id];
 
     if (next.part == LLM_RIDGEFILL_PART_LOWER) {
         if (ps.part != LLM_RIDGEFILL_PART_FULL || !seq_empty) {
             return refuse("LOWER starts on an empty sequence in FULL mode");
         }
-    } else {
-        if (ps.part != LLM_RIDGEFILL_PART_LOWER || ps.h_buf != p->h_buf || ps.lower_end <= 0 ||
-            ps.lower_end != memory->seq_pos_max(seq_id) + 1) {
-            return refuse("LATE follows a LOWER pass over the whole prompt, with the same h_buf");
+        ridgefill_s1_mass[seq_id].clear(); // a new prompt: no probe yet, no vtail scales applied
+        ridgefill_s1_mass_ok[seq_id] = false;
+        ridgefill_vtail[seq_id].scales.clear();
+    } else if (next.part == LLM_RIDGEFILL_PART_LATE) {
+        const bool after_lower = ps.part == LLM_RIDGEFILL_PART_LOWER;
+        const bool after_probe = ps.part == LLM_RIDGEFILL_PART_S1_PROBE && ps.late_end == ps.s1_end;
+        if (!(after_lower || after_probe) || ps.h_buf != p->h_buf || !lower_done) {
+            return refuse("LATE follows a LOWER pass over the whole prompt (or a complete S1 probe), with the same h_buf");
         }
         next.lower_end = ps.lower_end;
-        // the first position of the attention cache (the hybrid memory's seq_pos_min is the recurrent cell's position)
-        next.late_end  = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->seq_pos_min(seq_id);
+        next.late_end  = attn_min;
+    } else if (next.part == LLM_RIDGEFILL_PART_S1_FILL) {
+        if (ps.part != LLM_RIDGEFILL_PART_LOWER || ps.h_buf != p->h_buf || !lower_done) {
+            return refuse("S1_FILL follows a LOWER pass over the whole prompt, with the same h_buf");
+        }
+        if (p_end <= 0 || p_end > ps.lower_end) {
+            return refuse("S1_FILL needs a fill end (llama_ridgefill_seq_set) inside the prompt");
+        }
+        next.lower_end = ps.lower_end;
+        next.late_end  = attn_min;
+    } else {
+        if (ps.part != LLM_RIDGEFILL_PART_S1_FILL || ps.late_end != p_end || ps.h_buf != p->h_buf) {
+            return refuse("S1_PROBE follows a complete S1_FILL of [0, p_end), with the same h_buf");
+        }
+        if (p->s1_begin < p_end) {
+            return refuse("the S1 window must lie in the exact tail (s1_begin >= p_end): blind selection or a window "
+                          "longer than the tail is not supported");
+        }
+        if (p->s1_end > ps.lower_end || p->s1_begin >= p->s1_end) {
+            return refuse("the S1 window must be a non-empty range of the prompt's LOWER rows");
+        }
+        next.lower_end = ps.lower_end;
+        next.late_end  = p->s1_begin;
+        next.s1_begin  = p->s1_begin;
+        next.s1_end    = p->s1_end;
+        ridgefill_s1_mass[seq_id].assign(p_end, 0.0);
+        ridgefill_s1_mass_ok[seq_id] = false;
     }
 
     for (int32_t k = 0; k < p->n_win_layers; ++k) {
@@ -1652,6 +1694,43 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
     ps = std::move(next);
 
     return 0;
+}
+
+int32_t llama_context::ridgefill_seq_get_s1_mass(llama_seq_id seq_id, double * out, int32_t n) const {
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ || !ridgefill_s1_mass_ok[seq_id]) {
+        LLAMA_LOG_ERROR("%s: seq_id %d: no complete S1 probe\n", __func__, seq_id);
+        return -1;
+    }
+    const auto & m = ridgefill_s1_mass[seq_id];
+    if (!out || n < (int32_t) m.size()) {
+        LLAMA_LOG_ERROR("%s: seq_id %d: the output needs room for %zu values\n", __func__, seq_id, m.size());
+        return -1;
+    }
+    std::copy(m.begin(), m.end(), out);
+    return (int32_t) m.size();
+}
+
+int32_t llama_context::ridgefill_seq_set_vtail(llama_seq_id seq_id, bool enabled, int32_t rows) {
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ || rows < 1) {
+        LLAMA_LOG_ERROR("%s: seq_id %d: vtail refused (rows %d must be >= 1)\n", __func__, seq_id, rows);
+        return -1;
+    }
+    ridgefill_vtail[seq_id].on   = enabled;
+    ridgefill_vtail[seq_id].rows = rows;
+    ridgefill_vtail[seq_id].scales.clear();
+    return 0;
+}
+
+int32_t llama_context::ridgefill_seq_get_vtail_scales(llama_seq_id seq_id, float * out, int32_t n) const {
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ || ridgefill_vtail[seq_id].scales.empty()) {
+        return -1;
+    }
+    const auto & s = ridgefill_vtail[seq_id].scales;
+    if (!out || n < (int32_t) s.size()) {
+        return -1;
+    }
+    std::copy(s.begin(), s.end(), out);
+    return (int32_t) s.size();
 }
 
 bool llama_context::ridgefill_check_parts(const llama_batch_ext & batch_inp, bool & replay) const {
@@ -1680,13 +1759,21 @@ bool llama_context::ridgefill_check_parts(const llama_batch_ext & batch_inp, boo
             if (nxt < 0) {
                 nxt = ps.part == LLM_RIDGEFILL_PART_LOWER ? ps.lower_end : ps.late_end;
             }
-            if (tok.pos[0] != nxt || nxt >= ps.h_buf->ne[1] || (ps.part == LLM_RIDGEFILL_PART_LATE && nxt >= ps.lower_end)) {
-                LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill sweep rows must arrive in order (expected pos %d, got %d) and fit "
-                        "h_buf (%lld rows)%s\n", __func__, s, nxt, tok.pos[0], (long long) ps.h_buf->ne[1],
-                        ps.part == LLM_RIDGEFILL_PART_LATE ? ", and LATE replays only the rows LOWER processed" : "");
+            // the replay parts' row ranges: LATE [.., LOWER rows), S1_FILL [0, p_end), S1_PROBE [s1_begin, s1_end)
+            const llama_pos bound = ps.part == LLM_RIDGEFILL_PART_LATE     ? ps.lower_end :
+                                    ps.part == LLM_RIDGEFILL_PART_S1_FILL  ? ridgefill_p_end[s] :
+                                    ps.part == LLM_RIDGEFILL_PART_S1_PROBE ? ps.s1_end : (llama_pos) ps.h_buf->ne[1];
+            if (tok.pos[0] != nxt || nxt >= ps.h_buf->ne[1] || nxt >= bound) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill sweep rows must arrive in order (expected pos %d, got %d) and stay "
+                        "inside the part's range (end %d) and h_buf (%lld rows)\n", __func__, s, nxt, tok.pos[0], bound,
+                        (long long) ps.h_buf->ne[1]);
                 return false;
             }
             ++nxt;
+            if ((ps.part == LLM_RIDGEFILL_PART_S1_FILL || ps.part == LLM_RIDGEFILL_PART_S1_PROBE) && tok.output) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: an S1 row cannot be an output (no output head)\n", __func__, s);
+                return false;
+            }
             if (ps.part == LLM_RIDGEFILL_PART_LOWER) {
                 if (tok.output) {
                     LLAMA_LOG_ERROR("%s: seq_id %d: a RidgeFill LOWER row cannot be an output (no output head)\n", __func__, s);
@@ -1712,6 +1799,42 @@ bool llama_context::ridgefill_check_parts(const llama_batch_ext & batch_inp, boo
     if (seq_late >= 0 && (other || seq_lower >= 0)) {
         LLAMA_LOG_ERROR("%s: seq_id %d: a RidgeFill LATE batch (a replay) holds the LATE rows of one sequence only\n", __func__, seq_late);
         return false;
+    }
+
+    // vtail: the first tail ubatch of a LATE replay holds >= c_eff rows; a single-pass tail is refused
+    for (llama_seq_id s = 0; s < LLAMA_MAX_SEQ; ++s) {
+        const auto & vt = ridgefill_vtail[s];
+        const llama_pos p_end = ridgefill_p_end[s];
+        if (!vt.on || p_end <= 0) {
+            continue;
+        }
+        int32_t n_first = 0;
+        bool    tail    = false;
+        for (const auto & tok : batch_inp.tokens) {
+            if (tok.seq_ids.size() != 1 || *tok.seq_ids.begin() != s || tok.pos[0] < p_end) {
+                continue;
+            }
+            tail = true;
+            if (tok.pos[0] == p_end + n_first) {
+                ++n_first;
+            }
+        }
+        if (!tail) {
+            continue;
+        }
+        const auto & ps = ridgefill_part[s];
+        if (ps.part == LLM_RIDGEFILL_PART_FULL) {
+            LLAMA_LOG_ERROR("%s: seq_id %d: vtail requires the two-sweep flow (a LATE replay), not a single-pass tail\n", __func__, s);
+            return false;
+        }
+        if (ps.part == LLM_RIDGEFILL_PART_LATE && n_first > 0) {
+            const int32_t c_eff = std::min<int32_t>(vt.rows, ps.lower_end - p_end);
+            if (n_first < c_eff || (int32_t) cparams.n_ubatch < c_eff) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: vtail needs the first tail ubatch to hold %d rows from pos %d (batch has %d, "
+                        "n_ubatch %u)\n", __func__, s, c_eff, p_end, n_first, cparams.n_ubatch);
+                return false;
+            }
+        }
     }
 
     replay = seq_late >= 0;
@@ -1753,12 +1876,24 @@ llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_uba
     res.rf    = ridgefill;
     res.p_end = ridgefill_p_end.data();
 
-    if (fill) {
+    if (fill && ps.part == LLM_RIDGEFILL_PART_S1_FILL) {
+        // S1 pass 1: the speed fill of the late attention layers (no exact rows, no GDN, no correction)
+        res.fill         = LLM_RIDGEFILL_FILL_BULK;
+        res.s1_attn_only = true;
+    } else if (fill) {
         res.n_rows   = llama_ridgefill_ubatch_rows(ubatch, ridgefill_rows.data(), nullptr);
         res.fill     = res.n_rows > 0 ? LLM_RIDGEFILL_FILL_MASKED : LLM_RIDGEFILL_FILL_BULK;
         res.correct  = ridgefill_correct(ubatch);
         res.alpha    = res.correct ? ridgefill_alpha : 0.0f;
         res.rows_seq = res.n_rows > 0 ? ridgefill_rows.data() : nullptr;
+    }
+
+    res.s1_probe = ps.part == LLM_RIDGEFILL_PART_S1_PROBE;
+
+    const auto & vt = ridgefill_vtail[seq];
+    if (ps.part == LLM_RIDGEFILL_PART_LATE && !fill && vt.on && ridgefill_p_end[seq] > 0 && ubatch.pos[0] == ridgefill_p_end[seq]) {
+        res.vtail_rows = std::min<int32_t>(vt.rows, ps.lower_end - ridgefill_p_end[seq]);
+        res.rows_vtail = &ridgefill_rows[seq];
     }
 
     if (ps.part != LLM_RIDGEFILL_PART_FULL) {
@@ -2270,7 +2405,12 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
 
     while (true) {
         if (rf_replay) {
-            mctx = static_cast<llama_memory_hybrid *>(memory.get())->init_replay(*balloc, cparams.n_ubatch);
+            // an S1 probe starts the late GDN layers from zero at its window's first row
+            std::array<llama_pos, LLAMA_MAX_SEQ> zero_pos;
+            for (int s = 0; s < LLAMA_MAX_SEQ; ++s) {
+                zero_pos[s] = ridgefill_part[s].part == LLM_RIDGEFILL_PART_S1_PROBE ? ridgefill_part[s].s1_begin : -1;
+            }
+            mctx = static_cast<llama_memory_hybrid *>(memory.get())->init_replay(*balloc, cparams.n_ubatch, zero_pos.data());
             if (mctx->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
                 LLAMA_LOG_ERROR("%s: RidgeFill LATE replay: the batch's positions are not all in the memory\n", __func__);
                 return -1;
@@ -2406,9 +2546,36 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 auto & ps = ridgefill_part[ubatch.seq_id[i][0]];
                 if (ps.part == LLM_RIDGEFILL_PART_LOWER) {
                     ps.lower_end = std::max(ps.lower_end, ubatch.pos[i] + 1);
-                } else if (ps.part == LLM_RIDGEFILL_PART_LATE) {
+                } else if (ps.part != LLM_RIDGEFILL_PART_FULL) {
                     ps.late_end  = std::max(ps.late_end,  ubatch.pos[i] + 1);
                 }
+            }
+
+            const llama_seq_id seq = ubatch.seq_id[0][0];
+
+            // S1 probe: the ubatch's attention mass per KV cell, added to the sequence's prefix positions
+            if (res->t_rf_mass) {
+                ggml_backend_sched_synchronize(sched.get());
+                std::vector<float> mass(ggml_nelements(res->t_rf_mass));
+                ggml_backend_tensor_get(res->t_rf_mass, mass.data(), 0, mass.size()*sizeof(float));
+                std::vector<llama_pos> cell_pos;
+                static_cast<const llama_memory_hybrid_context *>(mctx.get())->get_attn()->get_cell_pos(seq, cell_pos);
+                auto & acc = ridgefill_s1_mass[seq];
+                for (size_t c = 0; c < cell_pos.size() && c < mass.size(); ++c) {
+                    if (cell_pos[c] >= 0 && cell_pos[c] < (llama_pos) acc.size()) {
+                        acc[cell_pos[c]] += mass[c];
+                    }
+                }
+                const auto & ps = ridgefill_part[seq];
+                ridgefill_s1_mass_ok[seq] = ps.part == LLM_RIDGEFILL_PART_S1_PROBE && ps.late_end == ps.s1_end;
+            }
+
+            // vtail: the scales the first tail ubatch applied
+            if (res->t_rf_vtail) {
+                ggml_backend_sched_synchronize(sched.get());
+                auto & sc = ridgefill_vtail[seq].scales;
+                sc.resize(ggml_nelements(res->t_rf_vtail));
+                ggml_backend_tensor_get(res->t_rf_vtail, sc.data(), 0, sc.size()*sizeof(float));
             }
         }
 

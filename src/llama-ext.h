@@ -171,9 +171,11 @@ LLAMA_API void llama_set_ridgefill(struct llama_context * ctx, const struct llam
 // decodes that use them have finished. One sweep sequence per batch; a LATE batch holds LATE rows of one sequence only.
 // Returns 0, or < 0 refused (logged by name). Qwen3.5 (qwen35) only.
 enum llama_ridgefill_part {
-    LLAMA_RIDGEFILL_PART_FULL  = 0,
-    LLAMA_RIDGEFILL_PART_LOWER = 1,
-    LLAMA_RIDGEFILL_PART_LATE  = 2,
+    LLAMA_RIDGEFILL_PART_FULL     = 0,
+    LLAMA_RIDGEFILL_PART_LOWER    = 1,
+    LLAMA_RIDGEFILL_PART_LATE     = 2,
+    LLAMA_RIDGEFILL_PART_S1_FILL  = 3, // API v2: the late attention layers' K/V of the prefix [0, p_end) from the fill
+    LLAMA_RIDGEFILL_PART_S1_PROBE = 4, // API v2: the window [s1_begin, s1_end) through the late layers; S1 mass
 };
 
 struct llama_ridgefill_part_params {
@@ -185,12 +187,35 @@ struct llama_ridgefill_part_params {
     struct ggml_tensor * const * win_bufs;
     llama_pos                   win_begin;
     int32_t                     win_n;
+
+    llama_pos                   s1_begin; // S1_PROBE: the window [s1_begin, s1_end), API v2
+    llama_pos                   s1_end;
 };
 
 LLAMA_API struct llama_ridgefill_part_params llama_ridgefill_part_default_params(void);
 
 LLAMA_API int32_t llama_ridgefill_seq_set_part(struct llama_context * ctx, llama_seq_id seq_id,
         const struct llama_ridgefill_part_params * params);
+
+// API version: 1 = everything before the S1 selector (implicit), 2 = S1_FILL / S1_PROBE, the S1 mass, vtail
+// (RF27-INTERFACE.md "Addition 2026-10-21"). Callers check at build time and at run time.
+#define LLAMA_RIDGEFILL_API_VERSION 2
+LLAMA_API int32_t llama_ridgefill_api_version(void);
+
+// the S1 window's attention mass of positions [0, p_end): summed over the late attention layers, all query heads and
+// the window queries of softmax(q . k / sqrt(d)) over the visible cells (the prefix as S1_FILL filled it + the window
+// rows, causal). Copies p_end values to out (room for n); returns p_end, < 0 if the probe of seq is not complete.
+LLAMA_API int32_t llama_ridgefill_seq_get_s1_mass(struct llama_context * ctx, llama_seq_id seq_id, double * out, int32_t n);
+
+// vtail for seq (default off, rows 512): the first tail ubatch of its LATE replay (starting at p_end) scales the cached
+// V of the bulk prefix rows of every late attention layer by s_h = mean over tail rows [p_end, p_end + c_eff) of
+// ||V_true|| / ||V_fill|| per KV head, c_eff = min(rows, N - p_end), before that layer's tail attention; exact rows keep
+// their V. That ubatch must hold >= c_eff rows (else llama_decode refuses it); a single-pass tail with vtail on is
+// refused. Per prompt: llama_ridgefill_seq_set resets vtail to off. Returns 0, < 0 refused (rows < 1).
+LLAMA_API int32_t llama_ridgefill_seq_set_vtail(struct llama_context * ctx, llama_seq_id seq_id, bool enabled, int32_t rows);
+
+// the scales applied: [n_late_attn_layers][n_head_kv] row-major into out (room for n); returns the count, < 0 if none yet
+LLAMA_API int32_t llama_ridgefill_seq_get_vtail_scales(struct llama_context * ctx, llama_seq_id seq_id, float * out, int32_t n);
 
 // recurrent rollback (n_rs_seq > 0): a filled ubatch never holds exact tokens, so the snapshots of a decode whose exact
 // run is shorter than n_rs_seq + 1 cover only that run; roll back only into the tokens of the last exact ubatch (as

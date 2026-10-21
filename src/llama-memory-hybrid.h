@@ -56,7 +56,8 @@ public:
     // and the recurrent cell keep their metadata (see llama_kv_cache::find_slot_replay, llama_memory_recurrent)
     llama_memory_context_ptr init_replay(
             llama_batch_allocr & balloc,
-            uint32_t n_ubatch);
+            uint32_t n_ubatch,
+            const llama_pos * zero_pos = nullptr); // [LLAMA_MAX_SEQ] or null; -1: zero at the cache's first position
 
     llama_memory_context_ptr init_full() override;
 

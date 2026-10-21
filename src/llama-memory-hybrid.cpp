@@ -122,7 +122,7 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
     return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 }
 
-llama_memory_context_ptr llama_memory_hybrid::init_replay(llama_batch_allocr & balloc, uint32_t n_ubatch) {
+llama_memory_context_ptr llama_memory_hybrid::init_replay(llama_batch_allocr & balloc, uint32_t n_ubatch, const llama_pos * zero_pos) {
     balloc.split_reset();
 
     std::vector<llama_ubatch> ubatches;
@@ -142,8 +142,11 @@ llama_memory_context_ptr llama_memory_hybrid::init_replay(llama_batch_allocr & b
             return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
         }
 
-        // the replay starts the sequence: the late layers' recurrent states start from zero
-        zero.push_back(ubatch.pos[0] == mem_attn->seq_pos_min(ubatch.seq_id[0][0]));
+        // the replay starts the sequence (or the caller's zero position, e.g. an S1 window): the late layers'
+        // recurrent states start from zero
+        const llama_seq_id seq = ubatch.seq_id[0][0];
+        const llama_pos    z   = zero_pos && zero_pos[seq] >= 0 ? zero_pos[seq] : mem_attn->seq_pos_min(seq);
+        zero.push_back(ubatch.pos[0] == z);
 
         sinfos.push_back(std::move(sinfo));
         ubatches.push_back(std::move(ubatch)); // NOLINT
