@@ -2,6 +2,17 @@
 
 `llama-ridgefill-score` reads token IDs and runs one whole-document prefill per document. It does not tokenize, sample, or send HTTP requests. `off`, `speed`, and `quality` use normal decode batches; `quality+qattn` uses the same LOWER / question mass / selected-row LATE prefix / exact LATE tail driver as the server. The model and context stay loaded across documents, with memory cleared between them.
 
+Run the examples from the repository root. Set these input paths to your local files as needed:
+
+```sh
+MODEL=/path/to/model.gguf
+PROJ=/path/to/projector.gguf
+DOCS=/path/to/nll.jsonl
+KVA=/path/to/kva-wt-q27
+FIXTURE=/path/to/tools-checkout/out/gate1-qwen35
+S1_REF=/path/to/s1-vtail-references
+```
+
 Build in the configured CPU, HIP, Vulkan, or CUDA build directory:
 
 ```sh
@@ -47,10 +58,10 @@ From the merged checkout, with its configured GPU build named `build` and its GP
 ```sh
 python3 tools/ridgefill/run_nll.py \
   --binary build/bin/llama-ridgefill-score \
-  --model /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf \
-  --projector /var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf \
-  --docs /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/evaldata/nll.jsonl \
-  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --model "$MODEL" \
+  --projector "$PROJ" \
+  --docs "$DOCS" \
+  --kva "$KVA" \
   --out out/g3-native-nll \
   --length 16384 --scored 512 --tail 4096 --limit 8 \
   --gpu-layers 99 --threads 4 --batch 512 --ubatch 512 \
@@ -63,8 +74,8 @@ For a single native arm on an already prepared token file:
 
 ```sh
 build/bin/llama-ridgefill-score \
-  --model /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf \
-  --projector /var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf \
+  --model "$MODEL" \
+  --projector "$PROJ" \
   --input tokens.jsonl --output scores.jsonl --mode quality+qattn \
   --scored 512 --tail 4096 --qattn-window-end known --gpu-layers 99
 ```
@@ -79,8 +90,8 @@ c++ -std=c++17 -O2 -I include -I src -I ggml/include \
   -lllama -lggml -lggml-base -o build/score-stock-dump
 python3 tools/ridgefill/check_score.py \
   --binary build/bin/llama-ridgefill-score \
-  --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 \
-  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --fixture "$FIXTURE" \
+  --kva "$KVA" \
   --stock-dump build/score-stock-dump --work build/score-gate
 ```
 
@@ -92,8 +103,8 @@ The chat gate needs a pre-chat scorer binary built at d619c13d6 (save it before 
 python3 tools/ridgefill/check_chat_score.py \
   --binary build/bin/llama-ridgefill-score \
   --baseline-binary build/bin/llama-ridgefill-score-before-chat \
-  --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 \
-  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --fixture "$FIXTURE" \
+  --kva "$KVA" \
   --work build/score-chat-gate
 ```
 
@@ -129,9 +140,9 @@ python3 tools/ridgefill/check_s1_score.py \
   --binary build/bin/llama-ridgefill-score \
   --baseline-binary build/bin/llama-ridgefill-score-before-s1 \
   --native-dump build/rf-dump-s1 \
-  --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 \
-  --reference /var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail \
-  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --fixture "$FIXTURE" \
+  --reference "$S1_REF" \
+  --kva "$KVA" \
   --work build/score-s1-gate
 ```
 
