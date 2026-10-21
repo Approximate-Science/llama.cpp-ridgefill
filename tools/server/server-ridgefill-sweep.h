@@ -54,7 +54,7 @@ private:
     std::vector<double> mass;
     std::vector<llama_pos> rows;
     std::vector<int32_t> layers;
-    std::vector<std::vector<float>> windows;
+    std::vector<std::unique_ptr<llama_ridgefill_sweep_buffer>> windows;
 
     void sweep_lower(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void question_mass(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params);

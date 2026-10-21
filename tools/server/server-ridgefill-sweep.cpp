@@ -49,56 +49,39 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
                 throw std::runtime_error("RidgeFill quality+qattn: question layer is not an attention layer");
             }
             layers.push_back(il);
-            windows.emplace_back(size_t(end - start) * params.n_embd);
+            windows.push_back(std::make_unique<llama_ridgefill_sweep_buffer>(model.select_buft(il),
+                    params.n_embd, end - start, GGML_TYPE_F32));
         }
         if (layers.empty()) {
             throw std::runtime_error("RidgeFill quality+qattn: split has no lower attention layers");
         }
         hidden = std::make_unique<llama_ridgefill_sweep_buffer>(model.select_buft(params.split),
                 params.n_embd, params.n_tokens, params.type, params.max_bytes);
-        if (llama_ridgefill_seq_set_part(ctx, seq, LLAMA_RIDGEFILL_PART_LOWER, hidden->tensor()) < 0) {
+        std::vector<ggml_tensor *> buffers;
+        for (const auto & window : windows) { buffers.push_back(window->tensor()); }
+        auto part = llama_ridgefill_part_default_params();
+        part.part = LLAMA_RIDGEFILL_PART_LOWER;
+        part.h_buf = hidden->tensor();
+        part.n_win_layers = layers.size();
+        part.win_layers = layers.data();
+        part.win_bufs = buffers.data();
+        part.win_begin = start;
+        part.win_n = end - start;
+        if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
             throw std::runtime_error("RidgeFill quality+qattn: LOWER part was refused");
         }
         active = true;
     }
     const int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), params.n_tokens - position});
-    const int32_t first = position;
-    const bool capture = first < end && first + count > start;
-    std::vector<int32_t> enabled;
-    if (capture) {
-        for (int32_t il : layers) {
-            if (!ctx->get_cparams().embeddings_layer_inp[il]) {
-                llama_set_embeddings_layer_inp(ctx, il, true);
-                enabled.push_back(il);
-            }
-        }
-    }
-    try {
-        decode(ctx, seq, tokens, count, false, false);
-        n_lower = position;
-        if (capture) {
-            const int32_t from = std::max(first, start);
-            const int32_t to = std::min(position, end);
-            for (size_t i = 0; i < layers.size(); ++i) {
-                const auto * input = llama_get_embeddings_layer_inp(ctx, layers[i]);
-                if (!input) {
-                    throw std::runtime_error("RidgeFill quality+qattn: LOWER query input is missing");
-                }
-                std::copy(input + size_t(from - first) * params.n_embd, input + size_t(to - first) * params.n_embd,
-                        windows[i].data() + size_t(from - start) * params.n_embd);
-            }
-        }
-    } catch (...) {
-        for (int32_t il : enabled) { llama_set_embeddings_layer_inp(ctx, il, false); }
-        throw;
-    }
-    for (int32_t il : enabled) { llama_set_embeddings_layer_inp(ctx, il, false); }
+    decode(ctx, seq, tokens, count, false, false);
+    n_lower = position;
 }
 
 void server_ridgefill_sweep::question_mass(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) {
+    std::vector<ggml_tensor *> buffers;
+    for (const auto & window : windows) { buffers.push_back(window->tensor()); }
     mass = llama_ridgefill_sweep_question_mass(*ctx, seq, params.n_tokens,
-            params.qattn_blind ? params.n_prefix : params.n_tokens, layers, windows);
-    windows.clear();
+            params.qattn_blind ? params.n_prefix : params.n_tokens, layers, buffers);
 }
 
 void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params) {
@@ -118,8 +101,11 @@ void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_row
 void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
     if (position == 0) {
+        auto part = llama_ridgefill_part_default_params();
+        part.part = LLAMA_RIDGEFILL_PART_LATE;
+        part.h_buf = hidden->tensor();
         if (llama_ridgefill_seq_set_rows(ctx, seq, rows.data(), rows.size()) < 0 ||
-                llama_ridgefill_seq_set_part(ctx, seq, LLAMA_RIDGEFILL_PART_LATE, hidden->tensor()) < 0) {
+                llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
             throw std::runtime_error("RidgeFill quality+qattn: exact rows or LATE part were refused");
         }
     }
@@ -139,11 +125,13 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
 }
 
 void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq_id seq) {
-    if (llama_ridgefill_seq_set_part(ctx, seq, LLAMA_RIDGEFILL_PART_FULL, nullptr) < 0) {
+    llama_synchronize(ctx);
+    if (llama_ridgefill_seq_set_part(ctx, seq, nullptr) < 0) {
         throw std::runtime_error("RidgeFill quality+qattn: completed replay could not reset FULL");
     }
     active = false;
     hidden.reset();
+    windows.clear();
     next = phase::done;
 }
 

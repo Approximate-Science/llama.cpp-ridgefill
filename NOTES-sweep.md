@@ -335,3 +335,26 @@ Applied the coordinator-approved lifecycle hunks in `tools/server/server-context
 `cmake --build build-sweep --target server-context -j4` and `git diff --check` pass. A local harness includes the actual server slot implementation and exercises prompt_clear, reset, release/callback ordering, and deferred completion. Its first cancellation passes, but restarting LOWER in the same context crashes in graph execution on the old proposal dispatch: `PASS slot lifecycle stage 0` followed by a crash at stage 1 step 1. No HTTP or completed lifecycle gate is claimed. The archive-linked native G1 control still passes. Logs: `build-sweep/build-lifecycle.log`, `check-slot-lifecycle-proposal.log`, `debug-slot-lifecycle.log`; harness: `build-sweep/check-slot-lifecycle.cpp` (ignored, for L-B to adopt).
 
 L-A has now committed its replacement dispatch (`78d4a2551`, new capture-buffer API and graph-generation key) and selector (`ff598e03d`). Next, rebase without the superseded proposal implementation, adapt the driver to the committed window API, then rerun this cancellation/reuse probe and the question-selected G1. This prevents carrying a second dispatch implementation beside L-A's. Original proposal `8de161386` remains the review reference. HTTP remains SKIPPED until the common selector helper and guarded server hook are present. No push or external writes.
+
+## 2026-10-20 19:15: engine dispatch adopted; cancellation/reuse gate passes
+
+Rebased onto `rf27-engine` `ff598e03d` (dispatch `78d4a2551` and class/digit selector). Dropped the superseded implementation from proposal `8de161386`, retaining its evidence above; no L-A production files are changed by this lane. The lifecycle commit is now `643903107` (previously `db2a6cabf`). Rebase conflicts were limited to this lane's sweep files and notes; removed the old replay subclass/capture hooks and retained the runtime mass graph.
+
+Adapted the driver to `llama_ridgefill_part_params`: per-slot F32 device window buffers capture the lower layer inputs in the graph. The question graph reads those buffers directly, without host query-window transfers or context-wide extraction flags. FULL completion explicitly synchronizes before releasing h_S/windows. The buffers remain alive through replay/cancellation.
+
+```text
+[100%] Built target server-context
+PASS qattn and deferred-final-token G1 at b50/ub50, b128/ub128, b700/ub512:
+  mass relative error 2.659567080398772e-7; selected rows 217/217;
+  25 arrays; worst relative error 6.630082225456135e-7
+PASS wrong-projector control: mass/R unchanged; worst error 1.337659239768982
+PASS repeated qattn and qattn-share=0 versus quality: byte-identical at all three chunk sizes
+PASS slot lifecycle stage 0: live sequence cancelled, buffer freed, prompt cache excluded
+PASS slot lifecycle stage 1: live sequence cancelled, buffer freed, prompt cache excluded
+PASS slot lifecycle stage 2: live sequence cancelled, buffer freed, prompt cache excluded
+PASS cancelled-slot reuse: deferred completion caches byte-identical to G1; completed prompt cacheable
+```
+
+The slot probe includes the real `server-context.cpp` and uses one context across all four runs. Stage 0 calls prompt_clear after one LOWER ubatch; stage 1 calls reset after prefix replay; stage 2 calls release at deferred-final-token readiness and checks both callbacks see cleanup in the right order; stage 3 completes the deferred token and compares serialized caches byte-for-byte to the separate G1 run. The earlier restart crash occurred only with the now-dropped proposal; L-A's committed dispatch passes the same probe without a workaround.
+
+Commands: CPU `cmake --build build-sweep --target server-context -j4`; recompile/run `g1-sweep.cpp` and `g1-sweep-oracle.py` as above; compile `check-slot-lifecycle.cpp` with the server-context archive, common and mtmd dependencies; execute on the shared split-4 fixture. Logs: `build-sweep/build-engine-window.log`, `g1-sweep-engine-oracle.log`, `check-slot-lifecycle.log`, `build-slot-lifecycle.log`. `git diff --check` passes. HTTP remains SKIPPED: the common helper still refuses even though the libllama selector is now present. The guarded server hook is the next independent step.

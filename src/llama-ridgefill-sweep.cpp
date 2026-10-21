@@ -5,6 +5,7 @@
 #include "llama-impl.h"
 #include "llama-kv-cache.h"
 #include "llama-model.h"
+#include "llama-memory-hybrid.h"
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -18,20 +19,22 @@
 
 std::vector<double> llama_ridgefill_sweep_question_mass(
         llama_context & ctx, int32_t seq_id, int32_t n_tokens, int32_t window_end,
-        const std::vector<int32_t> & layers, const std::vector<std::vector<float>> & windows) {
+        const std::vector<int32_t> & layers, const std::vector<ggml_tensor *> & windows) {
     const auto & model = ctx.get_model();
     auto * hybrid = dynamic_cast<llama_memory_hybrid *>(ctx.get_memory());
     if (!hybrid || layers.empty() || layers.size() != windows.size() || n_tokens <= 0 || window_end <= 0 || window_end > n_tokens) {
         throw std::runtime_error("RidgeFill quality+qattn: invalid question window or hybrid cache");
     }
     const size_t width = model.hparams.n_embd;
-    const size_t count = windows[0].size() / width;
+    const size_t count = windows[0] ? windows[0]->ne[1] : 0;
     if (count == 0 || count > size_t(window_end)) {
         throw std::runtime_error("RidgeFill quality+qattn: empty or oversized question window");
     }
     for (size_t i = 0; i < layers.size(); ++i) {
         if (layers[i] < 0 || layers[i] >= (int32_t) model.hparams.n_layer() || model.hparams.is_recr(layers[i]) ||
-                windows[i].size() != count * width) {
+                !windows[i] || !windows[i]->buffer || windows[i]->type != GGML_TYPE_F32 ||
+                windows[i]->ne[0] != int64_t(width) || windows[i]->ne[1] != int64_t(count) ||
+                windows[i]->ne[2] != 1 || windows[i]->ne[3] != 1 || !ggml_is_contiguous(windows[i])) {
             throw std::runtime_error("RidgeFill quality+qattn: question layer/window shape mismatch");
         }
     }
@@ -65,15 +68,14 @@ std::vector<double> llama_ridgefill_sweep_question_mass(
     ggml_set_input(row_input);
     ggml_set_input(positions);
     auto * rotation = cache.build_input_k_rot(g.ctx0);
-    std::vector<ggml_tensor *> inputs, outputs;
-    for (int32_t il : layers) {
-        auto * input = ggml_new_tensor_2d(g.ctx0, GGML_TYPE_F32, width, count);
-        ggml_set_input(input);
+    std::vector<ggml_tensor *> outputs;
+    for (size_t i = 0; i < layers.size(); ++i) {
+        const int32_t il = layers[i];
+        auto * input = windows[i];
         auto * keys = build_ridgefill_sweep_keys(g.ctx0, cache, seq_id, il, model.hparams.n_embd_head_k(il), row_input);
         auto * mass = build_ridgefill_question_mass(g, model.layers[il], input, positions, keys, window_end, il, rotation);
         ggml_set_output(mass);
         ggml_build_forward_expand(g.gf, mass);
-        inputs.push_back(input);
         outputs.push_back(mass);
     }
     ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(), nullptr, backends.size(), graph_size, false, true));
@@ -86,9 +88,6 @@ std::vector<double> llama_ridgefill_sweep_question_mass(
         pos[i] = window_end - count + i % count;
     }
     ggml_backend_tensor_set(positions, pos.data(), 0, pos.size() * sizeof(int32_t));
-    for (size_t i = 0; i < inputs.size(); ++i) {
-        ggml_backend_tensor_set(inputs[i], windows[i].data(), 0, windows[i].size() * sizeof(float));
-    }
     if (rotation) {
         cache.set_input_k_rot(rotation);
     }
