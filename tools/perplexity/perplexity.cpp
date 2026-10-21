@@ -2032,6 +2032,10 @@ int llama_perplexity(int argc, char ** argv) {
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
         return 1;
     }
+    if (params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail)) {
+        LOG_ERR("%s: S1/vtail requires the server/scorer two-sweep flow; unavailable in llama-perplexity\n", __func__);
+        return 1;
+    }
     if (params.ridgefill_mode == "quality+qattn") {
         LOG_ERR("%s: --ridgefill-mode quality+qattn requires the server's question-attention sweep\n", __func__);
         return 1;

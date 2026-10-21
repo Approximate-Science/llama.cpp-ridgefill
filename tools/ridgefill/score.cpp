@@ -36,6 +36,9 @@ struct options {
     int32_t turn_cap = 256, header_rows = 0;
     int32_t threads = 4, batch = 512, ubatch = 512, ctx = 0, gpu_layers = 0;
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
+    int32_t s1_window = 0, vtail_rows = 512;
+    float s1_factor = 1.0f;
+    bool vtail = false;
     bool digits = true, special_exact = false, diagnostics = false;
 };
 
@@ -91,6 +94,15 @@ static options parse(int argc, char ** argv) {
                         "--qattn-window-end must be a positive row index, document or known");
             }
         }
+        else if (key == "--ridgefill-s1-window" || key == "--s1-window" || key == "--ridgefill-s1-factor" || key == "--s1-factor" ||
+                 key == "--ridgefill-vtail" || key == "--vtail" || key == "--ridgefill-vtail-rows" || key == "--vtail-rows") {
+            common_params selection;
+            common_ridgefill_set_option(selection, key.find("--ridgefill-") == 0 ? key : "--ridgefill-" + key.substr(2), value);
+            if (key == "--ridgefill-s1-window" || key == "--s1-window") { o.s1_window = selection.ridgefill_s1_window; }
+            if (key == "--ridgefill-s1-factor" || key == "--s1-factor") { o.s1_factor = selection.ridgefill_s1_factor; }
+            if (key == "--ridgefill-vtail" || key == "--vtail") { o.vtail = selection.ridgefill_vtail; }
+            if (key == "--ridgefill-vtail-rows" || key == "--vtail-rows") { o.vtail_rows = selection.ridgefill_vtail_rows; }
+        }
         else if (key == "--threads" || key == "-t") { o.threads = integer(value); }
         else if (key == "--batch" || key == "-b") { o.batch = integer(value); }
         else if (key == "--ubatch" || key == "-ub") { o.ubatch = integer(value); }
@@ -114,11 +126,16 @@ static options parse(int argc, char ** argv) {
     require(o.mode == "off" || o.tail > o.scored, "tail must exceed scored so the first prediction row is exact");
     require(o.flash == "off" || o.flash == "on" || o.flash == "auto", "invalid flash-attn mode");
     common_params selection;
+    selection.ridgefill_s1_window = o.s1_window;
+    selection.ridgefill_s1_factor = o.s1_factor;
+    selection.ridgefill_vtail = o.vtail;
+    selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_special_exact = o.special_exact;
     selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
     selection.ridgefill_qattn_turn_cap = o.turn_cap;
     common_ridgefill_validate_options(selection, o.mode);
+    common_ridgefill_require_api_v2(selection, o.mode);
     tensor_type(o.cache); tensor_type(o.hidden);
     return o;
 }
@@ -180,6 +197,10 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     common_params selection;
     selection.ridgefill_mode = o.mode; selection.ridgefill_share = o.share;
     selection.ridgefill_digits = o.digits; selection.ridgefill_alpha = o.alpha;
+    selection.ridgefill_s1_window = o.s1_window;
+    selection.ridgefill_s1_factor = o.s1_factor;
+    selection.ridgefill_vtail = o.vtail;
+    selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_special_exact = o.special_exact; selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
     selection.ridgefill_qattn_turn_cap = o.turn_cap;
@@ -258,6 +279,12 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
             {"alpha", o.alpha}, {"cache_type", o.cache}, {"h_type", o.hidden}, {"flash_attn", o.flash}}},
         {"prefills", 1}, {"wall_s", std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()},
         {"build", {{"commit", llama_commit()}, {"build", llama_build_number()}}}};
+    if (o.s1_window != 0 || o.s1_factor != 1 || o.vtail || o.vtail_rows != 512) {
+        result["parameters"]["s1_window"] = o.s1_window;
+        result["parameters"]["s1_factor"] = o.s1_factor;
+        result["parameters"]["vtail"] = o.vtail;
+        result["parameters"]["vtail_rows"] = o.vtail_rows;
+    }
     const auto report = common_ridgefill_get_report(model, rf, selection, doc.ids.data(), n, prefix, rows, o.mode,
             qattn ? sweep.window_begin() : -1, qattn ? sweep.window_end() : -1);
     result["ridgefill"] = json::parse(report.to_json().dump());
@@ -270,6 +297,7 @@ int main(int argc, char ** argv) {
         if (argc == 2 && std::string(argv[1]) == "--version") { llama_print_build_info("llama-ridgefill-score"); return 0; }
         if (argc == 2 && std::string(argv[1]) == "--help") {
             std::cout << "llama-ridgefill-score --model MODEL --projector GGUF --input JSON/JSONL --output JSONL [--mode off|speed|quality|quality+qattn]\n"
+                "S1/vtail: --ridgefill-s1-window 0 --ridgefill-s1-factor 1 --ridgefill-vtail off --ridgefill-vtail-rows 512\n"
                 "Defaults: --scored 512 --tail 4096 --min-prompt 8192 --share 0.5 --digits on --qattn-share 0.2 --qattn-window 64 --alpha 0\n"
                 "Chat: --special-exact on|off --header-rows K --qattn-window-mode last|turn --qattn-turn-cap N (defaults: off, 0, last, 256)\n"
                 "Aliases: --ridgefill-special-exact, --ridgefill-header-rows, --ridgefill-qattn-window-mode, --ridgefill-qattn-turn-cap.\n"

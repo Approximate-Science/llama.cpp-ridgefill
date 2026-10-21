@@ -82,6 +82,10 @@ struct task_params {
     int32_t ridgefill_header_rows = 0;
     std::string ridgefill_qattn_window_mode = "last";
     int32_t ridgefill_qattn_turn_cap = 256;
+    int32_t ridgefill_s1_window = 0;
+    float ridgefill_s1_factor = 1.0f;
+    bool ridgefill_vtail = false;
+    int32_t ridgefill_vtail_rows = 512;
 
     int64_t t_max_prompt_ms  = -1; // TODO: implement
     int64_t t_max_predict_ms = -1; // if positive, limit the generation phase to this time limit

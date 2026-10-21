@@ -59,6 +59,9 @@ def run(args):
                            "special_exact", "header_rows", "qattn_window_mode", "qattn_turn_cap",
                            "gpu_layers", "threads", "batch", "ubatch", "cache_type", "h_type", "flash_attn", "ctx_size"):
                 command += ["--" + option.replace("_", "-"), str(getattr(args, option))]
+            if args.s1_window != 0 or args.s1_factor != 1 or args.vtail != "off" or args.vtail_rows != 512:
+                for option in ("s1_window", "s1_factor", "vtail", "vtail_rows"):
+                    command += ["--ridgefill-" + option.replace("_", "-"), str(getattr(args, option))]
             commands.append(command)
             print(json.dumps(dict(stage="nll", mode=mode, documents=len(items), status="RUNNING")), flush=True)
             with (args.out / (mode + ".log")).open("w") as log:
@@ -143,6 +146,10 @@ def main():
     parser.add_argument("--limit", type=int)
     parser.add_argument("--tail", type=int, default=4096)
     parser.add_argument("--min-prompt", type=int, default=8192)
+    parser.add_argument("--ridgefill-s1-window", "--s1-window", dest="s1_window", type=int, default=0)
+    parser.add_argument("--ridgefill-s1-factor", "--s1-factor", dest="s1_factor", type=float, default=1.0)
+    parser.add_argument("--ridgefill-vtail", "--vtail", dest="vtail", choices=("on", "off"), default="off")
+    parser.add_argument("--ridgefill-vtail-rows", "--vtail-rows", dest="vtail_rows", type=int, default=512)
     parser.add_argument("--share", type=float, default=0.5)
     parser.add_argument("--digits", choices=("on", "off"), default="on")
     parser.add_argument("--alpha", type=float, default=0)
@@ -159,6 +166,10 @@ def main():
     parser.add_argument("--flash-attn", choices=("off", "on", "auto"), default="auto")
     parser.add_argument("--timeout", type=float, default=7200)
     args = parser.parse_args()
+    if not (0 <= args.s1_window <= 2147483647 and 1 <= args.vtail_rows <= 2147483647 and math.isfinite(args.s1_factor) and args.s1_factor >= 0):
+        parser.error("invalid --ridgefill-s1-window/--ridgefill-s1-factor/--ridgefill-vtail-rows")
+    if (args.s1_window > 0 or args.vtail == "on") and args.mode not in ("off", "quality+qattn"):
+        parser.error("S1/vtail requires the quality+qattn two-sweep flow")
     if args.header_rows < 0:
         parser.error("--header-rows must be nonnegative")
     if args.mode == "speed" and (args.special_exact == "on" or args.header_rows > 0):

@@ -552,6 +552,10 @@ struct common_params {
     int32_t     ridgefill_header_rows = 0;
     std::string ridgefill_qattn_window_mode = "last";
     int32_t ridgefill_qattn_turn_cap = 256;
+    int32_t ridgefill_s1_window = 0;
+    float ridgefill_s1_factor = 1.0f;
+    bool ridgefill_vtail = false;
+    int32_t ridgefill_vtail_rows = 512;
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
     int32_t control_vector_layer_start = -1; // layer range for control vector
@@ -1041,6 +1045,8 @@ bool common_ridgefill_mode_valid(const std::string & mode);
 void common_ridgefill_set_option(common_params & params, const std::string & option, const std::string & value);
 void common_ridgefill_resolve(common_params & params, const struct llama_ridgefill * rf);
 void common_ridgefill_validate_options(const common_params & params, const std::string & mode = "");
+void common_ridgefill_require_api_v2(const common_params & params, const std::string & mode = "");
+void common_ridgefill_validate_sweep(const common_params & params, int32_t n_prompt, int32_t n_prefix, int32_t selector_end, int32_t n_ubatch);
 // Class/digit/special/header base rows for quality modes; the sweep caller adds question-attention rows.
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const struct llama_ridgefill * rf,
         const llama_token * tokens, int32_t n_prefix, const std::string & mode = "");
@@ -1053,16 +1059,29 @@ struct common_ridgefill_report {
     int32_t n_prefix = 0;
     int32_t n_exact_prefix = 0;
     int32_t n_cached_exact_prefix = 0;
-    std::array<int32_t, 5> exact_by_source = {}; // class, digit, special, header, qattn; disjoint in this order
+    std::array<int32_t, 6> exact_by_source = {}; // class, digit, special, header, qattn, s1; disjoint
     double macs_exact = 0;
     double macs_ridgefill = 0;
+    double macs_s1_fill = 0;
+    double macs_s1_probe = 0;
+    double macs_vtail = 0;
+    int32_t s1_begin = -1;
+    int32_t s1_end = -1;
+    int32_t vtail_rows = 0;
 
     common_json to_json() const;
 };
 
+// Completed sweep work, supplied by the driver; bounds exclude masked tail rows in the S1 probe.
+struct common_ridgefill_sweep_report {
+    int32_t s1_begin = -1;
+    int32_t s1_end = -1;
+    int32_t vtail_rows = 0;
+};
+
 common_ridgefill_report common_ridgefill_get_report(const llama_model * model, const llama_ridgefill * rf,
         const common_params & params, const llama_token * tokens, int32_t n_prompt, int32_t n_prefix,
-        const std::vector<llama_pos> & rows, const std::string & mode, int32_t window_begin = -1, int32_t window_end = -1, int32_t filled_begin = 0, int32_t filled_end = -1);
+        const std::vector<llama_pos> & rows, const std::string & mode, int32_t window_begin = -1, int32_t window_end = -1, int32_t filled_begin = 0, int32_t filled_end = -1, const common_ridgefill_sweep_report * sweep = nullptr);
 
 // model endpoint from env
 std::string common_get_model_endpoint();

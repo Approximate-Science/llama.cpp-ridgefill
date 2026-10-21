@@ -903,7 +903,16 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
-    if (!params.ridgefill_path.empty()) { common_ridgefill_validate_options(params); }
+    if (params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail) && params.ridgefill_path.empty()) {
+        throw std::invalid_argument("RidgeFill: S1/vtail requires --ridgefill PROJECTOR");
+    }
+    if (!params.ridgefill_path.empty()) {
+        common_ridgefill_validate_options(params);
+        if (ctx_arg.ex == LLAMA_EXAMPLE_CLI && params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail)) {
+            throw std::invalid_argument("S1/vtail requires the server/scorer two-sweep flow; unavailable in llama-cli");
+        }
+        common_ridgefill_require_api_v2(params);
+    }
     if ((ctx_arg.ex == LLAMA_EXAMPLE_CLI || ctx_arg.ex == LLAMA_EXAMPLE_PERPLEXITY) && params.embedding) {
         throw std::invalid_argument("--embeddings is not supported by this tool");
     }
@@ -3071,6 +3080,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--ridgefill-qattn-turn-cap", "--qattn-turn-cap"}, "N", "RidgeFill: maximum question rows from the last user turn (default: 256)",
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-qattn-turn-cap", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-s1-window"}, "W", "RidgeFill: late attention probe window rows (0: off; use 256 to enable)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-s1-window", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-s1-factor"}, "F", "RidgeFill: S1 exact-row budget factor (default: 1.0)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-s1-factor", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-vtail"}, "on|off", "RidgeFill: rescale bulk V from the first exact tail rows (default: off)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-vtail", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-vtail-rows"}, "C", "RidgeFill: rows used to measure V rescaling (default: 512)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-vtail-rows", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--ridgefill-alpha"}, "N", "RidgeFill: correction scale in [0, 1] (default: projector)",

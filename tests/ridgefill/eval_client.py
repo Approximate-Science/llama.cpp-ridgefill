@@ -117,10 +117,25 @@ def validate_ridgefill_report(report: dict | None, n_prompt: int, mode: str) -> 
             report["n_prefix"] + report["n_exact_tail"] != n_prompt):
         raise EvalError("RidgeFill report row counts do not cover the prompt")
     sources = report.get("n_exact_prefix_by_source", {})
-    if (not isinstance(sources, dict) or set(sources) != {"class", "digit", "special", "header", "qattn"} or
+    if (not isinstance(sources, dict) or set(sources) not in ({"class", "digit", "special", "header", "qattn"}, {"class", "digit", "special", "header", "qattn", "s1"}) or
             any(type(value) is not int or value < 0 for value in sources.values()) or
             sum(sources.values()) + report["n_cached_exact_prefix"] != report["n_exact_prefix"]):
         raise EvalError("RidgeFill report exact-row breakdown does not match its total")
+    if ("s1" in sources) != ("s1" in report):
+        raise EvalError("S1 reporting needs both source counts and completed probe costs")
+    if "s1" in report:
+        s1 = report["s1"]
+        window = s1.get("window") if isinstance(s1, dict) else None
+        if (not isinstance(window, list) or len(window) != 2 or any(type(row) is not int for row in window) or
+                not report["n_prefix"] <= window[0] < window[1] <= n_prompt or s1.get("fill_recomputed") is not True or
+                any(sources[key] != 0 for key in ("class", "digit", "header", "qattn")) or
+                any(type(s1.get(key)) not in (int, float) or not math.isfinite(s1[key]) or s1[key] < 0 for key in ("macs_fill", "macs_probe"))):
+            raise EvalError("invalid S1 window/source/cost reporting")
+    if "vtail" in report:
+        vtail = report["vtail"]
+        if (not isinstance(vtail, dict) or type(vtail.get("rows")) is not int or not 0 < vtail["rows"] <= report["n_exact_tail"] or
+                type(vtail.get("macs_measure")) not in (int, float) or not math.isfinite(vtail["macs_measure"]) or vtail["macs_measure"] < 0):
+            raise EvalError("invalid vtail measurement/cost reporting")
     for name in ("tokens_skipped", "mac_share_skipped"):
         if type(report.get(name)) not in (int, float) or not math.isfinite(report[name]):
             raise EvalError("RidgeFill report has missing or nonfinite fractions/MACs")
@@ -235,8 +250,11 @@ def reporting_summary(records: list[dict], arm: str) -> dict | None:
         raise EvalError("paired measurements contain missing RidgeFill reports")
     totals = {key: sum(report[key] for report in reports)
               for key in ("n_prompt", "n_prefix", "n_filled", "n_exact_prefix", "n_cached_exact_prefix", "n_exact_tail")}
-    totals["n_exact_prefix_by_source"] = {key: sum(report["n_exact_prefix_by_source"][key] for report in reports)
-                                          for key in ("class", "digit", "special", "header", "qattn")}
+    source_keys = ("class", "digit", "special", "header", "qattn")
+    if any("s1" in report["n_exact_prefix_by_source"] for report in reports):
+        source_keys += ("s1",)
+    totals["n_exact_prefix_by_source"] = {key: sum(report["n_exact_prefix_by_source"].get(key, 0) for report in reports)
+                                          for key in source_keys}
     totals["tokens_skipped"] = totals["n_filled"] / totals["n_prompt"] if totals["n_prompt"] else 0.0
     available = all(report.get("macs_exact") is not None and report.get("macs_ridgefill") is not None for report in reports)
     totals["macs_exact"] = sum(report["macs_exact"] for report in reports) if available else None

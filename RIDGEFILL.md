@@ -160,6 +160,10 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-header-rows K` | 0 | keep the next K prefix rows after each special token exact, independently of special-exact |
 | `--ridgefill-qattn-window-mode last\|turn` | last | last uses the fixed query window; turn uses rows after the last complete user header |
 | `--qattn-turn-cap N` (alias `--ridgefill-qattn-turn-cap`) | 256 | maximum query rows in turn mode; independent of --ridgefill-qattn-window |
+| `--ridgefill-s1-window W` | 0 (off) | experimental late-layer attention-mass probe; use 256 when enabled; requires API v2 and the two-sweep driver |
+| `--ridgefill-s1-factor F` | 1.0 | finite nonnegative multiplier for the S1 base-row budget |
+| `--ridgefill-vtail on\|off` | off | experimental bulk-prefix V rescale from the first exact tail rows; requires two sweeps |
+| `--ridgefill-vtail-rows C` | 512 | positive sample count, capped to the exact tail; first tail ubatch must hold all sampled rows |
 | `--ridgefill-alpha N` | projector (27B: 0) | state correction scale in [0,1]; quality currently requires 0 |
 | `--ridgefill-qattn-share N` | projector (27B: 0.2) | question-attention prefix share in [0,1]; server only |
 | `--ridgefill-qattn-window N` | 64 | positive query-window size in last mode only; server only |
@@ -179,6 +183,10 @@ Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill
 | `ridgefill_mode` | off, speed, quality or quality+qattn; inherits server mode when omitted |
 | `ridgefill_share` | finite number in [0,1]; inherits the startup class share |
 | `ridgefill_tail` | integer; 0 inherits the server tail, positive values must meet projector tail_min |
+| `ridgefill_s1_window` | nonnegative integer; 0 disables S1; omitted/null inherits startup setting |
+| `ridgefill_s1_factor` | finite nonnegative number; omitted/null inherits startup factor |
+| `ridgefill_vtail` | boolean; omitted/null inherits startup setting |
+| `ridgefill_vtail_rows` | positive integer; omitted/null inherits startup sample count |
 | `ridgefill_special_exact` | boolean; inherits startup setting; quality modes only |
 | `ridgefill_header_rows` | nonnegative integer; inherits startup setting; quality modes only |
 | `ridgefill_qattn_window_mode` | last or turn; inherits startup setting |
@@ -446,3 +454,11 @@ Batches and ubatches may be split anywhere: the fork never mixes filled and exac
   filled K/V rows match the reference within the same 0.5-4 % as the exact rows of the lower layers, uniformly over
   positions, and with T = 8192 the gap falls to 0.0015. Upstream vs this fork without a projector: identical
   per-chunk perplexities on CUDA.
+
+### Experimental S1/vtail plumbing
+
+The release remains ON HOLD. The settings and reporting contract are defined against RF27 C API v2. A build without that API refuses enabled S1/vtail by name; passing these plumbing/math gates does not establish enabled S1 inference support. CLI, bench and perplexity refuse these features because they use a single-pass prefill. Server/scorer require quality+qattn; S1 refuses blind/overlapping/empty windows and windows beyond LOWER rows. Vtail requires a positive sample count and a first tail ubatch large enough for min(C, tail). Existing qwen35-only, LoRA, control-vector, embedding/non-causal, recurrent-rollback and replay-order restrictions still apply.
+
+S1 replaces the base class/digit/header/qattn union with its mass-ranked rows, then unions special rows when requested. Reporting attributes final exact rows to special and S1, rather than claiming the discarded base rows were kept. The driver supplies completed S1 window bounds and the actual vtail sample count. Missing execution metadata is refused. Disabled features retain the previous reporting JSON shape and MAC totals.
+
+For prefix P, window W and hidden width H, each late attention layer charges S1_FILL P*(H^2 + K/V projections), because LATE recomputes that fill. S1_PROBE charges W full rows through every late layer, with attention keys from the prefix plus causal window rows; the intervening uncomputed tail is masked. This adds 2*query_heads*head_dim*(P*W + W*(W+1)/2) attention MACs. Vtail separately charges min(C,tail)*(H^2 + V projection) per late attention layer for measuring the scale. Norms, softmax, norms of V and elementwise rescaling remain outside the analytic model. Token fractions count final prompt-row coverage, while MAC fractions include the extra passes. Enabled reports add s1 window/fill/probe costs and vtail sample/measurement costs.

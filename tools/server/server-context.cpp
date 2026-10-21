@@ -3490,6 +3490,10 @@ private:
             int32_t window_begin = -1, int32_t window_end = -1) {
         common_params selection = params_base;
         const auto & tparams = slot.task->params;
+        selection.ridgefill_s1_window = tparams.ridgefill_s1_window;
+        selection.ridgefill_s1_factor = tparams.ridgefill_s1_factor;
+        selection.ridgefill_vtail = tparams.ridgefill_vtail;
+        selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
         selection.ridgefill_share = tparams.ridgefill_share;
         selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
         selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
@@ -4121,6 +4125,10 @@ private:
                             if (p_fill > 0 && mode != "speed") {
                                 try {
                                     common_params selection = params_base;
+                                    selection.ridgefill_s1_window = tparams.ridgefill_s1_window;
+                                    selection.ridgefill_s1_factor = tparams.ridgefill_s1_factor;
+                                    selection.ridgefill_vtail = tparams.ridgefill_vtail;
+                                    selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
                                     selection.ridgefill_share = tparams.ridgefill_share;
                                     selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
                                     selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
@@ -5578,6 +5586,8 @@ static json get_res_props(const server_context_meta & meta, const common_params 
             { "qattn_blind", params.ridgefill_qattn_blind },
             { "special_exact", params.ridgefill_special_exact }, { "header_rows", params.ridgefill_header_rows },
             { "qattn_window_mode", params.ridgefill_qattn_window_mode }, { "qattn_turn_cap", params.ridgefill_qattn_turn_cap },
+            { "s1_window", params.ridgefill_s1_window }, { "s1_factor", params.ridgefill_s1_factor },
+            { "vtail", params.ridgefill_vtail }, { "vtail_rows", params.ridgefill_vtail_rows },
         };
     }
     if (params.use_jinja) {

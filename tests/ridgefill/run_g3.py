@@ -63,6 +63,9 @@ def native_options(args, cache_type: str, include_paths: bool = True) -> list[st
             "--ridgefill-share", str(args.share), "--ridgefill-digits", args.digits,
             "--ridgefill-alpha", str(args.alpha), "--ridgefill-qattn-share", str(args.qattn_share),
             "--ridgefill-qattn-window", str(args.qattn_window)] + (["--ridgefill-qattn-blind"] if args.qattn_blind else [])
+    if args.s1_window != 0 or args.s1_factor != 1 or args.vtail != "off" or args.vtail_rows != 512:
+        for option in ("s1_window", "s1_factor", "vtail", "vtail_rows"):
+            options += ["--ridgefill-" + option.replace("_", "-"), str(getattr(args, option))]
     if include_paths:
         options += ["-m", str(args.model), "--ridgefill", str(args.projector), "--ridgefill-tail", str(args.tail)]
     return options
@@ -122,8 +125,8 @@ def run(args) -> dict:
             raise EvalError("--ctx-size must exceed the longest prompt plus --decode-tokens")
         with socket.socket() as probe:
             probe.bind(("127.0.0.1", args.port))
-        # The native mode stays speed so the same process can accept request-level off/quality modes.
-        command = [str(args.bin_dir / "llama-server"), *native_options(args, args.cache_type), "--ridgefill-mode", "speed",
+        startup_mode = args.mode if args.s1_window > 0 or args.vtail == "on" else "speed"
+        command = [str(args.bin_dir / "llama-server"), *native_options(args, args.cache_type), "--ridgefill-mode", startup_mode,
                    "--ridgefill-min-prompt", str(args.min_prompt), "-c", str(args.ctx_size), "-np", "1", "--host", "127.0.0.1",
                    "--port", str(args.port), "--offline", "--jinja", "--reasoning", "off"]
         command += ["--chat-template-file", str(args.chat_template_file)] if args.chat_template_file else []
@@ -185,6 +188,10 @@ def main() -> int:
     parser.add_argument("--tail", type=int, default=4096)
     parser.add_argument("--tail-min", type=int, default=512)
     parser.add_argument("--min-prompt", type=int, default=8192)
+    parser.add_argument("--ridgefill-s1-window", "--s1-window", dest="s1_window", type=int, default=0)
+    parser.add_argument("--ridgefill-s1-factor", "--s1-factor", dest="s1_factor", type=float, default=1.0)
+    parser.add_argument("--ridgefill-vtail", "--vtail", dest="vtail", choices=("on", "off"), default="off")
+    parser.add_argument("--ridgefill-vtail-rows", "--vtail-rows", dest="vtail_rows", type=int, default=512)
     parser.add_argument("--share", type=float, default=0.5)
     parser.add_argument("--digits", choices=("on", "off"), default="on")
     parser.add_argument("--alpha", type=float, default=0)
@@ -209,6 +216,10 @@ def main() -> int:
     parser.add_argument("--server-arg", action="append", default=[], help="one native argument; use --server-arg=FLAG for flags starting with '-'")
     parser.add_argument("--bench-arg", action="append", default=[])
     args = parser.parse_args()
+    if not (0 <= args.s1_window <= 2147483647 and 1 <= args.vtail_rows <= 2147483647 and math.isfinite(args.s1_factor) and args.s1_factor >= 0):
+        parser.error("invalid --ridgefill-s1-window/--ridgefill-s1-factor/--ridgefill-vtail-rows")
+    if (args.s1_window > 0 or args.vtail == "on") and args.mode not in ("off", "quality+qattn"):
+        parser.error("S1/vtail requires the quality+qattn two-sweep flow")
     for name in ("bin_dir", "model", "projector", "docs", "needles", "out", "kva", "chat_template_file"):
         value = getattr(args, name)
         if value is not None:

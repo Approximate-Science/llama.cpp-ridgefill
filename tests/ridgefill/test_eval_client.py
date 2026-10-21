@@ -1,5 +1,6 @@
 """Evaluation controls: fixed fill boundary, exact target count, no answer suffix, and named refusals."""
 
+import copy
 import math
 import unittest
 
@@ -93,6 +94,31 @@ class EvaluationTests(unittest.TestCase):
         result = evaluation.score_nll(FakeClient(), [i % 17 for i in range(700)], "off", 600, 1, 1)
         self.assertEqual(result["filled"], 0)
         self.assertEqual(result["prefix"], 0)
+
+    def test_s1_reporting_sources_costs_and_legacy_aggregation(self):
+        report: dict = dict(n_prompt=700, n_prefix=100, n_filled=97, n_exact_prefix=3, n_cached_exact_prefix=0, n_exact_tail=600,
+                      n_exact_prefix_by_source={"class": 0, "digit": 0, "special": 1, "header": 0, "qattn": 0, "s1": 2},
+                      tokens_skipped=97/700, macs_exact=100.0, macs_ridgefill=80.0, mac_share_skipped=0.2,
+                      s1=dict(window=[650, 700], macs_fill=10, macs_probe=20, fill_recomputed=True),
+                      vtail=dict(rows=32, macs_measure=5))
+        self.assertEqual(evaluation.validate_ridgefill_report(report, 700, "quality+qattn"), report)
+        legacy = dict(report, n_filled=100, n_exact_prefix=0, tokens_skipped=100/700,
+                      n_exact_prefix_by_source=dict.fromkeys(("class", "digit", "special", "header", "qattn"), 0))
+        del legacy["s1"], legacy["vtail"]
+        total = evaluation.reporting_summary([dict(candidate=dict(ridgefill=report)), dict(candidate=dict(ridgefill=legacy))], "candidate")
+        assert total is not None
+        self.assertEqual(total["n_exact_prefix_by_source"]["s1"], 2)
+        self.assertEqual(sum(total["n_exact_prefix_by_source"].values()), 3)
+        for key, values in (("s1", {"window": [99, 149]}), ("s1", {"macs_fill": float("nan")}),
+                            ("s1", {"fill_recomputed": False}), ("vtail", {"rows": 601}), ("vtail", {"macs_measure": -1})):
+            bad = copy.deepcopy(report)
+            bad[key].update(values)
+            with self.assertRaises(evaluation.EvalError):
+                evaluation.validate_ridgefill_report(bad, 700, "quality+qattn")
+        bad = copy.deepcopy(report)
+        del bad["s1"]
+        with self.assertRaises(evaluation.EvalError):
+            evaluation.validate_ridgefill_report(bad, 700, "quality+qattn")
 
     def test_scored_rows_never_filled(self):
         with self.assertRaisesRegex(evaluation.EvalError, "tail-512"):
