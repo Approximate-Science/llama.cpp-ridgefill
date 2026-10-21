@@ -79,7 +79,7 @@
       },
       "fork": {
         "rc": 1,
-        "seconds": 0.003,
+        "seconds": 0.004,
         "second_interrupt_message": false
       }
     }
@@ -117,7 +117,7 @@
       },
       "fork": {
         "rc": 1,
-        "seconds": 0.003,
+        "seconds": 0.004,
         "second_interrupt_message": false
       }
     }

@@ -1,0 +1,34 @@
+PASS off K=64 ubatch=50: max logprob/LSE error 1e-07; NLL error 1.12e-09
+PASS speed K=64 ubatch=50: max logprob/LSE error 1.09e-07; NLL error 9.98e-09
+PASS quality K=64 ubatch=50: max logprob/LSE error 1.25e-07; NLL error 9.72e-09
+PASS quality+qattn K=64 ubatch=50: max logprob/LSE error 1.09e-07; NLL error 2.29e-09
+PASS off K=64 ubatch=128: max logprob/LSE error 1e-07; NLL error 1.12e-09
+PASS speed K=64 ubatch=128: max logprob/LSE error 1.09e-07; NLL error 9.98e-09
+PASS quality K=64 ubatch=128: max logprob/LSE error 1.25e-07; NLL error 9.72e-09
+PASS quality+qattn K=64 ubatch=128: max logprob/LSE error 1.09e-07; NLL error 2.29e-09
+PASS off K=64 ubatch=512: max logprob/LSE error 1e-07; NLL error 1.12e-09
+PASS speed K=64 ubatch=512: max logprob/LSE error 1.09e-07; NLL error 9.98e-09
+PASS quality K=64 ubatch=512: max logprob/LSE error 1.25e-07; NLL error 9.72e-09
+PASS quality+qattn K=64 ubatch=512: max logprob/LSE error 1.09e-07; NLL error 2.29e-09
+PASS controls K=64: zero share == quality byte-identical; off == stock perplexity-style next-token scoring
+PASS no target leakage K=64: replacing all scored tokens preserves selector mass/rows and first predictive LSE
+PASS off K=512 ubatch=50: max logprob/LSE error 1.52e-07; NLL error 9.48e-10
+PASS speed K=512 ubatch=50: max logprob/LSE error 1.52e-07; NLL error 2.6e-09
+PASS quality K=512 ubatch=50: max logprob/LSE error 1.81e-07; NLL error 1.25e-09
+PASS quality+qattn K=512 ubatch=50: max logprob/LSE error 1.57e-07; NLL error 1.03e-09
+PASS off K=512 ubatch=128: max logprob/LSE error 1.52e-07; NLL error 9.48e-10
+PASS speed K=512 ubatch=128: max logprob/LSE error 1.52e-07; NLL error 2.6e-09
+PASS quality K=512 ubatch=128: max logprob/LSE error 1.81e-07; NLL error 1.25e-09
+PASS quality+qattn K=512 ubatch=128: max logprob/LSE error 1.57e-07; NLL error 1.03e-09
+PASS off K=512 ubatch=512: max logprob/LSE error 1.52e-07; NLL error 9.48e-10
+PASS speed K=512 ubatch=512: max logprob/LSE error 1.52e-07; NLL error 2.6e-09
+PASS quality K=512 ubatch=512: max logprob/LSE error 1.81e-07; NLL error 1.25e-09
+PASS quality+qattn K=512 ubatch=512: max logprob/LSE error 1.57e-07; NLL error 1.03e-09
+PASS controls K=512: zero share == quality byte-identical; off == stock perplexity-style next-token scoring
+PASS no target leakage K=512: replacing all scored tokens preserves selector mass/rows and first predictive LSE
+PASS window endpoints: default == N; N and N-32 match oracle mass/rows/logits; known and legacy alias == N-K
+PASS paired wrapper: real BCa, novel mask 496/512, multi-document reuse equals fresh contexts
+PASS named refusals: prediction outside exact tail, unsupported rho correction, invalid mode, nonfinite share
+PASS window refusals: zero, negative, malformed, overflowing, beyond document and insufficient history
+PASS input refusals: negative, boolean, overflowing and out-of-vocabulary token IDs
+PASS native scorer: 24/24 four-mode oracle comparisons, two K values, three chunk sizes

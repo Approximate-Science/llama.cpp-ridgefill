@@ -298,3 +298,17 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
 ## 21:00 rf27-integ: rf27-tools c578a8f6c merged (portability audit falls back to Python without ripgrep)
 - Clean merge, tests/ridgefill + notes only (no C++). L-B's GPU smoke unit suite here: 8/8 OK; this sandbox has no rg
   executable (shutil.which('rg') is None), so the run exercised the Python fallback, including its positive control.
+
+## 21:05 rf27-integ: rf27-sweep 36bf1218f merged (L-C's single-pass NLL scorer llama-ridgefill-score)
+- Review: new tools/ridgefill/ (score.cpp, run_nll.py, check_score.py, README, CMake) + one tools/CMakeLists.txt line
+  + tools/server/server-ridgefill-sweep.{h,cpp}. The scorer uses only the C API (llama-ext.h) and L-C's sweep
+  driver. Server hunks: new fields qattn_end / logits_begin / logits_end default to -1, which the server keeps
+  (`sweep_params = {}`; server-context.cpp unchanged); with -1 every changed expression equals the old one (the
+  new logits term is false, n_outputs counted from the flags equals the old count, the window end falls back to the
+  old blind / prompt-end choice, the tail's output_last is unchanged) and the new validations accept the defaults:
+  no behaviour change for existing modes. Clean merge; CPU build clean (llama-ridgefill-score built).
+- check_score.py on the merged tree: "PASS native scorer: 24/24 four-mode oracle comparisons, two K values, three
+  chunk sizes", worst logprob/LSE error 1.81e-07, plus its window / input / named refusals.
+- Quick gates: canonical G1 speed 27/27, quality 27/27; G0 72/0; G0 server vs upstream 8/8 (qwen35); L-C native
+  Tier-3 G1 12/12 + 3/3 (harness recompiled against the changed sweep source); L-C HTTP sweep 3/3; dispatch 44/44;
+  select_rows 23/23.
