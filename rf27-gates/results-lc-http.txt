@@ -1,0 +1,10 @@
+PASS HTTP share=0.2 parallel=1: native logits, filled/processed counts, repeat, cancellation/reuse
+PASS HTTP share=0.0 parallel=1: native logits, filled/processed counts, repeat, cancellation/reuse, zero == quality
+PASS HTTP share=0.2 parallel=2: native logits, filled/processed counts, repeat, cancellation/reuse
+PASS active HTTP cancellation: 3500-token sweep released with zero finalized prompt rows; next request matches native logits
+PASS active shutdown with client stream still open: terminal response and clean exit
+PASS active HTTP shutdown: incomplete sweep buffer released while context is alive; clean exit
+check-http-cancel run 1 (load 15.2): FAIL shutdown step: server.wait(timeout=10) TimeoutExpired; server log ends 'stop: cancel task, id_task = 182' at 1.099 s, then nothing until the second interrupt
+check-http-cancel run 2: 2 PASS, rc 0
+check-http-cancel run 3: 2 PASS, rc 0
+check-http-cancel run 4: 2 PASS, rc 0

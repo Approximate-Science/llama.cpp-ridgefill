@@ -1,0 +1,15 @@
+{"batch": 50, "ubatch": 50, "mode": "qattn", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 50, "ubatch": 50, "mode": "defer", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 50, "ubatch": 50, "mode": "repeat", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 50, "ubatch": 50, "mode": "wrong", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 1.337659239768982, "result": "PASS"}
+PASS controls b50/ub50: engine class/digit rows 147/147; qattn-share=0 equals quality byte-for-byte; qattn repeats byte-for-byte
+{"batch": 128, "ubatch": 128, "mode": "qattn", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 128, "ubatch": 128, "mode": "defer", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 128, "ubatch": 128, "mode": "repeat", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 128, "ubatch": 128, "mode": "wrong", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 1.337659239768982, "result": "PASS"}
+PASS controls b128/ub128: engine class/digit rows 147/147; qattn-share=0 equals quality byte-for-byte; qattn repeats byte-for-byte
+{"batch": 700, "ubatch": 512, "mode": "qattn", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 700, "ubatch": 512, "mode": "defer", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 700, "ubatch": 512, "mode": "repeat", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 6.630082225456135e-07, "result": "PASS"}
+{"batch": 700, "ubatch": 512, "mode": "wrong", "mass_relative_error": 2.659567080398772e-07, "base_rows": 147, "rows": 217, "arrays": 25, "max_relative_error": 1.337659239768982, "result": "PASS"}
+PASS controls b700/ub512: engine class/digit rows 147/147; qattn-share=0 equals quality byte-for-byte; qattn repeats byte-for-byte

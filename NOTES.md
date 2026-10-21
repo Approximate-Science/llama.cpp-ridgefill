@@ -179,3 +179,23 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   class/digit selector checks". Lane T (via the coordinator): the digit rule equals kva's digit_ids on the real
   Qwen3.8 vocabulary (10 ids, 248,077 pieces, no difference). llama-bench / llama-perplexity quality mode still
   refused in L-B's files until their next commit.
+
+## 19:28-19:40 rf27-integ: L-C's Tier-3 driver (c9d3bbdbf) and L-B's 23da65965 merged
+- Review of c9d3bbdbf as core owner: libllama changes are only L-C's own `src/llama-ridgefill-sweep.{h,cpp}` + one
+  `src/CMakeLists.txt` line; no L-A file changed. The mass graph builds its own scheduler from the context's backends
+  once per prompt (per-prompt host work, not per token). The server driver: `seq_set_part` with the params struct,
+  window capture into per-slot device buffers, one `llama_decode` per sweep step, slot restart from n_past 0 (LOWER
+  needs an empty sequence), `seq_rm` on cancel, refusals for speculative / LoRA / child tasks. Merged (44d4828b8);
+  3 conflicts in tools/server/server-context.cpp, all L-B's interim "needs the sweep driver" refusals vs L-C's
+  driver: took L-C's side; the merged common/ tools/ tests/ trees equal c9d3bbdbf exactly. Then 23da65965 (L-B:
+  class+digit quality in llama-bench / llama-perplexity) merged cleanly.
+- L-C's harnesses (local in its build-sweep/, copied unchanged into this repo's ignored build-sweep/, bin -> build-cpu)
+  on the merged tree: native Tier-3 G1 split 4 at 50/50, 128/128, 700/512: mass 2.66e-07, base rows 147/147, union
+  217/217, 25 arrays worst 6.63e-07; defer / repeat pass; wrong projector 1.34; share 0 == quality byte-identical.
+  HTTP: check-http-sweep 3/3 (share 0.2 x1, share 0 x1 with zero == quality, share 0.2 x2 slots); shutdown-recheck
+  3/3; check-http-cancel 3 of 4 runs: run 1 (load average 15) failed its shutdown step — after SIGTERM during an
+  active 3500-token sweep the server logged "stop: cancel task" 1 s later and then nothing for 10 s (the test's
+  limit). Server lifecycle code (L-C's); reported, not fixed here. Runs 2-4 pass (~0.3 s each).
+- Full gate set on the merged tree: canonical G1 speed 27/27, quality 27/27; G0 72/0; rollback 11/11; quality a0
+  27/27; dispatch 44/44; select_rows 23/23. The server log shows "graphs reused = 114" for a qattn prompt (the
+  dispatch's reusable part graphs).

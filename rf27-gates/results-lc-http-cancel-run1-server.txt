@@ -1,0 +1,32 @@
+warning: no usable GPU found, --gpu-layers option will be ignored
+warning: one possible reason is that llama.cpp was compiled without GPU support
+warning: consult docs/build.md for compilation instructions
+0.00.004.170 I srv  llama_server: initializing ...
+0.00.004.182 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
+0.00.004.451 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
+0.00.005.784 I srv    load_model: loading model '/var/home/dylan/projects/inference/llama.cpp-ridgefill/rf27-gates/integ-work/gate1-qwen35/tiny-qwen35-f32.gguf'
+0.00.013.869 I cmn  common_init_: RidgeFill: projector-s4 (RidgeFill test fixture; MIT; doi test-fixture), mode quality+qattn, split 4, exact tail 200, min prompt 1
+0.00.013.893 I cmn          init: llama threadpool init, n_threads = 4
+0.00.045.925 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 4096, kv_unified = 'false'
+0.00.047.300 I srv  llama_server: model loaded
+0.00.047.306 I srv  llama_server: listening on http://127.0.0.1:18962
+0.00.061.953 I slot get_availabl: id  0 | task -1 | selected slot by LRU, n_tokens = 0, t_last = -1
+0.00.061.981 I slot launch_slot_: id  0 | task 0 | processing task, is_child = 0
+0.00.062.086 I slot   operator(): id  0 | task 0 | RidgeFill: filling prompt tokens [0, 3300) of 3500, exact tail 200, mode quality+qattn, exact prefix rows 943
+0.00.063.209 W srv          stop: cancel task, id_task = 0
+0.00.065.920 I slot      release: id  0 | task 0 | stop processing: n_tokens = 0, truncated = 0
+0.00.065.939 I slot get_availabl: id  0 | task -1 | selected slot by LRU, n_tokens = 0, t_last = 366129746991
+0.00.065.958 I slot launch_slot_: id  0 | task 3 | processing task, is_child = 0
+0.00.065.979 I slot   operator(): id  0 | task 3 | RidgeFill: filling prompt tokens [0, 500) of 700, exact tail 200, mode quality+qattn, exact prefix rows 147
+0.00.095.485 I slot ridgefill_sw: id  0 | task 3 | RidgeFill: question sweep complete, exact prefix rows 217, final token deferred
+0.00.095.832 I slot print_timing: id  0 | task 3 | prompt eval time =      29.85 ms /   700 tokens (    0.04 ms per token, 23451.37 tokens per second)
+0.00.095.844 I slot print_timing: id  0 | task 3 |        eval time =       0.00 ms /     1 tokens (    0.00 ms per token,     0.00 tokens per second)
+0.00.095.851 I slot print_timing: id  0 | task 3 |       total time =      29.85 ms /   701 tokens
+0.00.095.859 I slot print_timing: id  0 | task 3 |    graphs reused =        114
+0.00.095.866 I slot print_timing: id  0 | task 3 |   graph reallocs =          0    /     0        (same size) / (changed size)
+0.00.095.896 I slot      release: id  0 | task 3 | stop processing: n_tokens = 700, truncated = 0
+0.00.097.945 I slot get_availabl: id  0 | task -1 | selected slot by LCP similarity, f_sim_best = 0.200 (> 0.100 thold), f_keep = 1.000
+0.00.097.966 I slot launch_slot_: id  0 | task 182 | processing task, is_child = 0
+0.00.098.096 I slot   operator(): id  0 | task 182 | RidgeFill: filling prompt tokens [0, 3300) of 3500, exact tail 200, mode quality+qattn, exact prefix rows 943
+0.01.099.302 W srv          stop: cancel task, id_task = 182
+Received second interrupt, terminating immediately.
