@@ -159,3 +159,15 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   refused. A first run failed the P = 700 half: the tool refuses --tail 0, so nothing ran there (now P = 699).
 - Not checked: the digit set on the real Qwen3.8 vocabulary against kva's digit_ids (needs the HF tokenizer.json,
   sha 0997f410..., which is not on this box) — a follow-up for whoever holds the tokenizer (lane T has kva).
+
+## 19:25-19:45 integration branch rf27-integ
+- `rf27-integ` = rf27-engine (ff598e03d) + merge of rf27-tools (L-B, tip 0c1a20276): no conflicts; L-B's diff
+  touches no src/ file. CPU build (-j4) clean.
+- L-B's plumbing still refuses quality mode in three places written before the selector existed
+  (`common_ridgefill_rows` in common/common.cpp, llama-perplexity, llama-bench: "requires
+  llama_ridgefill_select_rows, which is unavailable in this build"). Fail-closed and correct for now; left to L-B
+  (their files) to call `llama_ridgefill_select_rows`.
+- Gates on the merged tree: L-B's canonical G1 (tests/ridgefill/run_gate1_qwen35.py, rf_dump built from the merged
+  tests/ridgefill/rf_dump.cpp against build-cpu, fixtures byte-identical to L-B's out/): speed 27/27 (fill worst
+  6.31e-07), quality 27/27 (fill worst 4.05e-07, incl. alpha-1 refusal and wrong-rows / speed-instead-of-quality
+  controls); G0 72/0; rollback 11/11; G1 quality a0 27/27; dispatch 44/44; select_rows 23/23.
