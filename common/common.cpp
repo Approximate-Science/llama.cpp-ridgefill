@@ -1789,6 +1789,12 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
     }
 }
 
+static void common_ridgefill_check_quality_alpha(const common_params & params, const std::string & mode) {
+    if ((mode == "quality" || mode == "quality+qattn") && params.ridgefill_alpha != 0) {
+        throw std::invalid_argument("RidgeFill: mode " + mode + " with nonzero --ridgefill-alpha requires the rho-scaled correction; use --ridgefill-alpha 0");
+    }
+}
+
 void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf) {
     if (!common_ridgefill_mode_valid(params.ridgefill_mode)) {
         throw std::invalid_argument("invalid --ridgefill-mode " + params.ridgefill_mode);
@@ -1801,6 +1807,7 @@ void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf
     if (params.ridgefill_tail < llama_ridgefill_tail_min(rf)) {
         throw std::invalid_argument("--ridgefill-tail is below this projector's tail_min");
     }
+    common_ridgefill_check_quality_alpha(params, params.ridgefill_mode);
 }
 
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const llama_ridgefill * rf,
@@ -1808,6 +1815,7 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
     if (!common_ridgefill_mode_valid(selected_mode)) { throw std::invalid_argument("RidgeFill: invalid mode " + selected_mode); }
     if (selected_mode == "off" || selected_mode == "speed" || n_prefix == 0) { return {}; }
+    common_ridgefill_check_quality_alpha(params, selected_mode);
     if (!rf || !tokens || n_prefix < 0) { throw std::invalid_argument("RidgeFill: class/digit selection requires a projector, tokens and nonnegative prefix length"); }
     if (!(params.ridgefill_share > 0 && params.ridgefill_share <= 1)) {
         throw std::invalid_argument("RidgeFill: --ridgefill-share must be resolved and in (0, 1]");

@@ -72,6 +72,11 @@ int main(int argc, char ** argv) {
         params.ridgefill_share = 0.5f;
         params.ridgefill_digits = -1;
         refused([&]() { select(tokens); }, "--ridgefill-digits");
+        params.ridgefill_digits = 1;
+        params.ridgefill_alpha = 1;
+        refused([&]() { select(tokens); }, "rho-scaled correction");
+        refused([&]() { common_ridgefill_resolve(params, rf.get()); }, "rho-scaled correction");
+        check(select(tokens, "off").empty());
         printf("PASS: %d common class/digit selector checks\n", checks);
         return 0;
     } catch (const std::exception & error) {

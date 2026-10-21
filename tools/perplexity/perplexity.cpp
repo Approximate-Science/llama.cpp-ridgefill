@@ -459,6 +459,7 @@ static void ridgefill_set_chunks(llama_context * ctx, const common_params & para
             if (llama_ridgefill_seq_set_rows(ctx, seq, rows.data(), rows.size()) < 0) {
                 throw std::runtime_error("RidgeFill: --ridgefill-mode quality exact rows were refused");
             }
+            LOG_INF("RidgeFill: mode quality selected %zu exact rows of %d prefix tokens (seq %d)\n", rows.size(), p_end, seq);
         }
     }
 }
@@ -606,6 +607,7 @@ static results_perplexity perplexity(llama_context * ctx, const common_params & 
 
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
                 LOG_INF("%s : failed to decode\n", __func__);
+                if (!params.ridgefill_path.empty()) { throw std::runtime_error("RidgeFill: perplexity decode was refused"); }
                 return {tokens, -1, logit_history, prob_history};
             }
 
@@ -1838,6 +1840,7 @@ static void kl_divergence(llama_context * ctx, const common_params & params, con
             }
 
             if (llama_process(ctx, LLAMA_PROCESS_TYPE_DECODE, batch.get())) {
+                if (!params.ridgefill_path.empty()) { throw std::runtime_error("RidgeFill: KL divergence decode was refused"); }
                 LOG_ERR("%s : failed to decode\n", __func__);
                 return;
             }
@@ -2024,10 +2027,6 @@ int llama_perplexity(int argc, char ** argv) {
     if (!common_params_parse(argc, argv, params, LLAMA_EXAMPLE_PERPLEXITY)) {
         return 1;
     }
-    if (params.ridgefill_mode == "quality") {
-        LOG_ERR("%s: --ridgefill-mode quality requires llama_ridgefill_select_rows, which is unavailable in this build\n", __func__);
-        return 1;
-    }
     if (params.ridgefill_mode == "quality+qattn") {
         LOG_ERR("%s: --ridgefill-mode quality+qattn requires the server's question-attention sweep\n", __func__);
         return 1;
@@ -2052,6 +2051,10 @@ int llama_perplexity(int argc, char ** argv) {
     }
     params.n_ctx = params.n_parallel * n_ctx;
     params.n_batch = std::min(params.n_batch, params.n_ctx);
+    if (!params.ridgefill_path.empty() && params.ridgefill_mode == "quality" && params.n_parallel > 1 && !params.kv_unified) {
+        LOG_ERR("%s", "RidgeFill: quality with parallel sequences requires --kv-unified (-kvu)\n");
+        return 1;
+    }
 
     if (params.ppl_stride > 0) {
         LOG_INF("Will perform strided perplexity calculation -> adjusting context size from %d to %d\n",
@@ -2092,16 +2095,24 @@ int llama_perplexity(int argc, char ** argv) {
     }
 
     struct results_perplexity results;
-    if (params.hellaswag) {
-        hellaswag_score(ctx, params);
-    } else if (params.winogrande) {
-        winogrande_score(ctx, params);
-    } else if (params.multiple_choice) {
-        multiple_choice_score(ctx, params);
-    } else if (params.kl_divergence) {
-        kl_divergence(ctx, params, llama_init->ridgefill());
-    } else {
-        results = perplexity(ctx, params, n_ctx, llama_init->ridgefill());
+    try {
+        if (params.hellaswag) {
+            hellaswag_score(ctx, params);
+        } else if (params.winogrande) {
+            winogrande_score(ctx, params);
+        } else if (params.multiple_choice) {
+            multiple_choice_score(ctx, params);
+        } else if (params.kl_divergence) {
+            kl_divergence(ctx, params, llama_init->ridgefill());
+        } else {
+            results = perplexity(ctx, params, n_ctx, llama_init->ridgefill());
+            if (!params.ridgefill_path.empty() && (!std::isfinite(results.ppl_value) || results.ppl_value <= 0)) {
+                throw std::runtime_error("RidgeFill: perplexity produced no finite positive score");
+            }
+        }
+    } catch (const std::exception & error) {
+        LOG_ERR("%s\n", error.what());
+        return 1;
     }
 
     LOG("\n");

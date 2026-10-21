@@ -285,3 +285,28 @@ PASS: 18 RidgeFill argument/boundary checks
 ```
 
 Evidence: `out/select-helper-build.log`, `out/select-helper-test-build.log`, `out/select-helper-tests.log`, `out/select-helper-argument-tests.log`, and `out/select-helper-rebase.log`. Native test uses real libllama/common and hand-computed expectations, with invalid-token rejection as an API failure control. No HTTP/qattn positive inference claim is made here; L-C owns that integration, and bench/perplexity retain their temporary quality guards until their own follow-up tests.
+
+### Quality tool enablement for lane Q (2026-10-20)
+
+Rebased onto the integration tip `6dac68bca` (which includes the accepted helper commit be962e03a). The common helper was already calling the real selector. Removed the remaining pre-API quality refusal guards from bench and perplexity, so their existing per-prompt/per-chunk selection now reaches `llama_ridgefill_select_rows` with the resolved share/digit args. Exact row counts are logged. Added named alpha/rho validation in common default resolution and in the effective-mode helper, covering startup mode and per-request quality overrides. Nonzero quality alpha and unsupported qattn still refuse. No tools/server source or lifecycle hunk was edited.
+
+Perplexity rejects non-unified parallel quality chunks with the required --kv-unified (-kvu) flag. A failed RF decode (PPL or KL) throws into its named error exit; a PPL run that scored no chunk or returned a missing/nonfinite/nonpositive score exits nonzero. Bench catches selector errors and returns failure instead of an uncaught exception. Retained the G5 LoRA/control/embedding/cache-shift/row-split/persistence guards.
+
+Built all three tools with CPU -j4. The updated live tool check passed 37 cases. Quality bench completed pp700 with 445 exact rows of 500 prefix rows; quality perplexity selected 255 of 256 prefix rows and completed one chunk with fixture PPL 326.5109 +/- 2.81513. Both use share 0.5, digits on and alpha 0. Alpha 1, qattn, --no-kv-unified parallel chunks and a too-short document all produced named exit-1 refusals. One initial refusal control used perplexity's default batch 2048/context 512 and correctly hit the parallel-cache refusal before alpha; the final control explicitly uses batch 512 to isolate rho. Failed probe logs are retained rather than counted as passes.
+
+Extended `check_g3_live.py` to run the one-command paired pipeline for quality as well as speed/off. Its independent Python selector reads the actual GGUF score and vocabulary/type tables, applies the finite-score ranking/half-even budget/digit union, and passes those explicit rows to rf_dump for the native reference. The first probe found that GGUFReader represents token-type arrays as scalar parts, not one contiguous part; corrected the test reader and reran in a fresh output directory. No engine behavior/tolerance was changed to hide the test preparation error.
+
+```text
+CPU llama-server, llama-bench, llama-perplexity: BUILT
+check_tool_live.py: PASS, 37 checks (off/speed/quality runs, rho/qattn and negative controls)
+check_g3_live.py: PASS, 66 checks, modes speed/quality/off, all five measurement stages
+maximum server raw-logprob vs direct-logit absolute error: 1.1241689676921851e-6 (tolerance 1e-5)
+test_row_selection.cpp: PASS, 24 checks (includes startup/request alpha-rho refusals)
+test_tool_args.cpp: PASS, 18 checks
+test_eval_client.py: 8 tests OK
+ty: All checks passed!
+```
+
+Each mode's G3 run completed paired NLL (2 documents, exactly last 512 targets), Qwen3.8 thinking-off greedy needles (2), TTFT, native prefill and tg128 with BCa via kva finals/stats.py. All 512 logprobs of every document/arm matched direct F32 logits. Off/off NLL arrays were identical. Quality was distinct from speed as a positive control. Quality's synthetic NLL delta was 0.0030389586463570595, 95% BCa [0.0027102669700980186, 0.0033676503226161003]; random-model needle deltas were degenerate and are not retrieval evidence. These are instrumentation controls, not 27B release measurements.
+
+Commands/evidence: `cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity -j4`; `check_tool_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --work out/quality-tool-live3 --port 18128`; `check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --kva /var/home/dylan/projects/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/g3-quality-tools2 --port 18123`. Logs: `out/quality-tools-{build,rebuild,typecheck}.log`, `out/quality-perplexity-final-build.log`, `out/quality-tool-live3.json` and its per-case directory, `out/g3-quality-tools2.json` and its mode directories, `out/quality-row-selector-tests.log`, `out/quality-argument-tests.log`, `out/quality-eval-unit-tests.log`. Q can now use the same G3 command with --mode quality and --alpha 0, including native bench metrics, against the integrated rebuild. Real-model cells remain NOT YET MEASURED pending Q's own results.
