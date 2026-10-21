@@ -4,6 +4,7 @@ import copy
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from check_gpu_smoke import select_devices, validate_bench
 from run_g5 import check_sdk_version, grep
@@ -85,11 +86,13 @@ class SmokeEvidence(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "must start"):
             check_sdk_version("unknown", cmake)
 
-    def test_extended_audit_positive_and_neutral_controls(self):
+    def audit_controls(self):
         values = ["R9" + str(123), "Radeon AI PRO " + str(9000), "gfx" + str(1200), "gfx" + str(1100),
                   "ROCm " + ".".join(map(str, (8, 0, 0))), ".".join(map(str, (8, 0, 0))),
                   ":".join(("abcd", "12", "34.5")), ":".join(("56", "78.0"))]
-        with tempfile.TemporaryDirectory(dir=Path(__file__).resolve().parents[2] / "out") as directory:
+        work = Path(__file__).resolve().parents[2] / "out"
+        work.mkdir(exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=work) as directory:
             path = Path(directory)
             sample = path / "nonportable.cpp"
             sample.write_text("\n".join(values) + "\n")
@@ -100,6 +103,13 @@ class SmokeEvidence(unittest.TestCase):
             found = grep([sample], path / "negative.log")
             self.assertEqual(found.returncode, 1)
             self.assertEqual(found.stdout, "")
+
+    def test_extended_audit_positive_and_neutral_controls(self):
+        self.audit_controls()
+
+    def test_extended_audit_without_ripgrep(self):
+        with patch("run_g5.subprocess.run", side_effect=FileNotFoundError("rg is absent")):
+            self.audit_controls()
 
 
 if __name__ == "__main__":
