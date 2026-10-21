@@ -385,3 +385,20 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   over n_kv cells. vtail: per late attention layer, c rows x (projector + attn_norm + V projection) twice, plus one
   read-modify-write of that layer's V cache over n_kv cells.
 - Graph reuse: the S1_PROBE and vtail graphs are never reused (their masks are sized by n_kv); other graphs unchanged.
+
+## 2026-10-21 rf27-s1: L-C's S1/vtail orchestration (rf27-sweep-s1 cad20681e) merged
+- Review against the C API v2 note: only L-C's files (src/llama-ridgefill-sweep.*, tools/server/server-ridgefill-sweep.*,
+  tools/ridgefill/). Order LOWER -> n_base (base rows u qattn top) -> S1_FILL [0, P) -> S1_PROBE [end - W, end) ->
+  top max(1, half-even(F x n_base)) capped at P, ties to the lower position, u special rows -> set_rows -> set_vtail ->
+  LATE -> vtail off -> FULL (cancel goes through the same path). Driver checks: S1 not blind, W inside the known exact
+  tail, API version >= 2 at build and run time, n_batch / n_ubatch >= c, deferred last token not consumed by
+  calibration. The first tail decode is widened to c rows. vtail-only and S1 with qattn share 0 run the two-sweep flow
+  (no window capture). No objection; merged as 202b047a1 (tree == cad20681e).
+- Flag for L-C (not edited: their file): tools/ridgefill/README.md example commands carry this machine's absolute
+  paths (/var/home/..., /var/mnt/..., ../llama.cpp-ridgefill-tools); some predate this commit, the new S1 example adds
+  more. The portability grep would hit them before a release.
+- Gates on the merged tree: G1 S1/vtail 49/49; L-C check_s1_score.py run here (baseline scorer built from a clean
+  archive of b9a8e5add, same CMake options; fixture rf27-gates/lb copy): PASS 24 + 12 native, worst logprob 1.76e-07,
+  mass 1.36e-07; canonical G1 speed 27/27, quality 27/27; G0 72/0; G0 server 8/8; L-C native Tier-3 G1 12/12 + 3/3;
+  check_score 24/24; g1_select_chat 42/42; select_rows 23/23; dispatch 44/44; quality a0 27/27; rollback 11/11; L-C
+  HTTP sweep (defaults) 3/3.

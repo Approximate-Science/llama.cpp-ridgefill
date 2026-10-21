@@ -1,0 +1,17 @@
+PASS defaults: byte-identical numerical outputs, row selection and cost report; two prompts, four modes, F32/F16
+PASS fixture T3s: mass/rows/logits/scales/cost across 3 chunks
+PASS fixture T3s-vtail-k72: mass/rows/logits/scales/cost across 3 chunks
+PASS fixture S1gw: mass/rows/logits/scales/cost across 3 chunks
+PASS fixture S1gw-vtail-k72: mass/rows/logits/scales/cost across 3 chunks
+PASS fixture: computed base count 217, final S1 rows 217; S1 and vtail positive controls
+PASS selchat T3s: mass/rows/logits/scales/cost across 3 chunks
+PASS selchat T3s-vtail-k72: mass/rows/logits/scales/cost across 3 chunks
+PASS selchat S1gw: mass/rows/logits/scales/cost across 3 chunks
+PASS selchat S1gw-vtail-k72: mass/rows/logits/scales/cost across 3 chunks
+PASS selchat: computed base count 220, final S1 rows 222; S1 and vtail positive controls
+PASS native harness: 12/12 arms including c=200; scorer/native mass, rows and vtail scales agree
+PASS repeated requests: reused context == fresh contexts, vtail enabled again after each seq_set
+PASS fixture: N-K default matches reference mass/base/rows/logits; future targets do not change selection or calibration
+PASS selchat: N-K default matches reference mass/base/rows/logits; future targets do not change selection or calibration
+PASS S1 factor: zero minimum, ties-to-even budgets 108.5/325.5, saturation at P
+{"result": "PASS", "checks": 24, "native_checks": 12, "worst_logprob_lse": 1.7611186819976865e-07, "worst_mass_relative": 1.357874859459952e-07, "cost": "includes recomputed prefix projector/KV, dense all-cell probe attention, two vtail V projections and cache read/write bytes", "vtail_k0": "PASS native harness; scorer target-reading calibration refused by name"}
