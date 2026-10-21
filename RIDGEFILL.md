@@ -18,9 +18,9 @@ bit-identical to upstream llama.cpp (checked, see "Tests").
 
 RidgeFill is by Dylan Johnston and tcclaviger. Method, reference implementation and paper: TODO (Dylan).
 
-## Qwen3.8-27B (`qwen35`): development status
+## Qwen3.8-27B (`qwen35`)
 
-The Qwen3.8-27B port implements speed, class/digit quality and server question-attention quality prefill. The format-2 projector converter and tiny Qwen3.5 fixtures are available. On engine `3ac42957d`, the canonical tiny CPU G1 passed 27 checks each for speed (alpha 0/1) and quality with explicit exact rows (alpha 0), across three chunk sizes. The gates compare logits, KV caches, convolution state and recurrent state with the oracle and require positive/negative controls. Quality alpha 1 is refused by name until the rho-scaled correction is implemented. Real-model results below are **NOT YET MEASURED** for this port; the later Llama/Qwen3 tables are earlier measurements on different models.
+The Qwen3.8-27B port implements speed, class/digit quality and server question-attention quality prefill. The format-2 projector converter and tiny Qwen3.5 fixtures are available. On engine `3ac42957d`, the canonical tiny CPU G1 passed 27 checks each for speed (alpha 0/1) and quality with explicit exact rows (alpha 0), across three chunk sizes. The gates compare logits, KV caches, convolution state and recurrent state with the oracle and require positive/negative controls. Quality alpha 1 is refused by name until the rho-scaled correction is implemented. Real-model measurements and their limitations are below; the later Llama/Qwen3 tables are earlier measurements on different models.
 
 The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 512, and minimum prompt 8192. Defaults come from the projector: alpha 0, class share 0.5, digits on, question-attention share 0.2. A format-2 GGUF checks every model fingerprint field and the vocabulary token hash; the tokenizer JSON hash and source file hashes are retained as provenance. A different quantization of the same base model is allowed.
 
@@ -28,8 +28,8 @@ The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 5
 |---|---|---|
 | `off` | all prompt rows run stock | no approximate prefill; tiny off controls passed |
 | `speed` | empty | tiny CPU G1 passed at alpha 0/1; row-selector flags do not add exact rows |
-| `quality` | union of class and digit rows | tiny CPU server, bench, perplexity and paired G3 passed at alpha 0; real-model results pending |
-| `quality+qattn` | quality rows plus question-attention rows | server implemented at alpha 0; tiny native oracle and HTTP gates passed; bench/perplexity refuse this mode |
+| `quality` | union of class and digit rows | implemented at alpha 0; 24-document tuning NLL measured below; tuning bar FAIL |
+| `quality+qattn` | quality rows plus question-attention rows | server and native scorer implemented at alpha 0; tuning NLL bar PASS; measured TTFT/needles below; bench/perplexity refuse this mode |
 
 For a prompt of N tokens and exact tail T, P=max(0,N-T) is the prefix length. Selection is per prompt, not per prefill chunk:
 
@@ -43,24 +43,78 @@ The server stores h_S as F16, with a checked 1 GiB maximum per active sweep: `N 
 
 Speed mode writes attention KV and GDN convolution/recurrent state from each predicted layer input. Quality mode mixes predicted bulk inputs with the carried exact-row residuals, then restricts the remaining late-layer work to exact rows. The terminal GDN correction is applied once at the prefix boundary in speed mode. Quality needs scaling by the gate-decayed bulk share; this rho-scaled correction is pending, so nonzero quality alpha is refused. The source package already stores corrections as `[heads, V, K]`; GGUF conversion reorders value heads into llama.cpp order without transposing K/V again.
 
-| same-build paired result | mode off | speed | quality | quality+qattn |
-|---|---|---|---|---|
-| NLL of last 512 tokens, 24 documents at 16K | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
-| needles, 48 prompts with thinking off | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
-| TTFT at 8K / 16K / 32K | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
-| prefill tokens/s and analytic ceiling | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
-| decode tokens/s | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED | NOT YET MEASURED |
+### Measured Qwen3.8-27B results
 
-Machine/backend, build revision, cache precision and paired 95% BCa intervals will accompany each measured row. The reference package's quality numbers are not engine measurements and are not substituted here.
+These are lane Q's measurements from REPORT-Q.md (2026-10-20, 22:05 CDT). Machine: AMD Ryzen 5 9600X and one AMD Radeon AI PRO R9700. Vulkan uses RADV GFX1201; HIP uses the ROCm 7.10.0a20251120 TheRock SDK with Clang 22.0.0. Host C/C++ is GNU 16.2.1. The model is `Qwen3.8-27B-UD-Q4_K_XL.gguf`, 17548181504 bytes, SHA256 `3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e`; the split-16 projector is identified below. Builds are Release, based on upstream `1242be66f`. Every comparison uses a mode-off control from the same build and backend, with the projector loaded in both arms.
 
-| backend / placement | build configuration | validation status |
+| measurement | build commit / build number | backend |
 |---|---|---|
-| CPU | Release, `GGML_NATIVE=OFF`, GPU backends off | tiny oracle/tool gates and clean archive/refusal checks passed; 27B NOT YET MEASURED |
-| Vulkan / one GPU | Release, `GGML_VULKAN=ON`, layer split, F16 KV, FA off | archive build + short 27B speed smoke script available; NOT YET MEASURED |
-| HIP / one GPU | Release, `GGML_HIP=ON`, user-supplied or detected HIP targets, ROCm at least the backend minimum (currently 6.1), F16 KV, FA off | host archive build + short 27B speed smoke script available; NOT YET MEASURED |
-| Vulkan / two GPUs | same archived Vulkan build, `-sm layer`, equal layer weights | separate two-GPU speed smoke script available; NOT YET MEASURED |
-| CUDA | no Qwen35 RidgeFill backend gate run | NOT RUN |
-| Metal | no Qwen35 RidgeFill backend gate run | NOT RUN |
+| speed prefill, decode and streaming TTFT | `6dac68bca` / 11811 | Vulkan and HIP native bench; Vulkan TTFT |
+| Tier 3 streaming TTFT and needles | `e3fc64ef2` / 11857 | Vulkan |
+| all three modes' native NLL | `36bf1218f` / 11859 | Vulkan |
+
+Common runtime settings: `-ngl 99 -fa on -ctk f16 -ctv f16 -b 2048 -ub 512 -t 4`, one sequence, split 16, T=4096 and alpha=0. Quality adds class share 0.5 and digits on; Tier 3 adds qattn share 0.2, window 64 and blind off. The sweep's h_S is F16; the scorer expresses these types as `--cache-type f16 --h-type f16`. Each instrument's additional settings and repeat counts follow.
+
+**G4 native prefill:** mean tokens/s across three separate timed processes per arm, alternating off/speed, speed/off, off/speed. Each process uses `-p N -n 0 -r 1 -o jsonl`; native warmup is enabled and excluded. Values after +/- are sample standard deviations, not confidence intervals.
+
+| backend | mode | build | prompt tokens | stock off tokens/s | candidate tokens/s | candidate / stock |
+|---|---|---|---|---|---|---|
+| Vulkan / RADV | speed | `6dac68bca` | 8192 | 1109.166113 +/- 13.273352 | 1535.722486 +/- 1.927811 | 1.384574x |
+| Vulkan / RADV | speed | `6dac68bca` | 16384 | 1062.330660 +/- 5.392335 | 1856.252181 +/- 1.812477 | 1.747339x |
+| Vulkan / RADV | speed | `6dac68bca` | 32768 | 986.738162 +/- 1.462639 | 2015.278014 +/- 1.498124 | 2.042364x |
+| HIP / ROCm 7.10.0a20251120 | speed | `6dac68bca` | 8192 | 919.448272 +/- 5.549820 | 1194.427135 +/- 5.084983 | 1.299069x |
+| HIP / ROCm 7.10.0a20251120 | speed | `6dac68bca` | 16384 | 882.038781 +/- 1.783686 | 1372.149912 +/- 15.232679 | 1.555657x |
+| HIP / ROCm 7.10.0a20251120 | speed | `6dac68bca` | 32768 | 830.496230 +/- 0.384159 | 1467.261410 +/- 5.688077 | 1.766729x |
+
+The speed-mode analytic MAC ceilings at 8K/16K/32K are 1.433150x/1.840689x/2.174029x. They include GDN convolution/scan arithmetic and exclude norms, pointwise work, RoPE and memory traffic; they are not wall-clock guarantees. Native prefill for quality and quality+qattn is NOT RUN on either backend; llama-bench refuses quality+qattn by name.
+
+**G4 streaming TTFT:** seconds to the first generated token, three paired repetitions per arm and length, one excluded warmup per arm/length. The server uses context 33792, one slot, `--cache-ram 0 --no-warmup`; each request has `cache_prompt=false` and `n_predict=1`. Values after +/- are sample standard deviations. Each row retains its own measured stock control.
+
+| backend | mode | build | prompt tokens | stock off seconds | candidate seconds | stock / candidate |
+|---|---|---|---|---|---|---|
+| Vulkan / RADV | speed | `6dac68bca` | 8192 | 7.537798 +/- 0.036793 | 5.438809 +/- 0.017547 | 1.385928x |
+| Vulkan / RADV | speed | `6dac68bca` | 16384 | 15.637596 +/- 0.017706 | 8.962633 +/- 0.005620 | 1.744755x |
+| Vulkan / RADV | speed | `6dac68bca` | 32768 | 33.426977 +/- 0.011801 | 16.410729 +/- 0.006820 | 2.036898x |
+| Vulkan / RADV | quality+qattn | `e3fc64ef2` | 8192 | 7.459345 +/- 0.062714 | 6.546534 +/- 0.035149 | 1.139434x |
+| Vulkan / RADV | quality+qattn | `e3fc64ef2` | 16384 | 15.556874 +/- 0.022621 | 12.208560 +/- 0.012700 | 1.274260x |
+| Vulkan / RADV | quality+qattn | `e3fc64ef2` | 32768 | 33.241329 +/- 0.022334 | 25.502722 +/- 0.005813 | 1.303442x |
+
+Quality TTFT is NOT RUN on Vulkan or HIP. HIP TTFT for speed and Tier 3 is NOT RUN: the upstream HIP server hung during warmup and was killed; no timed result was accepted. Tier 3 native prefill throughput is not inferred from server TTFT.
+
+**G4 decode:** with `-p 0 -n 128`, three separate measurements per arm on `6dac68bca`, Vulkan stock/speed means are 31.045438/30.825002 tokens/s (0.992900x); HIP stock/speed means are 29.255828/29.262585 tokens/s (1.000231x). Both mean ratios meet the +/-1% decode bar. Quality and Tier 3 decode benchmarks are NOT RUN.
+
+**G3 NLL:** 24 raw-text tuning documents, eight each from encyclopedia, papers and prose, cut to 16384 tokens; score the final 512 targets. The primary estimator is the reference-compatible novel-token mean: exclude repeated 8-token spans with `kva.data.novel_mask`, then weight each document equally. One whole-document native prefill per arm/document uses [llama-ridgefill-score](tools/ridgefill/README.md), context 16896 and F16 KV/h_S. For NLL, `--qattn-window-end 15872` freezes selection at [15808,15872), before target IDs [15872,16384); no scored target influences selection. Quality and speed share the saved same-session off controls from the Tier 3 jobs.
+
+NLL values and deltas are nats per novel token. Paired BCa intervals use all 24 document deltas, 5000 resamples, seed 20261004. The tuning bar is **one-sided 95% upper <= +0.00995**. That upper is the upper endpoint of the central 90% BCa interval; the two-sided 95% interval is reported separately.
+
+| mode | stock off mean | candidate mean | candidate - stock | two-sided 95% BCa | one-sided 95% upper | tuning NLL bar |
+|---|---|---|---|---|---|---|
+| quality+qattn | 1.883891079 | 1.889337384 | +0.005446305 | [+0.001662961,+0.010649454] | +0.009789065 | PASS |
+| quality | 1.883891079 | 1.904015577 | +0.020124498 | [+0.009833257,+0.033912766] | +0.031551826 | FAIL |
+| speed | 1.883891079 | 1.914023519 | +0.030132440 | [+0.017180030,+0.045889920] | +0.043318243 | FAIL |
+
+**G3 needles:** Vulkan measurements use same-job stock controls. On `e3fc64ef2`, each of 48 tuning needles receives one request per arm, context 16896, greedy generation for 32 tokens, appended answer IDs removed, Qwen thinking-off chat template and seven-digit boundary scoring. The earlier speed HTTP run stopped after 24 of 48 needles; its subset is not a full-set result.
+
+| mode | build | paired needles | stock correct | candidate correct | accuracy delta (percentage points) | 95% paired BCa (percentage points) | status |
+|---|---|---|---|---|---|---|---|
+| quality+qattn | `e3fc64ef2` | 48/48 | 48/48 | 48/48 | 0 | [0,0] | MEASURED |
+| speed | `6dac68bca` | 24/48 | 24/24 | 23/24 | -4.166667 | [-20.833333,0] | PARTIAL |
+| quality | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+
+Tier 3's interval is degenerate and is not a general noninferiority guarantee. HIP G3 NLL/needles are NOT RUN.
+
+**Recommended RidgeFill mode: Tier 3 (`quality+qattn`), alpha 0**, with the defaults above. It is the only measured mode meeting the tuning NLL bar, and its 48 tuning needles all succeed. This recommendation does not establish held-out confirmation. In separate held-out reference runs, the four chat-template documents show mean Tier 3 degradation of **+0.291 nats per novel token**; the registered held-out confirmation was REFUTED. That is a reference result, not an engine measurement, and chat-template quality is a material limitation despite the tuning needles succeeding. The cause and a general fix have not been established.
+
+Full-model engine/reference agreement also remains limited: G2-as-written is INCONCLUSIVE because the wrong-map control is not separable, the registered G2-shift amendment is FAIL, and Tier 3 row unions differ from the reference. The tuning NLL bar does not resolve these checks or establish an overall release verdict.
+
+| backend / placement | measured status | remaining scope |
+|---|---|---|
+| CPU | tiny oracle/tool and clean archive/refusal gates passed | 27B CPU measurements NOT RUN |
+| Vulkan / one GPU | speed G4; Tier 3 TTFT/needles; all-mode native NLL measured above | quality G4, full held-out engine G3 and GPU archive gate NOT RUN |
+| HIP / one GPU | speed native prefill/decode G4 measured above | server TTFT, G3, quality G4 and GPU archive gate NOT RUN |
+| Vulkan / two GPUs | NOT RUN | coordinator's separate layer-split smoke |
+| CUDA | NOT RUN | no Qwen35 RidgeFill backend gate run |
+| Metal | NOT RUN | no Qwen35 RidgeFill backend gate run |
 
 ### Projector conversion
 
@@ -97,7 +151,7 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 llama-server -m model.gguf -c 32768 -ngl 99 --ridgefill projector.gguf --ridgefill-mode speed --ridgefill-tail 4096
 ```
 
-Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. For question-attention, use `--ridgefill-mode quality+qattn --ridgefill-qattn-share 0.2 --ridgefill-qattn-window 64 --ridgefill-alpha 0` on llama-server. These defaults are not yet measured recommendations for this engine.
+Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. For question-attention, use `--ridgefill-mode quality+qattn --ridgefill-qattn-share 0.2 --ridgefill-qattn-window 64 --ridgefill-alpha 0` on llama-server. Tier 3 is the recommended RidgeFill mode, subject to the raw-text tuning scope and chat-template limitation above.
 
 | per-request field | effect |
 |---|---|
@@ -134,7 +188,7 @@ Startup combination guards apply even when a loaded projector is in mode off. Sh
 
 Perplexity and bench support off, speed and quality at alpha 0. Both still refuse quality+qattn by name. Perplexity fills at most the unscored first half of each chunk, so its effective tail is `max(T, n_ctx/2)`; it selects quality rows separately for each chunk, including its actual BOS token. Parallel quality chunks require --kv-unified (-kvu). Failed decoding and a missing/nonfinite perplexity score exit nonzero. Bench selects rows from its full generated prompt and logs the exact-prefix row count. Startup and per-request quality with nonzero alpha refuse by name until the rho-scaled correction is implemented. Tiny CPU integration checks cover actual quality runs and these refusals, without establishing real-model quality or performance.
 
-The paired client and CPU gates are documented in [tests/ridgefill/README.md](tests/ridgefill/README.md). `run_g3.py --mode ... --docs ... --needles ... --out ...` runs NLL, needles, TTFT and native bench against one build's mode-off arm. NLL uses only the last 512 teacher-forced targets and keeps the approximate prefix fixed; it requires T-512 >= tail_min and N-512 >= min-prompt. Needle evaluation removes appended answer IDs, applies the loaded Qwen chat template with `enable_thinking=false`, generates greedily, and checks seven digits at digit boundaries. Timing runs alternate off and candidate for at least three repeats. Paired 95% BCa intervals use the oracle's `finals/stats.py`; an inactive eligible fill or missing probability fails the run. Tiny instrumentation checks are not real-model quality/speed measurements.
+For reference-compatible NLL, use [llama-ridgefill-score and its paired wrapper](tools/ridgefill/README.md). The HTTP client below scores all targets and is a different estimator; repeated question sweeps make it unsuitable for the measured Tier 3 NLL run. The paired client and CPU gates are documented in [tests/ridgefill/README.md](tests/ridgefill/README.md). `run_g3.py --mode ... --docs ... --needles ... --out ...` runs NLL, needles, TTFT and native bench against one build's mode-off arm. NLL uses only the last 512 teacher-forced targets and keeps the approximate prefix fixed; it requires T-512 >= tail_min and N-512 >= min-prompt. Needle evaluation removes appended answer IDs, applies the loaded Qwen chat template with `enable_thinking=false`, generates greedily, and checks seven digits at digit boundaries. Timing runs alternate off and candidate for at least three repeats. Paired 95% BCa intervals use the oracle's `finals/stats.py`; an inactive eligible fill or missing probability fails the run. Tiny instrumentation checks are not real-model quality/speed measurements.
 
 `run_g5.py --ref COMMIT --backend cpu|vulkan|hip --fixture ... --out ...` audits and builds a clean git archive, then tests named refusals and exact/filled slot-save controls. It uses the caller's environment and does not provide container isolation. The host wrappers `run_g5_gpu.sh` and `run_g5_two_card.sh` add single-GPU archive builds/27B speed smokes and the separate two-GPU layer-split smoke. See [GPU G5 commands](tests/ridgefill/README.md#gpu-g5-commands). They require real device enumeration, model tensors on every selected GPU and a completed filled prefix. Container isolation and numerical/performance validation remain separate; the CPU archive result does not establish them.
 
@@ -317,6 +371,10 @@ llama-perplexity fills at most the unscored first half of each chunk (so the eff
 supports the perplexity and KL-divergence modes only. llama-bench fills the pp tests without `-d`, and marks them
 ` rf-<mode>-t<T>` in the test name.
 
+### llama-ridgefill-score
+
+The [native NLL scorer](tools/ridgefill/README.md) reads pretokenized JSON/JSONL, performs one whole-document prefill, and writes full-vocabulary target logprobs for off, speed, quality or quality+qattn. For NLL, set `--qattn-window-end known` to exclude scored targets from selection. `tools/ridgefill/run_nll.py` pairs off and Tier 3 and reports reference-compatible novel-token NLL with BCa intervals.
+
 ### Options
 
 See [Options and evaluation](#options-and-evaluation) for the shared flags and projector-derived defaults.
@@ -336,7 +394,7 @@ Batches and ubatches may be split anywhere: the fork never mixes filled and exac
 
 ## Limits
 
-- The earlier validated paths are dense Llama (`llama`) and dense Qwen3 (`qwen3`). Qwen3.8-27B (`qwen35`) is under development as described above. MoE, sliding-window attention, other hybrid architectures, multimodal RidgeFill inputs and Llama 4 remain unsupported.
+- The earlier validated paths are dense Llama (`llama`) and dense Qwen3 (`qwen3`). Qwen3.8-27B (`qwen35`) measurements and limitations are described above. MoE, sliding-window attention, other hybrid architectures, multimodal RidgeFill inputs and Llama 4 remain unsupported.
 - Approximate: outputs differ from normal llama.cpp. Quality drops with the share of the prompt that is filled.
 - No speedup for short prompts: below `--ridgefill-min-prompt`, or when the prompt is not longer than the tail,
   nothing is filled. The speedup grows with prompt length (analytic ceiling about 1.35x at 8K, 1.67x at 16K and 1.93x
