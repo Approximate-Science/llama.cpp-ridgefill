@@ -53,6 +53,7 @@ def run(args):
                        "--input", str(input_path), "--output", str(output), "--mode", mode,
                        "--qattn-window-end", str(args.length - args.scored)]
             for option in ("scored", "tail", "min_prompt", "share", "digits", "alpha", "qattn_share", "qattn_window",
+                           "special_exact", "header_rows", "qattn_window_mode", "qattn_turn_cap",
                            "gpu_layers", "threads", "batch", "ubatch", "cache_type", "h_type", "flash_attn", "ctx_size"):
                 command += ["--" + option.replace("_", "-"), str(getattr(args, option))]
             commands.append(command)
@@ -73,8 +74,19 @@ def run(args):
                     expected_window = [args.length - args.scored - args.qattn_window, args.length - args.scored]
                     if row["prefix"] != args.length - args.tail or not row["selector_excludes_targets"]:
                         raise ValueError("candidate skipped fill or read scored targets")
-                    if args.qattn_share > 0 and row["qattn_window"] != expected_window:
-                        raise ValueError("candidate window differs from the reference protocol")
+                    if args.qattn_share > 0:
+                        window = row["qattn_window"]
+                        if args.qattn_window_mode == "last":
+                            valid_window = window == expected_window
+                        else:
+                            end = args.length - args.scored
+                            valid_window = isinstance(window, list) and len(window) == 2 and max(0, end - args.qattn_turn_cap) <= window[0] < window[1] == end
+                        if not valid_window:
+                            raise ValueError("candidate window differs from the reference protocol")
+                    expected_options = dict(special_exact=args.special_exact == "on", header_rows=args.header_rows,
+                                            qattn_window_mode=args.qattn_window_mode, qattn_turn_cap=args.qattn_turn_cap)
+                    if any(row["parameters"].get(key) != value for key, value in expected_options.items()):
+                        raise ValueError("candidate ignored chat selector options")
         metadata = dict(kind="metadata", metric="nll", build_label=args.build_label, commands=commands,
                         protocol="rf27_quality.py: frozen selector before K scored targets; novel-token primary",
                         docs_sha256=sha256(args.docs), projector_sha256=sha256(args.projector),
@@ -128,6 +140,10 @@ def main():
     parser.add_argument("--alpha", type=float, default=0)
     parser.add_argument("--qattn-share", type=float, default=0.2)
     parser.add_argument("--qattn-window", type=int, default=64)
+    parser.add_argument("--special-exact", choices=("on", "off"), default="off")
+    parser.add_argument("--header-rows", type=int, default=0)
+    parser.add_argument("--qattn-window-mode", choices=("last", "turn"), default="last")
+    parser.add_argument("--qattn-turn-cap", type=int, default=256)
     parser.add_argument("--gpu-layers", type=int, default=0)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--batch", type=int, default=512)
@@ -139,7 +155,8 @@ def main():
     parser.add_argument("--timeout", type=float, default=7200)
     args = parser.parse_args()
     if not (0 < args.scored < args.tail < args.length and args.length >= args.min_prompt and
-            0 < args.qattn_window <= args.length - args.scored and (args.limit is None or args.limit >= 2)):
+            args.qattn_window > 0 and (args.qattn_window_mode == "turn" or args.qattn_window <= args.length - args.scored) and
+            args.qattn_turn_cap > 0 and args.header_rows >= 0 and (args.limit is None or args.limit >= 2)):
         parser.error("require 0 < scored < tail < length, length >= min-prompt, a valid window, and limit >= 2")
     print(json.dumps(run(args), allow_nan=False), flush=True)
 
