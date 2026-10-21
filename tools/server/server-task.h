@@ -646,6 +646,7 @@ struct server_prompt {
 
     // the tokens before n_filled may hold approximate RidgeFill rows in the KV cache
     int32_t n_filled = 0;
+    int32_t ridgefill_fill_start = 0;
     std::string ridgefill_mode;
     std::vector<llama_pos> ridgefill_rows;
 
@@ -653,6 +654,7 @@ struct server_prompt {
         tokens.clear();
         checkpoints.clear();
         n_filled = 0;
+        ridgefill_fill_start = 0;
         ridgefill_mode.clear();
         ridgefill_rows.clear();
     }
@@ -666,6 +668,7 @@ struct server_prompt {
             tokens.clone(),
             checkpoints,
             n_filled,
+            ridgefill_fill_start,
             ridgefill_mode,
             ridgefill_rows,
         };

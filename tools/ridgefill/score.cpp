@@ -1,5 +1,6 @@
 #include "build-info.h"
 #include "common.h"
+#include "json.h"
 #include "ggml-backend.h"
 #include "llama.h"
 #include "llama-ext.h"
@@ -258,6 +259,9 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
             {"alpha", o.alpha}, {"cache_type", o.cache}, {"h_type", o.hidden}, {"flash_attn", o.flash}}},
         {"prefills", 1}, {"wall_s", std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()},
         {"build", {{"commit", llama_commit()}, {"build", llama_build_number()}}}};
+    const auto report = common_ridgefill_get_report(model, rf, selection, doc.ids.data(), n, prefix, rows, o.mode,
+            qattn ? sweep.window_begin() : -1, qattn ? sweep.window_end() : -1);
+    result["ridgefill"] = json::parse(report.to_json().dump());
     if (o.diagnostics && qattn) { result["question_mass"] = sweep.get_mass(); }
     return result;
 }
@@ -268,8 +272,8 @@ int main(int argc, char ** argv) {
         if (argc == 2 && std::string(argv[1]) == "--help") {
             std::cout << "llama-ridgefill-score --model MODEL --projector GGUF --input JSON/JSONL --output JSONL [--mode off|speed|quality|quality+qattn]\n"
                 "Defaults: --scored 512 --tail 4096 --min-prompt 8192 --share 0.5 --digits on --qattn-share 0.2 --qattn-window 64 --alpha 0\n"
-                "Chat: --special-exact on|off --header-rows K --qattn-window-mode last|turn (defaults: off, 0, last)\n"
-                "Aliases: --ridgefill-special-exact, --ridgefill-header-rows, --ridgefill-qattn-window-mode. turn requires sweep integration.\n"
+                "Chat: --special-exact on|off --header-rows K --qattn-window-mode last|turn --qattn-turn-cap N (defaults: off, 0, last, 256)\n"
+                "Aliases: --ridgefill-special-exact, --ridgefill-header-rows, --ridgefill-qattn-window-mode, --ridgefill-qattn-turn-cap.\n"
                 "--qattn-window-end END uses [END-window,END), with an exclusive zero-based endpoint.\n"
                 "Default: document (N, server semantics). For NLL use known (N-K), or an explicit row index.\n"
                 "--qattn-end is an alias. NLL with endpoint N reads scored targets; the G3 wrapper uses N-K.\n"

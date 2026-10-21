@@ -68,7 +68,7 @@ def source_files(root: Path) -> list[Path]:
     files += [root / path for path in ("src/llama-context.cpp", "src/llama-graph.cpp", "src/llama-graph.h", "src/llama-ext.h",
               "src/models/qwen35.cpp", "common/common.cpp", "common/common.h", "common/arg.cpp",
               "tools/server/server-context.cpp", "tools/server/server-schema.cpp", "tools/server/server-task.cpp",
-              "tools/server/server-task.h", "tools/llama-bench/llama-bench.cpp", "tools/perplexity/perplexity.cpp",
+              "tools/server/server-task.h", "tools/server/server-common.cpp", "tools/server/server-common.h", "tools/llama-bench/llama-bench.cpp", "tools/perplexity/perplexity.cpp",
               "convert_ridgefill_to_gguf.py")]
     for directory in ("tests/ridgefill", "tools/ridgefill"):
         files += [path for path in (root / directory).glob("*") if path.suffix in (".py", ".cpp", ".sh")]

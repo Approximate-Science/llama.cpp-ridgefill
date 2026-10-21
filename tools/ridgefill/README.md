@@ -24,6 +24,12 @@ These boundaries match `ridgefill-tune/REFERENCE-ARMS.md`, "For the engine lanes
 
 The reference's primary document NLL averages only the novel tokens selected by `kva.data.novel_mask(ids, K)` (no repeated 8-token span). The existing HTTP `run_g3.py` averages all K targets and changes the qattn window for each truncation. Those are different estimators. The wrapper reports reference-compatible novel-token NLL as `metric=nll`, and retains `metric=nll_all` as an all-token diagnostic. Both summaries use the same `paired_summary` helper and `finals/stats.py` BCa implementation as `run_g3.py`: document weighting, 5000 resamples, seed 20261004. It makes no noninferiority verdict; unmeasured metrics are SKIPPED.
 
+## Skipped-work metadata
+
+Every native document has `ridgefill.n_prompt`, `n_filled`, `n_exact_prefix`, `n_exact_prefix_by_source`, `n_cached_exact_prefix`, `tokens_skipped` and `mac_share_skipped`, plus prefix/tail counts and both analytic MAC totals. `n_filled` excludes exact prefix rows; the existing `filled` field remains the prefix boundary for compatibility. Source counts are disjoint in class/digit/special/header/qattn order, with additional cached exact rows counted separately. The paired wrapper validates every native report and adds per-arm aggregate denominators to each BCa summary; these are sums of prompt coverage and MAC budgets, not averages of percentages.
+
+MACs follow `kva/compute.py` efficient bypass with the measured row positions and actual query window. All prefix rows selected for exact computation pay full layer cost. The model includes attention/GDN/MLP/projector work and one LM head; it excludes other elementwise work, bandwidth, cache savings and extra scoring heads. Query/output gating is read from the actual model architecture; the tiny HF config omits the optional `attn_output_gate` flag, so the independent test derives it from the checkpoint projection shape. `mac_share_skipped` can be negative when selection costs more than it saves. These fields describe compute coverage, not numerical equivalence or measured speedup.
+
 ## Chat selector controls
 
 Both the native scorer and `run_nll.py` accept `--special-exact on|off` (default off), `--header-rows K` (default 0), `--qattn-window-mode last|turn` (default last), and `--qattn-turn-cap N` (default 256). The native scorer also accepts `--ridgefill-special-exact` and `--ridgefill-header-rows` aliases. These are experimental controls; no chat quality verdict or release-default change follows from the tiny correctness gate.

@@ -3486,6 +3486,20 @@ private:
         }
     }
 
+    void ridgefill_report_prompt(server_slot & slot, int32_t prefix, const std::vector<llama_pos> & rows,
+            int32_t window_begin = -1, int32_t window_end = -1) {
+        common_params selection = params_base;
+        const auto & tparams = slot.task->params;
+        selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
+        selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
+        selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
+        selection.ridgefill_qattn_turn_cap = tparams.ridgefill_qattn_turn_cap;
+        slot.stats.ridgefill = common_ridgefill_get_report(model_tgt, llama_init->ridgefill(), selection,
+                slot.task->tokens.get_tokens().data(), slot.task->n_tokens(), prefix, rows,
+                tparams.ridgefill ? tparams.ridgefill_mode : "off", window_begin, window_end,
+                slot.prompt.ridgefill_fill_start, std::min(prefix, slot.prompt.n_filled));
+    }
+
     bool ridgefill_sweep_prompt(server_slot & slot) {
         const int32_t before = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
         auto result = server_ridgefill_sweep_result::pending;
@@ -3512,6 +3526,8 @@ private:
         }
 
         slot.prompt.ridgefill_rows = slot.ridgefill_sweep->get_rows();
+        ridgefill_report_prompt(slot, slot.ridgefill_sweep_params.n_prefix, slot.prompt.ridgefill_rows,
+                slot.ridgefill_sweep->window_begin(), slot.ridgefill_sweep->window_end());
         while (slot.prompt.n_tokens() < slot.task->n_tokens() - 1) {
             slot.prompt.tokens.push_back(slot.task->tokens[slot.prompt.n_tokens()]);
         }
@@ -4150,10 +4166,14 @@ private:
                                 n_past = keep;
                             }
 
-                            slot.prompt.n_filled = p_fill > n_past ? p_fill : std::min(slot.prompt.n_filled, n_past);
+                            const int32_t retained_end = std::min(slot.prompt.n_filled, n_past);
+                            const int32_t retained_start = std::min(slot.prompt.ridgefill_fill_start, retained_end);
+                            slot.prompt.ridgefill_fill_start = p_fill > n_past && retained_start == retained_end ? n_past : retained_start;
+                            slot.prompt.n_filled = p_fill > n_past ? p_fill : retained_end;
                             slot.stats.n_prompt_filled = std::max(0, p_fill - n_past);
                             slot.prompt.ridgefill_mode = mode;
                             slot.prompt.ridgefill_rows = rows;
+                            if (!use_sweep) { ridgefill_report_prompt(slot, p_fill, rows); }
 
                             llama_ridgefill_seq_set(ctx_tgt, slot.id, p_fill > n_past ? p_fill : 0);
                             if (p_fill > n_past) {

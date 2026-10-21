@@ -1,5 +1,6 @@
 #include "arg.h"
 #include "common.h"
+#include "json.h"
 #include "fit.h"
 #include "log.h"
 #include "llama.h"
@@ -443,24 +444,28 @@ static results_perplexity perplexity_v2(llama_context * ctx, const common_params
 // RidgeFill: fill at most the first half of each chunk, the scored second half stays exact
 static void ridgefill_set_chunks(llama_context * ctx, const common_params & params, const llama_ridgefill * rf,
         int n_ctx, int n_seq, const llama_token * tokens, bool add_bos) {
+    if (!rf) { return; }
     const int p_end = std::min(common_ridgefill_p_end(params, n_ctx), n_ctx/2);
-    if (p_end <= 0) {
-        return;
+    if (p_end > 0) {
+        LOG_INF("%s: RidgeFill fills positions [0, %d) of each chunk, exact tail = %d tokens\n", __func__, p_end, n_ctx - p_end);
     }
-
-    LOG_INF("%s: RidgeFill fills positions [0, %d) of each chunk, exact tail = %d tokens\n", __func__, p_end, n_ctx - p_end);
-
     for (int seq = 0; seq < n_seq; ++seq) {
-        llama_ridgefill_seq_set(ctx, seq, p_end);
-        if (params.ridgefill_mode == "quality") {
-            std::vector<llama_token> prefix(tokens + seq*n_ctx, tokens + seq*n_ctx + p_end);
-            if (add_bos) { prefix[0] = llama_vocab_bos(llama_model_get_vocab(llama_get_model(ctx))); }
-            auto rows = common_ridgefill_rows(params, rf, prefix.data(), p_end);
-            if (llama_ridgefill_seq_set_rows(ctx, seq, rows.data(), rows.size()) < 0) {
-                throw std::runtime_error("RidgeFill: --ridgefill-mode quality exact rows were refused");
+        std::vector<llama_token> prefix(tokens + seq*n_ctx, tokens + seq*n_ctx + p_end);
+        if (p_end > 0 && add_bos) { prefix[0] = llama_vocab_bos(llama_model_get_vocab(llama_get_model(ctx))); }
+        std::vector<llama_pos> rows;
+        if (p_end > 0) {
+            llama_ridgefill_seq_set(ctx, seq, p_end);
+            if (params.ridgefill_mode == "quality") {
+                rows = common_ridgefill_rows(params, rf, prefix.data(), p_end);
+                if (llama_ridgefill_seq_set_rows(ctx, seq, rows.data(), rows.size()) < 0) {
+                    throw std::runtime_error("RidgeFill: --ridgefill-mode quality exact rows were refused");
+                }
+                LOG_INF("RidgeFill: mode quality selected %zu exact rows of %d prefix tokens (seq %d)\n", rows.size(), p_end, seq);
             }
-            LOG_INF("RidgeFill: mode quality selected %zu exact rows of %d prefix tokens (seq %d)\n", rows.size(), p_end, seq);
         }
+        const auto report = common_ridgefill_get_report(llama_get_model(ctx), rf, params, prefix.data(),
+                n_ctx, p_end, rows, params.ridgefill_mode);
+        LOG_INF("RidgeFill: report %s\n", report.to_json().dump().c_str());
     }
 }
 

@@ -567,3 +567,57 @@ refusals: PASS 23
 ```
 
 Evidence: out/integ-f106/summary.txt validates those counts against the actual JSON/log artifacts. Gate commands and return codes are in out/integ-f106/run_gates.py, run_gates_tail.py, run2.log, run3.log and run5.log; individual .log files and result subdirectories contain raw output. The chat gate's preserved final output is chat-score-final.log/ and chat-score-final/summary.json (the original passing log was overwritten by an attempted duplicate-directory invocation, which failed as intended). Initial gate-harness builds omitted -DRF27_API and correctly refused or produced no selector artifact; rebuilt both with that required macro before the passing runs. No failed/empty run is counted as passed. No GPU, publishing or push was attempted.
+
+
+## Per-request skipped-token and analytic MAC reporting
+
+On rf27-tools, fast-forwarded to the verified integration commit c954e412c (merge f1060fee5 plus the signal-delivery test repair), then added one common report builder shared by the native scorer, server, bench and perplexity. It reads the loaded model's actual trunk hparams; no src/ changes, model reload, backend work or reference-repo edits are involved. Native JSON carries ridgefill; server timings/usage carry the same object, including streamed completion/chat/Responses usage. Bench reports each measured repetition after the timed interval, with separate warmup labels; perplexity reports each scored chunk. Needle/TTFT records retain the report, legacy HTTP NLL retains all 512 request reports, and native/HTTP paired statistical summaries include each arm's summed counts and MAC denominators. BCa estimates, weighting and seeds are unchanged.
+
+Counts: n_filled = n_prefix - n_exact_prefix, tokens_skipped = n_filled / n_prompt. Exact row contributions are disjoint in class, digit, special, header, qattn order, calculated with the real selector and matching tokenizer attributes. Cached exact prefix rows not already attributed to those sets are n_cached_exact_prefix; that count plus the five source counts equals n_exact_prefix. Fresh-prompt counts match select_rows_ext's unions. Prompt coverage includes retained approximate cache rows and does not confuse them with the server's existing counts of work performed this request. The legacy filled/prompt_filled_n span fields stay unchanged.
+
+A necessary cache correction was found during review: an exact cached prompt can satisfy a later approximate-mode request without ever filling its prefix. Added a reporting-only fill-start marker to server_prompt, its clear/clone and RAM-cache snapshots. Together with the existing fill-end marker and exact row set it describes actual retained coverage. Fully exact caches report no skipped tokens; partially exact caches charge their retained exact rows in full. Existing decisions about reuse, reset, exact rows, fill boundaries, replay and decode are unchanged. Explicit controls cover both cases, including the partial cache MAC budget versus the reference.
+
+MACs use kva/compute.py's efficient bypass formula, full cost for exact rows at their actual positions, actual query-window endpoints/size and lower selector layers, and one lm_head. Counted: model linears, MLP, causal QK/PV, GDN input/conv/state operations, and a full hidden-squared projector only on filled rows. Excluded by the reference model: norms, RoPE, softmax, elementwise work, bandwidth/cache savings, and extra scoring heads. mac_share_skipped = 1 - macs_ridgefill / macs_exact; selector overhead can make it negative. Empty prefills report zero fractions. A standalone stock off control with no server reporting has known zero skipped fractions and explicitly null MAC totals; approximate modes never invent missing data. Aggregate fractions divide summed numerators by summed denominators rather than averaging percentages.
+
+Reference detail: compute.Dims defaults gated to false when HF config omits attn_output_gate, as this tiny Qwen35 config does. The actual Qwen35 q_proj has twice heads x head_dim rows (queries plus output gates), confirmed in both engine and oracle code. The test independently reads that checkpoint weight shape and sets Dims.gated accordingly before calling the unchanged read-only compute.exact/bypass/qattn_select functions. No reference or fixture config was modified to hide a mismatch. All eight fresh configurations and the partial-cache case agree with the reference; Qwen35 gating is charged in the report.
+
+```text
+CPU server / bench / perplexity / scorer: BUILT (-j4)
+Reporting live gate: PASS 53 checks
+  8 MAC configurations: exact relative error 0.0 vs kva/compute.py
+  selector-ext source counts, class/digit/special/header/qattn unions: PASS
+  all-exact prefix: zero filled rows, selector overhead still charged (negative MAC savings)
+  native/HTTP, cache coverage, full/partial exact caches: PASS
+  completion/chat usage including streams, bench repetitions, scored perplexity chunk: PASS
+Paired G3 live gate: PASS 102 checks, speed / quality / off, two docs and two needles
+  NLL requests, needle/TTFT/bench records and BCa summaries retain all denominators
+  max raw-logprob absolute error 1.1241689676921851e-06
+Native scorer oracle: PASS 24/24 (two K values, all four modes, three chunk sizes)
+Chat oracle/default gate: PASS 24; old/default/explicit outputs byte-identical, raw/templated, F32/F16
+HTTP default: PASS 17
+HTTP turn: PASS 25
+Tool gate: PASS 40
+G5 refusal gate: PASS 23
+G0 server vs pinned upstream, qwen35 two slots: PASS 8/8 (no-projector output unchanged)
+Client controls: 10 tests OK; GPU evidence/audit parser controls: 8 tests OK
+Type check: All checks passed!
+Portability audit: 53 sources, empty
+git diff --check: PASS
+```
+
+Commands (all inside this worktree, CPU only):
+
+```sh
+cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity llama-ridgefill-score -j4
+.venv-oracle/bin/python tests/ridgefill/check_reporting.py --bin-dir out/tools-cpu-build/bin --fixture out/gate1-qwen35 --chat-fixture out/integ-f106/chat-score-final --dump out/integ-f106/gates/rf_dump_rs --kva /var/home/dylan/projects/research/kva-wt-q27 --out out/reporting-cache-live2
+.venv-oracle/bin/python tests/ridgefill/check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/integ-f106/rf_dump --kva /var/home/dylan/projects/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/reporting-cache-g3 --port 18135
+.venv-oracle/bin/python tools/ridgefill/check_chat_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --baseline-binary out/chat-baseline/score --fixture out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work out/reporting-cache-chat
+.venv-oracle/bin/python out/http17/check-http-sweep.py out/gate1-qwen35
+.venv-oracle/bin/python out/reporting_finish_gates.py
+.venv-oracle/bin/python tests/ridgefill/test_eval_client.py -v
+.venv-oracle/bin/python tests/ridgefill/test_gpu_smoke.py -v
+```
+
+The finish script records the exact commands for the scorer/HTTP turn/tool/refusal/upstream server gates and uses new result directories. Logs: out/reporting-cache-{build,live2,g3,chat,http17,score,http-turn,tool,refusals,g0-server}.log; live results in the matching directories; out/reporting-finish-gates.log, reporting-client-tests5.log, reporting-gpu-parser-tests.log, reporting-typecheck-final.log, reporting-portability.log. Type check uses pinned ty 0.0.84 with the oracle Python and the same explicit import paths as the previous gate. Scripts run with PYTHONDONTWRITEBYTECODE=1 so the external reference repo stays read-only.
+
+Failed setup/control runs are retained and not counted: a new fake-client test lacked its explicit logit_bias; type checking needed an explicit None narrowing and heterogeneous request dict annotation; reading a two-document JSONL as one JSON failed in a diagnostic; and the first cache-aware usage comparison correctly differed from a fresh native run because OpenAI requests cache by default. Fresh usage comparisons now set cache_prompt=false; dedicated tests check actual cached coverage. The original pre-cache and pre-summary reporting runs are not substituted for the final gates above. No inference tolerance was widened. No GPU run, full-model quality/speed measurement, historical-count backfill, publication or push was performed.
