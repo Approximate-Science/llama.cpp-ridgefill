@@ -102,3 +102,23 @@ The tool integration control takes the directory containing the three built exec
 ```
 
 It compares server speed/off logprobs with direct F32 logits, changes request modes and exact tails through a live cache, checks CLI propagation through /props, runs bench and perplexity, and requires named refusals for unavailable quality modes. Bench uses F16 KV because its existing parser does not accept F32. This is a tiny CPU integration check; it produces no real-model performance claim.
+
+## G5 archive portability and refusals
+
+Run the gate on a committed revision containing the tools and refusal checker, with a new output directory:
+
+```sh
+python3 tests/ridgefill/run_g5.py --ref COMMIT --backend cpu --fixture out/gate1-qwen35 --out out/g5-cpu-COMMIT
+```
+
+It extracts git archive into a clean source directory, prevents Git from discovering the parent checkout, pins the build commit/count, builds server/bench/perplexity with at most -j4, checks their build IDs, audits the RidgeFill source files with rg, and runs the live refusal controls. The source list and patterns are in audit.json; portability-grep.log must be empty (rg exit 1). Positive grep controls insert an absolute user path, hostname, device ID and TP-size assumption; the negative control is portable code. Logs and exact build commands stay under --out. Existing output directories refuse.
+
+Use the same script in lane Q's bridge with --backend vulkan or --backend hip and --gpu-layers 99. HIP toolchain/target settings are explicit --cmake-arg=-DOPTION=VALUE arguments inherited from the bridge setup. The gate does not select GPU IDs or assume a target architecture/TP degree. It does not provide container isolation; run the command in a clean container when one is available. Its result covers only the selected backend, archive build, source audit and refusal tests; multi-GPU layer split remains a separate hardware gate.
+
+`check_refusals.py` can also run against an existing build:
+
+```sh
+python3 tests/ridgefill/check_refusals.py --bin-dir build/bin --fixture out/gate1-qwen35 --work out/g5-refusals
+```
+
+It requires named startup refusals for LoRA, control vectors, embeddings, nonzero --cache-reuse and -sm row; bench must refuse embeddings and row split. Per-request n_cache_reuse must refuse. A live speed prompt must fill before slot save is refused without creating a file. Mode off must fill nothing and save a nonempty exact slot. Missing LoRA/control files are intentional: the RidgeFill combination must be rejected before file I/O, while stock with the same missing LoRA must reach its normal loader. Ordinary cache_prompt reuse and RAM prompt caching remain supported; cache-reuse means KV shifting.

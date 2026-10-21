@@ -1361,10 +1361,6 @@ private:
             }
         }
 
-        if (!params_base.ridgefill_path.empty() && params_base.n_cache_reuse) {
-            params_base.n_cache_reuse = 0;
-            SRV_WRN("%s\n", "cache_reuse is not supported with RidgeFill, it will be disabled");
-        }
         if (!params_base.ridgefill_path.empty() && params_base.ridgefill_mode == "quality+qattn" && params_base.ridgefill_qattn_share > 0) {
             SRV_ERR("%s", "--ridgefill-mode quality+qattn requires the question-attention sweep driver\n");
             return false;

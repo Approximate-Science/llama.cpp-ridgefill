@@ -2451,6 +2451,10 @@ int llama_bench(int argc, char ** argv) {
             }
         }
 
+        if (rf && cparams.embeddings) {
+            fprintf(stderr, "RidgeFill does not support embeddings (--embeddings)\n");
+            return 1;
+        }
         llama_context * ctx = llama_init_from_model(lmodel, cparams);
         if (ctx == NULL) {
             fprintf(stderr, "%s: error: failed to create context with model '%s'\n", __func__, inst.model.c_str());
