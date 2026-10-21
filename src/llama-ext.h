@@ -206,6 +206,13 @@ LLAMA_API bool         llama_ridgefill_digits_default(const struct llama_ridgefi
 LLAMA_API float        llama_ridgefill_qattn_default (const struct llama_ridgefill * rf);
 LLAMA_API const char * llama_ridgefill_desc          (const struct llama_ridgefill * rf); // "name (authors; license; doi ...)"
 
+// class + digit exact rows of a prompt (SPEC §4, per prompt; the oracle's class_rows + select.digits): of the rows
+// [0, n_prefix) whose token has a finite class score, the round-half-even(share x matches) rarest, ties by lower
+// position, united (digits) with the rows whose token text has an ASCII digit (added tokens excluded). Writes the
+// sorted positions to out (room for n_prefix), returns their count, < 0 refused (format-1 projector, bad arguments).
+LLAMA_API int32_t llama_ridgefill_select_rows(const struct llama_ridgefill * rf, const llama_token * tokens,
+        int32_t n_prefix, float share, bool digits, llama_pos * out);
+
 // the recurrent-state correction scale in [0, 1] (default: the projector's alpha_default); 0 ok, < 0 refused
 LLAMA_API int32_t llama_ridgefill_set_alpha(struct llama_context * ctx, float alpha);
 

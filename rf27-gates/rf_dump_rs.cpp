@@ -68,6 +68,8 @@ static int run(int argc, char ** argv) {
     bool late_only = false;
     bool warm = false;
     bool lower_twice = false, full_midsweep = false;
+    float select_share = -1.0f;
+    int select_digits = 0;
     std::string win_arg, inp_arg;
     int win_n = 0;
     std::string rows1_arg;
@@ -102,6 +104,8 @@ static int run(int argc, char ** argv) {
         else if (arg == "--sweep")     { sweep = true; }
         else if (arg == "--lower-twice") { lower_twice = true; }  // set LOWER again after the pass (refused)
         else if (arg == "--full-midsweep") { full_midsweep = true; } // FULL right after LOWER (refused)
+        else if (arg == "--select-share")  { select_share = std::stof(next()); } // write llama_ridgefill_select_rows of [0, n - tail) and exit
+        else if (arg == "--select-digits") { select_digits = std::stoi(next()); }
         else if (arg == "--warm")      { warm = true; } // decode a reversed prompt first, then seq_rm (stale states in the cells)
         else if (arg == "--late-only") { sweep = true; late_only = true; } // a LATE replay without LOWER first (refused)
         else if (arg == "--win-layers") { win_arg = next(); }
@@ -141,6 +145,18 @@ static int run(int argc, char ** argv) {
         rf.reset(llama_ridgefill_init(model.get(), projector.c_str()));
         if (!rf) { throw std::runtime_error("projector load failed"); }
     }
+#ifdef RF27_API
+    if (select_share >= 0.0f) {
+        if (!rf) { throw std::invalid_argument("--select-share needs --projector"); }
+        const int np = n - std::min(tail, n);
+        std::vector<llama_pos> rows(std::max(np, 1));
+        const int32_t k = llama_ridgefill_select_rows(rf.get(), tokens.data(), np, select_share, select_digits != 0, rows.data());
+        if (k < 0) { return 3; }
+        write_bytes(output + ".rows.i32", rows.data(), (size_t) k * sizeof(llama_pos));
+        fprintf(stderr, "selected %d of %d prefix rows\n", k, np);
+        return 0;
+    }
+#endif
     auto cp = llama_context_default_params();
     cp.n_ctx = ((n + 255) / 256) * 256 * n_seq;
     cp.n_batch = n_batch * n_seq;

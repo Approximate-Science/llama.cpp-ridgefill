@@ -1,0 +1,149 @@
+{
+  "summary": {
+    "gate": "G1-select-rows",
+    "result": "PASS",
+    "checks": 23,
+    "passed": 23,
+    "class_matches": 254,
+    "digit_rows": 20
+  },
+  "checks": [
+    {
+      "check": "select-rows-share0-digits0-P500",
+      "result": "PASS",
+      "n": 0,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0-digits1-P500",
+      "result": "PASS",
+      "n": 20,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.1-digits0-P500",
+      "result": "PASS",
+      "n": 25,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.1-digits1-P500",
+      "result": "PASS",
+      "n": 45,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.25-digits0-P500",
+      "result": "PASS",
+      "n": 64,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.25-digits1-P500",
+      "result": "PASS",
+      "n": 84,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.5-digits0-P500",
+      "result": "PASS",
+      "n": 127,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.5-digits1-P500",
+      "result": "PASS",
+      "n": 147,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share1-digits0-P500",
+      "result": "PASS",
+      "n": 254,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share1-digits1-P500",
+      "result": "PASS",
+      "n": 254,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0-digits0-P699",
+      "result": "PASS",
+      "n": 0,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0-digits1-P699",
+      "result": "PASS",
+      "n": 22,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.1-digits0-P699",
+      "result": "PASS",
+      "n": 35,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.1-digits1-P699",
+      "result": "PASS",
+      "n": 57,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.25-digits0-P699",
+      "result": "PASS",
+      "n": 88,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.25-digits1-P699",
+      "result": "PASS",
+      "n": 110,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.5-digits0-P699",
+      "result": "PASS",
+      "n": 177,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share0.5-digits1-P699",
+      "result": "PASS",
+      "n": 199,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share1-digits0-P699",
+      "result": "PASS",
+      "n": 354,
+      "first_diff": null
+    },
+    {
+      "check": "select-rows-share1-digits1-P699",
+      "result": "PASS",
+      "n": 354,
+      "first_diff": null
+    },
+    {
+      "check": "control-share-0.5!=0.25",
+      "result": "PASS",
+      "n": [
+        127,
+        64
+      ]
+    },
+    {
+      "check": "control-digits-change-set",
+      "result": "PASS"
+    },
+    {
+      "check": "refuse-format1-projector",
+      "result": "PASS",
+      "rc": 3
+    }
+  ]
+}

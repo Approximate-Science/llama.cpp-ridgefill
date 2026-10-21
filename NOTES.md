@@ -144,3 +144,18 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   nobody reads the 128-row variant as a test). Refusals by name: LOWER output, LATE without LOWER, LOWER on a
   non-empty sequence, FULL mid-sweep, a part on a dense model.
 - Regression after the change: G0 72/0, rollback 11/11, G1 speed 27/27 (L-B's harness), G1 quality a0 27/27.
+
+## 19:15-19:25 dispatch decision, llama_ridgefill_select_rows
+- Decision on L-C's 8de161386 (+ driver 68fe8a45d): keep 78d4a2551 (mine), with 8de161386's sequencing and
+  refusals already adopted; the driver ports to `llama_ridgefill_seq_set_part(ctx, seq, &params)` and takes the
+  question rows' layer inputs from the window capture (upstream's extraction is unchanged and still works, but it
+  copies every row of the last decode).
+- Implemented `llama_ridgefill_select_rows(rf, tokens, n_prefix, share, digits, out)`: the oracle's class_rows
+  (lane T's q27/rf27_quality.py: round-half-even(share x matches) rarest finite-score rows, ties by lower position)
+  united with select.digits (digit set built at load from token text, control / user-defined / unknown / unused
+  tokens excluded). G1 (`rf27-gates/g1_select_rows.py`, oracle functions imported, the tiny fixture's rowsel table
+  and HF tokenizer): 23/23 — shares 0, 0.1, 0.25, 0.5, 1 x digits off/on x P 500 and 699 identical row sets
+  (254 class matches, 20 digit rows in [0, 500)); share and digit controls change the set; a format-1 projector is
+  refused. A first run failed the P = 700 half: the tool refuses --tail 0, so nothing ran there (now P = 699).
+- Not checked: the digit set on the real Qwen3.8 vocabulary against kva's digit_ids (needs the HF tokenizer.json,
+  sha 0997f410..., which is not on this box) — a follow-up for whoever holds the tokenizer (lane T has kva).

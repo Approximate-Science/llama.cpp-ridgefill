@@ -558,6 +558,60 @@ void llama_ridgefill_seq_set(llama_context * ctx, llama_seq_id seq_id, llama_pos
     ctx->ridgefill_seq_set(seq_id, p_end);
 }
 
+int32_t llama_ridgefill_select_rows(const llama_ridgefill * rf, const llama_token * tokens, int32_t n_prefix,
+        float share, bool digits, llama_pos * out) {
+    // SPEC §4, the oracle's class_rows (q27/rf27_quality.py) + select.digits, per prompt: of the prefix rows whose
+    // token has a finite class score, the round-half-even(share x matches) rarest (highest score), ties by lower
+    // position; united with the rows whose token text has an ASCII digit (added tokens excluded); ascending
+    if (!rf || rf->score.empty() || rf->is_digit.size() != rf->score.size()) {
+        LLAMA_LOG_ERROR("%s: the projector has no row table (format 2 needed)\n", __func__);
+        return -1;
+    }
+    if (n_prefix < 0 || (n_prefix > 0 && (!tokens || !out)) || !(share >= 0.0f && share <= 1.0f)) {
+        LLAMA_LOG_ERROR("%s: invalid arguments (n_prefix %d, share %g)\n", __func__, n_prefix, share);
+        return -1;
+    }
+
+    const int64_t n_vocab = rf->score.size();
+
+    std::vector<int32_t> matches;
+    for (int32_t i = 0; i < n_prefix; ++i) {
+        if (tokens[i] < 0 || tokens[i] >= n_vocab) {
+            LLAMA_LOG_ERROR("%s: token %d at position %d is outside the vocabulary\n", __func__, tokens[i], i);
+            return -1;
+        }
+        if (std::isfinite(rf->score[tokens[i]])) {
+            matches.push_back(i);
+        }
+    }
+
+    // Python round(): half to even, as std::nearbyint in the default rounding mode
+    const int64_t k = (int64_t) std::nearbyint((double) share * (double) matches.size());
+
+    std::stable_sort(matches.begin(), matches.end(), [&](int32_t a, int32_t b) {
+        return rf->score[tokens[a]] > rf->score[tokens[b]];
+    });
+
+    std::vector<uint8_t> pick(n_prefix, 0);
+    for (int64_t j = 0; j < k && j < (int64_t) matches.size(); ++j) {
+        pick[matches[j]] = 1;
+    }
+    if (digits) {
+        for (int32_t i = 0; i < n_prefix; ++i) {
+            pick[i] |= rf->is_digit[tokens[i]];
+        }
+    }
+
+    int32_t n = 0;
+    for (int32_t i = 0; i < n_prefix; ++i) {
+        if (pick[i]) {
+            out[n++] = i;
+        }
+    }
+
+    return n;
+}
+
 int32_t llama_ridgefill_set_alpha(llama_context * ctx, float alpha) {
     return ctx->ridgefill_set_alpha(alpha);
 }
