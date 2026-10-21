@@ -147,7 +147,11 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * cur;
     ggml_tensor * inpL;
 
-    inpL = build_inp_embd(model.tok_embd);
+    // RidgeFill two-sweep prefill: a LATE ubatch starts at the split from h_S rows of the sweep buffer
+    auto * rf_part  = build_inp_ridgefill_part();
+    const int il_0  = rf_part && ridgefill_params.part == LLM_RIDGEFILL_PART_LATE ? ridgefill->split : 0;
+
+    inpL = il_0 > 0 ? build_ridgefill_h_input(*this, rf_part) : build_inp_embd(model.tok_embd);
 
     cb(inpL, "model.input_embed", -1);
 
@@ -157,8 +161,20 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
-    for (int il = 0; il < n_layer; ++il) {
-        if (ridgefill && il == ridgefill->split) {
+    for (int il = il_0; il < n_layer; ++il) {
+        if (rf_part && ridgefill_params.part == LLM_RIDGEFILL_PART_LOWER) {
+            // RidgeFill sweep 1: the lower layers only; h_S (and window layer inputs) go to the sweep buffers
+            build_ridgefill_capture(*this, rf_part, inpL, il);
+            if (il == ridgefill->split) {
+                // no output head; the inputs set_inputs() writes must exist even if the lower layers do not read them
+                ggml_build_forward_expand(gf, inp_pos);
+                if (inp_out_ids) {
+                    ggml_build_forward_expand(gf, inp_out_ids);
+                }
+                return;
+            }
+        }
+        if (ridgefill && il == ridgefill->split && ridgefill_params.fill != LLM_RIDGEFILL_FILL_NONE) {
             // RidgeFill: a filled ubatch writes the late layers' caches from h_S and has no output head
             build_ridgefill_late(*this, model, inpL, build_inp_ridgefill(), inp_pos, inp->get_attn(), inp->get_recr(),
                     (llm_ridgefill_fill) ridgefill_params.fill);

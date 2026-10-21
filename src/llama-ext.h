@@ -158,6 +158,40 @@ LLAMA_API void llama_set_ridgefill(struct llama_context * ctx, const struct llam
 
 // from now on, the tokens of seq_id at positions < p_end are filled (p_end <= 0: none)
 // a filled token cannot be an output, llama_decode() returns -1 for such a batch
+// the two-sweep prefill (quality+qattn, RF27-INTERFACE.md §3): the next decodes of seq_id run one part of the model.
+//   LOWER: layers [0, split) of every row (stock lower caches, no output head, no row may be an output); h_S of the
+//          row at position p is written to row p of h_buf; optionally the inputs of win_layers (< split) at positions
+//          [win_begin, win_begin + win_n) to row (pos - win_begin) of win_bufs[i].
+//   LATE:  a replay over positions already decoded (in LOWER): h_S from row p of h_buf, then for rows < p_end the fill
+//          of the late layers (bulk or exact rows R, the correction on the ubatch holding p_end - 1), for rows >= p_end
+//          the stock late layers and the output head. The lower layers' caches and the cache cells are untouched; the
+//          late layers' recurrent states start from zero when the replay starts at the sequence's first position.
+//   FULL:  the single pass (default).
+// Buffers: 2-D ggml tensors [n_embd, n] (F32, F16 or BF16) in a backend buffer, owned by the caller until the
+// decodes that use them have finished. One sweep sequence per batch; a LATE batch holds LATE rows of one sequence only.
+// Returns 0, or < 0 refused (logged by name). Qwen3.5 (qwen35) only.
+enum llama_ridgefill_part {
+    LLAMA_RIDGEFILL_PART_FULL  = 0,
+    LLAMA_RIDGEFILL_PART_LOWER = 1,
+    LLAMA_RIDGEFILL_PART_LATE  = 2,
+};
+
+struct llama_ridgefill_part_params {
+    enum llama_ridgefill_part part;
+    struct ggml_tensor * h_buf;
+
+    int32_t                     n_win_layers;
+    const int32_t             * win_layers;
+    struct ggml_tensor * const * win_bufs;
+    llama_pos                   win_begin;
+    int32_t                     win_n;
+};
+
+LLAMA_API struct llama_ridgefill_part_params llama_ridgefill_part_default_params(void);
+
+LLAMA_API int32_t llama_ridgefill_seq_set_part(struct llama_context * ctx, llama_seq_id seq_id,
+        const struct llama_ridgefill_part_params * params);
+
 // recurrent rollback (n_rs_seq > 0): a filled ubatch never holds exact tokens, so the snapshots of a decode whose exact
 // run is shorter than n_rs_seq + 1 cover only that run; roll back only into the tokens of the last exact ubatch (as
 // stock, where older slots are caller-owned) - never into filled prompt rows

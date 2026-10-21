@@ -518,6 +518,40 @@ bool llama_memory_recurrent::prepare(const std::vector<llama_ubatch> & ubatches)
     return success;
 }
 
+bool llama_memory_recurrent::can_replay(const llama_ubatch & ubatch) const {
+    if (ubatch.n_seqs != 1 || ubatch.n_seq_id[0] != 1) {
+        return false;
+    }
+
+    const llama_seq_id seq_id = ubatch.seq_id[0][0];
+    if (seq_id < 0 || (uint32_t) seq_id >= size) {
+        return false;
+    }
+
+    const int32_t tail = cells[seq_id].tail;
+
+    // the sequence owns its cell, and the replayed positions were processed before
+    return tail >= 0 && cells[tail].seq_id.size() == 1 && ubatch.pos[ubatch.n_tokens - 1] <= cells[tail].pos;
+}
+
+bool llama_memory_recurrent::find_slot_replay(const llama_ubatch & ubatch, bool zero) {
+    if (!can_replay(ubatch)) {
+        return false;
+    }
+
+    const int32_t tail = cells[ubatch.seq_id[0][0]].tail;
+
+    // the state is read from and written to the sequence's own cell; the cell's position stays the last one processed
+    cells[tail].src0 = tail;
+    cells[tail].src  = tail;
+
+    rs_z = zero ? tail : -1;
+    head = tail;
+    n    = 1;
+
+    return true;
+}
+
 bool llama_memory_recurrent::find_slot(const llama_ubatch & ubatch) {
     const uint32_t n_seq_tokens = ubatch.n_seq_tokens;
     const uint32_t n_seqs       = ubatch.n_seqs;
@@ -1299,6 +1333,11 @@ llama_memory_recurrent_context::llama_memory_recurrent_context(
         llama_memory_recurrent * mem,
         std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), mem(mem), ubatches(std::move(ubatches)) {}
 
+llama_memory_recurrent_context::llama_memory_recurrent_context(
+        llama_memory_recurrent * mem,
+        std::vector<llama_ubatch> ubatches,
+        std::vector<bool> zero) : status(LLAMA_MEMORY_STATUS_SUCCESS), mem(mem), ubatches(std::move(ubatches)), replay(true), zero(std::move(zero)) {}
+
 llama_memory_recurrent_context::~llama_memory_recurrent_context() = default;
 
 bool llama_memory_recurrent_context::next() {
@@ -1320,6 +1359,10 @@ bool llama_memory_recurrent_context::apply() {
         assert(status == LLAMA_MEMORY_STATUS_NO_UPDATE);
 
         return true;
+    }
+
+    if (replay) {
+        return mem->find_slot_replay(ubatches[i_next], zero[i_next]);
     }
 
     mem->find_slot(ubatches[i_next]);

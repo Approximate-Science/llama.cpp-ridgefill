@@ -215,6 +215,10 @@ public:
     // return empty slot_info on failure
     slot_info find_slot(const llama_ubatch & ubatch, bool cont) const;
 
+    // RidgeFill replay (a late-layers-only pass over positions already in the cache): the cells that hold the
+    // positions of ubatch, one sequence; empty if a position is missing. The cells are not modified.
+    slot_info find_slot_replay(const llama_ubatch & ubatch) const;
+
     // emplace the ubatch context into slot: [sinfo.idxs[0...ubatch.n_tokens - 1]]
     void apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch);
 
@@ -382,6 +386,13 @@ public:
             slot_info_vec_t sinfos,
             std::vector<llama_ubatch> ubatches);
 
+    // RidgeFill replay: apply() refreshes n_kv only and leaves the cells as they are
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            slot_info_vec_t sinfos,
+            std::vector<llama_ubatch> ubatches,
+            bool replay);
+
     virtual ~llama_kv_cache_context();
 
     //
@@ -449,6 +460,8 @@ private:
     //
 
     bool do_shift = false;
+
+    bool replay = false; // RidgeFill: the ubatches re-write positions already in the cache
 
     stream_copy_info sc_info;
 

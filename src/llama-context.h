@@ -4,6 +4,7 @@
 #include "llama-ext.h"
 #include "llama-cparams.h"
 #include "llama-graph.h"
+#include "llama-ridgefill.h"
 #include "llama-adapter.h"
 #include "llama-impl.h"
 #include "llama-memory.h"
@@ -139,6 +140,7 @@ struct llama_context {
     void ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end);
     int32_t ridgefill_set_alpha(float alpha);
     int32_t ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n);
+    int32_t ridgefill_seq_set_part(llama_seq_id seq_id, const llama_ridgefill_part_params * params);
 
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
@@ -285,6 +287,10 @@ private:
     // mark the tokens of the current batch that are filled, returns false if one of them is an output
     bool ridgefill_mark();
 
+    // the sweep parts of the input batch: false (refused, logged) for a mix the context cannot split; replay = the
+    // batch holds LATE rows of one sequence (positions already in the memory)
+    bool ridgefill_check_parts(const llama_batch_ext & batch_inp, bool & replay) const;
+
     // the ubatch holds the last filled row of a sequence and the correction adds something
     bool ridgefill_correct(const llama_ubatch & ubatch) const;
 
@@ -325,6 +331,9 @@ private:
     std::array<std::vector<llama_pos>, LLAMA_MAX_SEQ> ridgefill_rows; // exact rows R (sorted, < p_end); empty: speed
 
     float ridgefill_alpha = 0.0f; // recurrent-state correction scale, default from the projector
+
+    std::array<llama_ridgefill_part_state, LLAMA_MAX_SEQ> ridgefill_part; // the two-sweep prefill state per sequence
+    uint64_t ridgefill_part_gen = 0;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 

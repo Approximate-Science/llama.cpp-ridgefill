@@ -665,7 +665,8 @@ llama_ubatch llama_batch_allocr::split_equal(uint32_t n_ubatch, bool sequential,
                 add = false;
             } else if (cur_seq_set.empty()) {
                 fill_first = fill[i];
-            } else if (fill[i] != fill_first) {
+            } else if (fill[i] != fill_first || fill_first >= 2) {
+                // a two-sweep part ubatch (code >= 2) holds one sequence (its sweep buffer; L-C's draft)
                 fill_skip.push_back(seq_set[i]);
                 add = false;
             }

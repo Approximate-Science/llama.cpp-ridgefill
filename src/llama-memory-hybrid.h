@@ -52,6 +52,12 @@ public:
             uint32_t n_ubatch,
             bool embd_all) override;
 
+    // RidgeFill replay: a late-layers-only pass of one sequence over positions already in both caches; the KV cells
+    // and the recurrent cell keep their metadata (see llama_kv_cache::find_slot_replay, llama_memory_recurrent)
+    llama_memory_context_ptr init_replay(
+            llama_batch_allocr & balloc,
+            uint32_t n_ubatch);
+
     llama_memory_context_ptr init_full() override;
 
     llama_memory_context_ptr init_update(llama_context * lctx, bool optimize) override;
@@ -111,6 +117,13 @@ public:
               llama_memory_hybrid * mem,
                   slot_info_vec_t   sinfos_attn,
         std::vector<llama_ubatch>   ubatches);
+
+    // RidgeFill replay
+    llama_memory_hybrid_context(
+              llama_memory_hybrid * mem,
+                  slot_info_vec_t   sinfos_attn,
+        std::vector<llama_ubatch>   ubatches,
+                std::vector<bool>   zero);
 
     ~llama_memory_hybrid_context() = default;
 

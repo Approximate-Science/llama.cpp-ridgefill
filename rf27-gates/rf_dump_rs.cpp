@@ -1,10 +1,16 @@
 // Derived from L-B's tests/ridgefill/rf_dump.cpp (rf27-tools e0e1fa9) with --n-rs-seq (recurrent rollback snapshots)
 // and --cross (batches cross the fill end, as the server submits them; no prefix dump then), --fa 0|1,
 // --n-seq N (the same prompt on N sequences of a unified KV cache, in the same batches; seq s dumps to <output>.s<s>)
-// and --rows1 (exact rows of sequences >= 1; empty: speed).
+// and --rows1 (exact rows of sequences >= 1; empty: speed),
+// --sweep (the two-sweep prefill: LOWER over all rows into an h_S buffer, then a LATE replay over all rows; writes
+// <output>.h.f32), --win-layers L,.. --win-n W (LOWER also captures those layers' inputs at the last W positions;
+// <output>.win<L>.f32), --layer-inp L,.. (no sweep, one batch: upstream's layer-input extraction of every row, <output>.inp<L>.f32).
 // CPU gate harness. Dump prefix and final sequence state plus tail logits; never score a filled row.
 #include "llama.h"
 #include "llama-ext.h"
+#include "ggml-backend.h"
+#include "ggml-cpp.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <cstdio>
@@ -34,12 +40,36 @@ static void dump_state(llama_context * ctx, const std::string & path, llama_seq_
     write_bytes(path, data.data(), data.size());
 }
 
+static std::vector<int> int_list(const std::string & a) {
+    std::vector<int> r;
+    size_t b = 0;
+    while (b < a.size()) {
+        size_t e = a.find(',', b);
+        r.push_back(std::stoi(a.substr(b, e - b)));
+        if (e == std::string::npos) { break; }
+        b = e + 1;
+    }
+    return r;
+}
+
+static void write_tensor(const std::string & path, const ggml_tensor * t, int64_t rows) {
+    std::vector<float> v(t->ne[0] * rows);
+    ggml_backend_tensor_get(t, v.data(), 0, v.size() * sizeof(float));
+    write_bytes(path, v.data(), v.size() * sizeof(float));
+}
+
 static int run(int argc, char ** argv) {
     std::string model_path, tokens_path, output, projector, mode = "off", rows_arg;
     int n_rs_seq = 0;
     bool cross = false;
     int fa = 0;
     int n_seq = 1;
+    bool sweep = false;
+    bool late_only = false;
+    bool warm = false;
+    bool lower_twice = false, full_midsweep = false;
+    std::string win_arg, inp_arg;
+    int win_n = 0;
     std::string rows1_arg;
     int tail = 200, keep = 200, n_batch = 700, n_ubatch = 512;
     float alpha = 0;
@@ -69,6 +99,14 @@ static int run(int argc, char ** argv) {
         else if (arg == "--fa")        { fa = std::stoi(next()); }
         else if (arg == "--n-seq")     { n_seq = std::stoi(next()); }
         else if (arg == "--rows1")     { rows1_arg = next(); }
+        else if (arg == "--sweep")     { sweep = true; }
+        else if (arg == "--lower-twice") { lower_twice = true; }  // set LOWER again after the pass (refused)
+        else if (arg == "--full-midsweep") { full_midsweep = true; } // FULL right after LOWER (refused)
+        else if (arg == "--warm")      { warm = true; } // decode a reversed prompt first, then seq_rm (stale states in the cells)
+        else if (arg == "--late-only") { sweep = true; late_only = true; } // a LATE replay without LOWER first (refused)
+        else if (arg == "--win-layers") { win_arg = next(); }
+        else if (arg == "--win-n")     { win_n = std::stoi(next()); }
+        else if (arg == "--layer-inp") { inp_arg = next(); }
         else { throw std::invalid_argument("unknown argument " + arg); }
     }
     if (model_path.empty() || tokens_path.empty() || output.empty() || n_batch < 1 || n_ubatch < 1 || tail < 1 || keep < 1 || !(alpha >= 0 && alpha <= 1)) {
@@ -144,6 +182,75 @@ static int run(int argc, char ** argv) {
 #endif
         }
     }
+    const std::vector<int> win_layers = int_list(win_arg);
+    const std::vector<int> inp_layers = int_list(inp_arg);
+    for (int l : inp_layers) {
+        llama_set_embeddings_layer_inp(ctx.get(), l, true);
+    }
+    const int n_embd = llama_model_n_embd(model.get());
+    ggml_context_ptr sweep_ctx;
+    ggml_backend_buffer_ptr sweep_buf;
+    ggml_tensor * h_buf = nullptr;
+    std::vector<ggml_tensor *> win_bufs;
+    if (warm) {
+        // another prompt in the same sequence first, then remove it without zeroing the buffers
+        if (rf) { llama_ridgefill_seq_set(ctx.get(), 0, 0); }
+        llama_batch wb = llama_batch_init(n_batch, 0, 1);
+        for (int start = 0; start < n; start += n_batch) {
+            const int count = std::min(n_batch, n - start);
+            wb.n_tokens = count;
+            for (int i = 0; i < count; ++i) {
+                wb.token[i] = tokens[n - 1 - (start + i)]; wb.pos[i] = start + i; wb.n_seq_id[i] = 1; wb.seq_id[i][0] = 0; wb.logits[i] = 0;
+            }
+            if (llama_decode(ctx.get(), wb) != 0) { llama_batch_free(wb); return 2; }
+        }
+        llama_batch_free(wb);
+        dump_state(ctx.get(), output + ".warm.kv");
+        llama_memory_seq_rm(llama_get_memory(ctx.get()), 0, -1, -1);
+        if (rf) { llama_ridgefill_seq_set(ctx.get(), 0, prefix); }
+    }
+    if (sweep) {
+        if (n_seq != 1) { throw std::invalid_argument("--sweep runs one sequence"); }
+        ggml_init_params ip = { (1 + win_layers.size()) * ggml_tensor_overhead(), nullptr, true };
+        sweep_ctx.reset(ggml_init(ip));
+        h_buf = ggml_new_tensor_2d(sweep_ctx.get(), GGML_TYPE_F32, n_embd, n);
+        for (size_t k = 0; k < win_layers.size(); ++k) {
+            win_bufs.push_back(ggml_new_tensor_2d(sweep_ctx.get(), GGML_TYPE_F32, n_embd, win_n));
+        }
+        sweep_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(sweep_ctx.get(), ggml_backend_cpu_buffer_type()));
+        ggml_backend_buffer_clear(sweep_buf.get(), 0);
+
+        // sweep 1: LOWER over the whole prompt (no outputs)
+        llama_ridgefill_part_params pp = llama_ridgefill_part_default_params();
+        pp.part = LLAMA_RIDGEFILL_PART_LOWER;
+        pp.h_buf = h_buf;
+        pp.n_win_layers = win_layers.size();
+        pp.win_layers = win_layers.data();
+        pp.win_bufs = win_bufs.data();
+        pp.win_begin = n - win_n;
+        pp.win_n = win_n;
+        if (llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
+        llama_batch lb = llama_batch_init(n_batch, 0, 1);
+        for (int start = 0; start < (late_only ? 0 : n); start += n_batch) {
+            const int count = std::min(n_batch, n - start);
+            lb.n_tokens = count;
+            for (int i = 0; i < count; ++i) {
+                lb.token[i] = tokens[start + i]; lb.pos[i] = start + i; lb.n_seq_id[i] = 1; lb.seq_id[i][0] = 0;
+                lb.logits[i] = filled_logit && start + i == n - 1; // --filled-logit: a LOWER output (refused)
+            }
+            if (llama_decode(ctx.get(), lb) != 0) { llama_batch_free(lb); fprintf(stderr, "LOWER decode refused\n"); return 2; }
+        }
+        llama_batch_free(lb);
+        filled_logit = false;
+        if (lower_twice && llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
+        if (full_midsweep && llama_ridgefill_seq_set_part(ctx.get(), 0, nullptr) != 0) { return 3; }
+        // sweep 2+3: LATE replay over all rows (fill below p_end, exact tail + logits above)
+        pp = llama_ridgefill_part_default_params();
+        pp.part = LLAMA_RIDGEFILL_PART_LATE;
+        pp.h_buf = h_buf;
+        if (llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
+        cross = true;
+    }
     llama_batch batch = llama_batch_init(n_batch * n_seq, 0, 1);
     std::vector<std::vector<float>> logits(n_seq);
     const int vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
@@ -179,6 +286,9 @@ static int run(int argc, char ** argv) {
                 }
             }
         }
+        if (sweep && start == 0) {
+            dump_state(ctx.get(), output + ".late1.kv"); // the state after the first LATE (replay) batch
+        }
         start += count;
         if (!cross && start == n - std::min(tail, n) && start > 0) {
             for (int seq = 0; seq < n_seq; ++seq) {
@@ -187,6 +297,20 @@ static int run(int argc, char ** argv) {
         }
     }
     llama_batch_free(batch);
+    if (sweep) {
+        llama_ridgefill_seq_set_part(ctx.get(), 0, nullptr);
+        write_tensor(output + ".h.f32", h_buf, n);
+        for (size_t k = 0; k < win_layers.size(); ++k) {
+            write_tensor(output + ".win" + std::to_string(win_layers[k]) + ".f32", win_bufs[k], win_n);
+        }
+    }
+    for (int l : inp_layers) {
+        // upstream copies the layer input of every token of the last decode, in batch order: one batch = all rows
+        if (n_batch < n) { throw std::invalid_argument("--layer-inp needs the whole prompt in one batch"); }
+        const float * e = llama_get_embeddings_layer_inp(ctx.get(), l);
+        if (!e) { throw std::runtime_error("no layer inputs"); }
+        write_bytes(output + ".inp" + std::to_string(l) + ".f32", e, (size_t) n * n_embd * sizeof(float));
+    }
     for (int seq = 0; seq < n_seq; ++seq) {
         if (logits[seq].size() != static_cast<size_t>(keep) * vocab) {
             throw std::runtime_error("incomplete tail logits");

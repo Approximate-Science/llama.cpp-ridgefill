@@ -1114,6 +1114,49 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
     return res;
 }
 
+llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & ubatch) const {
+    slot_info res = {
+        /*.s0   =*/ 0,
+        /*.s1   =*/ 0,
+        /*.strm =*/ { },
+        /*.idxs =*/ { },
+    };
+
+    if (ubatch.n_seqs_unq != 1 || other) {
+        return res;
+    }
+
+    const llama_seq_id seq_id = ubatch.seq_id_unq[0];
+    const uint32_t     strm   = seq_to_stream[seq_id];
+    const auto &       cells  = v_cells[strm];
+
+    // position -> cell of this sequence
+    std::unordered_map<llama_pos, uint32_t> cell_of;
+    for (uint32_t i = 0; i < cells.size(); ++i) {
+        if (!cells.is_empty(i) && cells.seq_has(i, seq_id)) {
+            cell_of[cells.pos_get(i)] = i;
+        }
+    }
+
+    res.s0 = strm;
+    res.s1 = strm;
+    res.resize(1);
+    res.strm[0] = strm;
+    res.idxs[0].reserve(ubatch.n_tokens);
+
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        const auto it = cell_of.find(ubatch.pos[i]);
+        if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq_id || it == cell_of.end() ||
+            cells.seq_count(it->second) != 1) {
+            res.clear();
+            return res;
+        }
+        res.idxs[0].push_back(it->second);
+    }
+
+    return res;
+}
+
 void llama_kv_cache::apply_ubatch(const slot_info & sinfo, const llama_ubatch & ubatch) {
     // TODO: refactor [TAG_KV_CACHE_SHARE_CELLS]
     if (other) {
@@ -2847,6 +2890,13 @@ llama_kv_cache_context::llama_kv_cache_context(
         std::vector<llama_ubatch> ubatches) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), sinfos(std::move(sinfos)), ubatches(std::move(ubatches)) {
 }
 
+llama_kv_cache_context::llama_kv_cache_context(
+        llama_kv_cache * kv,
+        llama_kv_cache::slot_info_vec_t sinfos,
+        std::vector<llama_ubatch> ubatches,
+        bool replay) : status(LLAMA_MEMORY_STATUS_SUCCESS), kv(kv), replay(replay), sinfos(std::move(sinfos)), ubatches(std::move(ubatches)) {
+}
+
 llama_kv_cache_context::~llama_kv_cache_context() = default;
 
 bool llama_kv_cache_context::next() {
@@ -2869,7 +2919,10 @@ bool llama_kv_cache_context::apply() {
         return true;
     }
 
-    kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
+    // RidgeFill replay: the cells already hold these positions (apply_ubatch would purge the sequence's positions)
+    if (!replay) {
+        kv->apply_ubatch(sinfos[i_cur], ubatches[i_cur]);
+    }
     n_kv = kv->get_n_kv(sinfos[i_cur]);
 
     return true;

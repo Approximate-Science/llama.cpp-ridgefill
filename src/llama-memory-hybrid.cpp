@@ -122,6 +122,40 @@ llama_memory_context_ptr llama_memory_hybrid::init_batch(llama_batch_allocr & ba
     return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
 }
 
+llama_memory_context_ptr llama_memory_hybrid::init_replay(llama_batch_allocr & balloc, uint32_t n_ubatch) {
+    balloc.split_reset();
+
+    std::vector<llama_ubatch> ubatches;
+    llama_kv_cache::slot_info_vec_t sinfos;
+    std::vector<bool> zero;
+
+    while (true) {
+        llama_ubatch ubatch = balloc.split_equal(n_ubatch, true, 0);
+        if (ubatch.n_tokens == 0) {
+            break;
+        }
+
+        auto sinfo = mem_attn->find_slot_replay(ubatch);
+        if (sinfo.empty() || !mem_recr->can_replay(ubatch)) {
+            LLAMA_LOG_ERROR("%s: RidgeFill replay: positions [%d, %d] of seq_id %d are not all in the cache\n", __func__,
+                    ubatch.pos[0], ubatch.pos[ubatch.n_tokens - 1], ubatch.seq_id[0][0]);
+            return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+        }
+
+        // the replay starts the sequence: the late layers' recurrent states start from zero
+        zero.push_back(ubatch.pos[0] == mem_attn->seq_pos_min(ubatch.seq_id[0][0]));
+
+        sinfos.push_back(std::move(sinfo));
+        ubatches.push_back(std::move(ubatch)); // NOLINT
+    }
+
+    if (ubatches.empty() || balloc.get_n_used() < balloc.get_n_tokens()) {
+        return std::make_unique<llama_memory_hybrid_context>(LLAMA_MEMORY_STATUS_FAILED_PREPARE);
+    }
+
+    return std::make_unique<llama_memory_hybrid_context>(this, std::move(sinfos), std::move(ubatches), std::move(zero));
+}
+
 llama_memory_context_ptr llama_memory_hybrid::init_full() {
     return std::make_unique<llama_memory_hybrid_context>(this);
 }
@@ -238,6 +272,17 @@ llama_memory_hybrid_context::llama_memory_hybrid_context(
     // note: here we copy the ubatches. not sure if this is ideal
     ctx_attn(new llama_kv_cache_context(mem->get_mem_attn(), std::move(sinfos_attn), this->ubatches)),
     ctx_recr(new llama_memory_recurrent_context(mem->get_mem_recr(), this->ubatches)),
+    status(llama_memory_status_combine(ctx_attn->get_status(), ctx_recr->get_status())) {
+}
+
+llama_memory_hybrid_context::llama_memory_hybrid_context(
+              llama_memory_hybrid * mem,
+                  slot_info_vec_t   sinfos_attn,
+        std::vector<llama_ubatch>   ubatches,
+                std::vector<bool>   zero) :
+    ubatches(std::move(ubatches)),
+    ctx_attn(new llama_kv_cache_context(mem->get_mem_attn(), std::move(sinfos_attn), this->ubatches, true)),
+    ctx_recr(new llama_memory_recurrent_context(mem->get_mem_recr(), this->ubatches, std::move(zero))),
     status(llama_memory_status_combine(ctx_attn->get_status(), ctx_recr->get_status())) {
 }
 

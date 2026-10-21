@@ -44,6 +44,50 @@ struct llama_ridgefill {
     std::vector<ggml_backend_buffer_ptr> bufs;
 };
 
+// the two-sweep prefill state of one sequence (llama_ridgefill_seq_set_part), owned by llama_context
+struct llama_ridgefill_part_state {
+    llm_ridgefill_part part = LLM_RIDGEFILL_PART_FULL;
+    uint64_t           gen  = 0; // bumped on every set, part of the graph-reuse key (the buffers are baked in)
+
+    ggml_tensor * h_buf = nullptr; // [n_embd, n_rows]: row p = h_S of position p (LOWER writes, LATE reads)
+
+    // LOWER only: the inputs of these layers (< split) at positions [win_begin, win_begin + win_n) are written to
+    // row (pos - win_begin) of win_bufs[i] ([n_embd, win_n])
+    std::vector<int32_t>       win_layers;
+    std::vector<ggml_tensor *> win_bufs;
+    llama_pos                  win_begin = 0;
+    int32_t                    win_n     = 0;
+
+    // cursors (adopted from L-C's draft 8de161386): the next position LOWER / LATE accepts; rows arrive in order,
+    // LATE replays exactly the rows LOWER processed
+    llama_pos lower_end = 0;
+    llama_pos late_end  = 0;
+};
+
+// graph input of a LOWER / LATE ubatch (one sequence)
+class llm_graph_input_ridgefill_part : public llm_graph_input_i {
+public:
+    llm_graph_input_ridgefill_part(const llm_graph_params_ridgefill & params) : params(params) {}
+    virtual ~llm_graph_input_ridgefill_part() = default;
+
+    void set_input(const llama_ubatch * ubatch) override;
+
+    bool can_reuse(const llm_graph_params & params) override;
+
+    ggml_tensor * h_rows   = nullptr; // I32 [n_tokens]: the h_buf row (position) of every ubatch row
+    ggml_tensor * win_sel  = nullptr; // I32 [n_win]: LOWER, the ubatch rows inside the capture window
+    ggml_tensor * win_rows = nullptr; // I32 [n_win]: their rows in the window buffers
+
+    const llm_graph_params_ridgefill params;
+};
+
+// LOWER: write h_S (the input of layer split) of every ubatch row to h_buf; LOWER, il < split: the window rows of
+// the input of layer il to its window buffer (no-op for layers without one)
+void build_ridgefill_capture(llm_graph_context & g, const llm_graph_input_ridgefill_part * inp, ggml_tensor * cur, int il);
+
+// LATE: h_S of the ubatch rows from h_buf (F32 [n_embd, n_tokens])
+ggml_tensor * build_ridgefill_h_input(llm_graph_context & g, const llm_graph_input_ridgefill_part * inp);
+
 // what a filled ubatch does at the late layers
 enum llm_ridgefill_fill : int32_t {
     LLM_RIDGEFILL_FILL_NONE   = 0, // not filled: stock layers (never passed to build_ridgefill_late)

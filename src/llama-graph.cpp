@@ -1161,19 +1161,24 @@ void llm_graph_input_attn_cross::set_input(const llama_ubatch * ubatch) {
 }
 
 void llm_graph_input_mem_hybrid::set_input(const llama_ubatch * ubatch) {
-    mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
-    mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
+    // the idxs are left unallocated when the graph has no attention layer (a RidgeFill LOWER pass below the split)
+    if (inp_attn->self_k_idxs->buffer) {
+        mctx->get_attn()->set_input_k_idxs(inp_attn->self_k_idxs, ubatch);
+    }
+    if (inp_attn->self_v_idxs && inp_attn->self_v_idxs->buffer) {
+        mctx->get_attn()->set_input_v_idxs(inp_attn->self_v_idxs, ubatch);
+    }
 
     // the mask is left unallocated when the graph only stores K/V without attending (a RidgeFill-filled ubatch)
     if (inp_attn->self_kq_mask->buffer) {
         mctx->get_attn()->set_input_kq_mask(inp_attn->self_kq_mask, ubatch, cparams.causal_attn);
     }
 
-    if (inp_attn->self_k_rot) {
+    if (inp_attn->self_k_rot && inp_attn->self_k_rot->buffer) {
         mctx->get_attn()->set_input_k_rot(inp_attn->self_k_rot);
     }
 
-    if (inp_attn->self_v_rot) {
+    if (inp_attn->self_v_rot && inp_attn->self_v_rot->buffer) {
         mctx->get_attn()->set_input_v_rot(inp_attn->self_v_rot);
     }
 

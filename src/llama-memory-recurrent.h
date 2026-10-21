@@ -59,6 +59,11 @@ public:
     // find a contiguous slot of memory cells and emplace the ubatch there
     bool find_slot(const llama_ubatch & ubatch);
 
+    // RidgeFill replay (late layers over positions already processed): the sequence's own cell, its position and
+    // metadata unchanged; zero: the graph zeroes the states it reads (the replay starts the sequence)
+    bool can_replay(const llama_ubatch & ubatch) const;
+    bool find_slot_replay(const llama_ubatch & ubatch, bool zero);
+
     bool get_can_shift() const override;
 
     // state write/load
@@ -155,6 +160,12 @@ public:
             llama_memory_recurrent * mem,
             std::vector<llama_ubatch> ubatches);
 
+    // RidgeFill replay: apply() selects the sequence's cell without moving it; zero[i]: ubatch i starts the replay
+    llama_memory_recurrent_context(
+            llama_memory_recurrent * mem,
+            std::vector<llama_ubatch> ubatches,
+            std::vector<bool> zero);
+
     virtual ~llama_memory_recurrent_context();
 
     //
@@ -197,4 +208,7 @@ private:
     //
 
     const bool is_full = false;
+
+    const bool replay = false;
+    const std::vector<bool> zero;
 };

@@ -22,7 +22,9 @@ struct llama_layer;
 struct llama_prec_policy;
 struct llama_hadamard;
 struct llama_ridgefill;
+struct llama_ridgefill_part_state;
 class  llm_graph_input_ridgefill;
+class  llm_graph_input_ridgefill_part;
 struct llama_model;
 
 class llama_moe_cache;
@@ -808,9 +810,16 @@ struct llm_graph_params_ridgefill {
     const llama_pos              * p_end    = nullptr; // [LLAMA_MAX_SEQ] per-sequence fill ends (stable pointer)
     const std::vector<llama_pos> * rows_seq = nullptr; // [LLAMA_MAX_SEQ] per-sequence exact rows (stable pointer)
 
+    // part != FULL: the sweep state of the ubatch's (single) sequence, its generation (bumped when it is set), and
+    // the number of ubatch rows inside its capture window (LOWER)
+    const llama_ridgefill_part_state * part_state = nullptr;
+    uint64_t                           part_gen   = 0;
+    int32_t                            n_win      = 0;
+
     bool operator==(const llm_graph_params_ridgefill & o) const {
         return rf == o.rf && fill == o.fill && part == o.part && n_rows == o.n_rows && correct == o.correct &&
-               alpha == o.alpha && p_end == o.p_end && rows_seq == o.rows_seq;
+               alpha == o.alpha && p_end == o.p_end && rows_seq == o.rows_seq &&
+               part_state == o.part_state && part_gen == o.part_gen && n_win == o.n_win;
     }
 };
 
@@ -1332,6 +1341,9 @@ struct llm_graph_context {
 
     // RidgeFill (llama-ridgefill.cpp): the rows / correction-scale input of a filled ubatch, nullptr if it has neither
     llm_graph_input_ridgefill * build_inp_ridgefill() const;
+
+    // RidgeFill sweeps (llama-ridgefill.cpp): the row inputs of a LOWER / LATE ubatch, nullptr for FULL
+    llm_graph_input_ridgefill_part * build_inp_ridgefill_part() const;
 
     llm_graph_input_attn_k  * build_attn_inp_k() const;
 

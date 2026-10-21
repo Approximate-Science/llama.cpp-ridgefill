@@ -1,0 +1,253 @@
+{
+  "summary": {
+    "gate": "G1-sweep-dispatch",
+    "result": "PASS",
+    "checks": 44,
+    "passed": 44
+  },
+  "checks": [
+    {
+      "check": "oracle-sweep-speed-a0-b700-ub512",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-speed-a0-b700-ub512",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 6.307126341198455e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-speed-a0-b700-ub512",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "oracle-sweep-speed-a1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-speed-a1-b700-ub512",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 6.307126341198455e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-speed-a1-b700-ub512",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "oracle-sweep-quality-a0-b700-ub512",
+      "result": "PASS",
+      "max_rel": 4.0518665400668397e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-quality-a0-b700-ub512",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 4.0518665400668397e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-quality-a0-b700-ub512",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "positive-wrong-map-sweep-b700-ub512",
+      "result": "PASS",
+      "max_rel": 1.1459287405014038
+    },
+    {
+      "check": "negative-sweep-T>=N-vs-stock-b700-ub512",
+      "result": "PASS",
+      "max_rel": 0.0
+    },
+    {
+      "check": "oracle-sweep-speed-a0-b128-ub128",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-speed-a0-b128-ub128",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 6.307126341198455e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-speed-a0-b128-ub128",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "oracle-sweep-speed-a1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-speed-a1-b128-ub128",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 6.307126341198455e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-speed-a1-b128-ub128",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "oracle-sweep-quality-a0-b128-ub128",
+      "result": "PASS",
+      "max_rel": 4.0518665400668397e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-quality-a0-b128-ub128",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 4.0518665400668397e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-quality-a0-b128-ub128",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "positive-wrong-map-sweep-b128-ub128",
+      "result": "PASS",
+      "max_rel": 1.1459287405014038
+    },
+    {
+      "check": "negative-sweep-T>=N-vs-stock-b128-ub128",
+      "result": "PASS",
+      "max_rel": 0.0
+    },
+    {
+      "check": "oracle-sweep-speed-a0-b50-ub50",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-speed-a0-b50-ub50",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 6.307126341198455e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-speed-a0-b50-ub50",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "oracle-sweep-speed-a1-b50-ub50",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-speed-a1-b50-ub50",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 6.307126341198455e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-speed-a1-b50-ub50",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "oracle-sweep-quality-a0-b50-ub50",
+      "result": "PASS",
+      "max_rel": 4.0518665400668397e-07,
+      "cells": 700
+    },
+    {
+      "check": "sweep==single-quality-a0-b50-ub50",
+      "result": "PASS",
+      "max_rel": 0.0,
+      "single_vs_oracle": 4.0518665400668397e-07
+    },
+    {
+      "check": "lower-caches-byte-equal-quality-a0-b50-ub50",
+      "result": "PASS",
+      "arrays": 6
+    },
+    {
+      "check": "positive-wrong-map-sweep-b50-ub50",
+      "result": "PASS",
+      "max_rel": 1.1459287405014038
+    },
+    {
+      "check": "negative-sweep-T>=N-vs-stock-b50-ub50",
+      "result": "PASS",
+      "max_rel": 0.0
+    },
+    {
+      "check": "oracle-sweep-after-stale-prompt-a0",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07
+    },
+    {
+      "check": "oracle-sweep-after-stale-prompt-a1",
+      "result": "PASS",
+      "max_rel": 6.307126341198455e-07
+    },
+    {
+      "check": "replay-zeroes-stale-late-states",
+      "result": "PASS",
+      "equal": true,
+      "max_abs": 0.0,
+      "arrays": 10
+    },
+    {
+      "check": "capture-h_S-vs-layer_inp(3)",
+      "result": "PASS",
+      "max_abs": 0.0,
+      "rows": 700
+    },
+    {
+      "check": "capture-window-layer1-vs-layer_inp(1)",
+      "result": "PASS",
+      "max_abs": 0.0,
+      "rows": 64
+    },
+    {
+      "check": "capture-window-layer2-vs-layer_inp(2)",
+      "result": "PASS",
+      "max_abs": 0.0,
+      "rows": 64
+    },
+    {
+      "check": "refuse-lower-output",
+      "result": "PASS",
+      "rc": 2
+    },
+    {
+      "check": "refuse-late-without-lower",
+      "result": "PASS",
+      "rc": 3
+    },
+    {
+      "check": "refuse-lower-on-nonempty-sequence",
+      "result": "PASS",
+      "rc": 3
+    },
+    {
+      "check": "refuse-full-reset-mid-sweep",
+      "result": "PASS",
+      "rc": 3
+    },
+    {
+      "check": "refuse-part-dense-model",
+      "result": "PASS",
+      "rc": 3
+    }
+  ]
+}

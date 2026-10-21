@@ -247,3 +247,26 @@ the attention layers' K cache through `llama_kv_cache` views.
 - `build_ridgefill_late(..., MASKED)` returns h_R after the last late layer but does not expand it (the graph prunes
   the last layer's R-only work); a caller that wants it (a dump) must `ggml_build_forward_expand` it.
 - Quality mode refusals at decode: alpha != 0 (rho), parallel sequences on a non-unified KV cache.
+
+## Correction 2026-10-20 19:15 (L-A, the two-sweep dispatch; supersedes §3 "h_S buffer" and the seq_set_part line)
+
+```c
+enum llama_ridgefill_part { LLAMA_RIDGEFILL_PART_FULL = 0, LLAMA_RIDGEFILL_PART_LOWER = 1, LLAMA_RIDGEFILL_PART_LATE = 2 };
+struct llama_ridgefill_part_params {
+    enum llama_ridgefill_part part;
+    struct ggml_tensor * h_buf;                       // [n_embd, >= N], F32/F16/BF16, row p = position p
+    int32_t n_win_layers; const int32_t * win_layers; // LOWER only: capture these layers' inputs (< split) ...
+    struct ggml_tensor * const * win_bufs;            // ... into [n_embd, >= win_n] buffers, row = pos - win_begin
+    llama_pos win_begin; int32_t win_n;
+};
+struct llama_ridgefill_part_params llama_ridgefill_part_default_params(void);
+int32_t llama_ridgefill_seq_set_part(struct llama_context *, llama_seq_id, const struct llama_ridgefill_part_params *); // nullptr = FULL
+```
+- The copies happen inside the graph (`ggml_set_rows` / `ggml_get_rows` with a positions input), not on the host.
+- Order (refused otherwise, by name): `llama_ridgefill_seq_set(seq, P)` -> `seq_set_part(LOWER)` on an empty sequence ->
+  decode all N rows in order, no outputs -> (mass, then `llama_ridgefill_seq_set_rows(seq, R)`) ->
+  `seq_set_part(LATE)` with the same h_buf -> decode all N rows again in order (outputs allowed for rows >= P) ->
+  `seq_set_part(nullptr)` (FULL), which is refused until every LOWER row was replayed or the sequence is cleared.
+- A LATE batch holds LATE rows of one sequence only; a batch holds LOWER rows of at most one sequence. A failed sweep
+  ubatch clears the sequence and resets it to FULL. Refused: n_rs_seq > 0, LoRA, control vectors, embeddings.
+- The window capture replaces the context-wide layer-input extraction for the question rows (item 2).

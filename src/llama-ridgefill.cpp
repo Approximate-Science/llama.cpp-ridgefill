@@ -562,6 +562,16 @@ int32_t llama_ridgefill_set_alpha(llama_context * ctx, float alpha) {
     return ctx->ridgefill_set_alpha(alpha);
 }
 
+llama_ridgefill_part_params llama_ridgefill_part_default_params(void) {
+    llama_ridgefill_part_params p = {};
+    p.part = LLAMA_RIDGEFILL_PART_FULL;
+    return p;
+}
+
+int32_t llama_ridgefill_seq_set_part(llama_context * ctx, llama_seq_id seq_id, const llama_ridgefill_part_params * params) {
+    return ctx->ridgefill_seq_set_part(seq_id, params);
+}
+
 int32_t llama_ridgefill_seq_set_rows(llama_context * ctx, llama_seq_id seq_id, const llama_pos * rows, int32_t n) {
     return ctx->ridgefill_seq_set_rows(seq_id, rows, n);
 }
@@ -569,6 +579,85 @@ int32_t llama_ridgefill_seq_set_rows(llama_context * ctx, llama_seq_id seq_id, c
 //
 // graph
 //
+
+llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() const {
+    const auto & p = ridgefill_params;
+    if (!p.rf || p.part == LLM_RIDGEFILL_PART_FULL) {
+        return nullptr;
+    }
+    GGML_ASSERT(p.part_state && p.part_state->h_buf);
+
+    auto inp = std::make_unique<llm_graph_input_ridgefill_part>(p);
+
+    inp->h_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
+    ggml_set_input(inp->h_rows);
+
+    if (p.n_win > 0) {
+        inp->win_sel  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, p.n_win);
+        inp->win_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, p.n_win);
+        ggml_set_input(inp->win_sel);
+        ggml_set_input(inp->win_rows);
+    }
+
+    return (llm_graph_input_ridgefill_part *) res->add_input(std::move(inp));
+}
+
+void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
+    const auto * ps = params.part_state;
+
+    // positions (section 0) are the h_buf rows
+    std::vector<int32_t> rows(ubatch->n_tokens);
+    for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+        rows[i] = ubatch->pos[i];
+        GGML_ASSERT(rows[i] >= 0 && rows[i] < ps->h_buf->ne[1]);
+    }
+    ggml_backend_tensor_set(h_rows, rows.data(), 0, rows.size()*sizeof(int32_t));
+
+    if (win_sel) {
+        std::vector<int32_t> sel;
+        std::vector<int32_t> dst;
+        for (uint32_t i = 0; i < ubatch->n_tokens; ++i) {
+            const llama_pos p = ubatch->pos[i];
+            if (p >= ps->win_begin && p < ps->win_begin + ps->win_n) {
+                sel.push_back(i);
+                dst.push_back(p - ps->win_begin);
+            }
+        }
+        GGML_ASSERT((int64_t) sel.size() == win_sel->ne[0]);
+        ggml_backend_tensor_set(win_sel,  sel.data(), 0, sel.size()*sizeof(int32_t));
+        ggml_backend_tensor_set(win_rows, dst.data(), 0, dst.size()*sizeof(int32_t));
+    }
+}
+
+bool llm_graph_input_ridgefill_part::can_reuse(const llm_graph_params & p) {
+    return p.ridgefill == params && h_rows->ne[0] == (int64_t) p.ubatch.n_tokens;
+}
+
+void build_ridgefill_capture(llm_graph_context & g, const llm_graph_input_ridgefill_part * inp, ggml_tensor * cur, int il) {
+    const auto * ps = inp->params.part_state;
+
+    if (il == g.ridgefill->split) {
+        ggml_build_forward_expand(g.gf, ggml_set_rows(g.ctx0, ps->h_buf, cur, inp->h_rows));
+        return;
+    }
+
+    if (!inp->win_sel) {
+        return;
+    }
+    for (size_t k = 0; k < ps->win_layers.size(); ++k) {
+        if (ps->win_layers[k] == il) {
+            ggml_tensor * rows = ggml_get_rows(g.ctx0, cur, inp->win_sel);
+            ggml_build_forward_expand(g.gf, ggml_set_rows(g.ctx0, ps->win_bufs[k], rows, inp->win_rows));
+        }
+    }
+}
+
+ggml_tensor * build_ridgefill_h_input(llm_graph_context & g, const llm_graph_input_ridgefill_part * inp) {
+    // get_rows returns F32 for F16 / BF16 buffers
+    ggml_tensor * cur = ggml_get_rows(g.ctx0, inp->params.part_state->h_buf, inp->h_rows);
+    g.cb(cur, "ridgefill_h_S", g.ridgefill->split);
+    return cur;
+}
 
 int32_t llama_ridgefill_ubatch_rows(const llama_ubatch & ubatch, const std::vector<llama_pos> * rows_seq, std::vector<int32_t> * idx) {
     if (idx) {

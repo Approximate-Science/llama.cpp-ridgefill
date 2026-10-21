@@ -1,5 +1,6 @@
 #include "llama-context.h"
 #include "llama-ridgefill.h"
+#include "llama-memory-hybrid.h"
 
 #include "ggml.h"
 #include "llama-arch.h"
@@ -15,6 +16,7 @@
 #include "llama-sampler.h"
 #include "llama.h"
 
+#include <algorithm>
 #include <cinttypes>
 #include <cmath>
 #include <cstring>
@@ -1550,6 +1552,173 @@ int32_t llama_context::ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_p
     return 0;
 }
 
+int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_ridgefill_part_params * p) {
+    if (seq_id < 0 || seq_id >= LLAMA_MAX_SEQ) {
+        LLAMA_LOG_ERROR("%s: invalid seq_id %d\n", __func__, seq_id);
+        return -1;
+    }
+
+    auto & ps = ridgefill_part[seq_id];
+
+    auto refuse = [&](const char * why) {
+        LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill sweep part refused: %s\n", __func__, seq_id, why);
+        return -1;
+    };
+
+    const bool seq_empty = memory->seq_pos_max(seq_id) < 0;
+
+    if (!p || p->part == LLAMA_RIDGEFILL_PART_FULL) {
+        // back to the single pass only after a complete replay, or with the sequence cleared
+        if (ps.part != LLM_RIDGEFILL_PART_FULL && !seq_empty &&
+            (ps.part != LLM_RIDGEFILL_PART_LATE || ps.late_end != ps.lower_end)) {
+            return refuse("finish the LATE replay of every LOWER row, or clear the sequence, before FULL");
+        }
+        ps = llama_ridgefill_part_state();
+        ps.gen = ++ridgefill_part_gen;
+        return 0;
+    }
+
+    if (!ridgefill) {
+        return refuse("no projector attached to the context");
+    }
+    if (model.arch != LLM_ARCH_QWEN35 || !dynamic_cast<llama_memory_hybrid *>(memory.get())) {
+        return refuse("the two-sweep prefill is implemented for qwen35 (hybrid memory) only");
+    }
+    if (cparams.n_rs_seq != 0) {
+        return refuse("the replay is not tested with recurrent rollback snapshots (n_rs_seq > 0)");
+    }
+    if (loras && !loras->empty()) {
+        return refuse("LoRA adapters are not supported with RidgeFill");
+    }
+    for (uint32_t il = 0; il < model.hparams.n_layer(); ++il) {
+        if (cvec->tensor_for(il)) {
+            return refuse("control vectors are not supported with RidgeFill");
+        }
+    }
+    if (cparams.embeddings || !cparams.causal_attn) {
+        return refuse("embeddings / non-causal contexts are not supported");
+    }
+    if (p->part != LLAMA_RIDGEFILL_PART_LOWER && p->part != LLAMA_RIDGEFILL_PART_LATE) {
+        return refuse("unknown part");
+    }
+
+    const int64_t n_embd = model.hparams.n_embd;
+    auto buf_ok = [&](const ggml_tensor * t, int64_t n_rows) {
+        return t && t->buffer && ggml_n_dims(t) <= 2 && t->ne[0] == n_embd && t->ne[1] >= n_rows && ggml_is_contiguous(t) &&
+               (t->type == GGML_TYPE_F32 || t->type == GGML_TYPE_F16 || t->type == GGML_TYPE_BF16);
+    };
+
+    if (!buf_ok(p->h_buf, 1)) {
+        return refuse("h_buf must be an allocated, contiguous [n_embd, n] tensor of type F32, F16 or BF16");
+    }
+    if (p->n_win_layers < 0 || (p->n_win_layers > 0 && (p->part != LLAMA_RIDGEFILL_PART_LOWER || !p->win_layers ||
+        !p->win_bufs || p->win_n <= 0 || p->win_begin < 0))) {
+        return refuse("window capture needs the LOWER part, layers, buffers, win_n > 0 and win_begin >= 0");
+    }
+
+    llama_ridgefill_part_state next;
+    next.part  = p->part == LLAMA_RIDGEFILL_PART_LOWER ? LLM_RIDGEFILL_PART_LOWER : LLM_RIDGEFILL_PART_LATE;
+    next.h_buf = p->h_buf;
+
+    if (next.part == LLM_RIDGEFILL_PART_LOWER) {
+        if (ps.part != LLM_RIDGEFILL_PART_FULL || !seq_empty) {
+            return refuse("LOWER starts on an empty sequence in FULL mode");
+        }
+    } else {
+        if (ps.part != LLM_RIDGEFILL_PART_LOWER || ps.h_buf != p->h_buf || ps.lower_end <= 0 ||
+            ps.lower_end != memory->seq_pos_max(seq_id) + 1) {
+            return refuse("LATE follows a LOWER pass over the whole prompt, with the same h_buf");
+        }
+        next.lower_end = ps.lower_end;
+        // the first position of the attention cache (the hybrid memory's seq_pos_min is the recurrent cell's position)
+        next.late_end  = static_cast<llama_memory_hybrid *>(memory.get())->get_mem_attn()->seq_pos_min(seq_id);
+    }
+
+    for (int32_t k = 0; k < p->n_win_layers; ++k) {
+        const int32_t il = p->win_layers[k];
+        if (il < 0 || il >= ridgefill->split || std::find(next.win_layers.begin(), next.win_layers.end(), il) != next.win_layers.end()) {
+            return refuse("window layers must be distinct and below the split");
+        }
+        if (!buf_ok(p->win_bufs[k], p->win_n)) {
+            return refuse("window buffers must be allocated, contiguous [n_embd, >= win_n] tensors of type F32, F16 or BF16");
+        }
+        next.win_layers.push_back(il);
+        next.win_bufs.push_back(p->win_bufs[k]);
+    }
+    next.win_begin = p->n_win_layers > 0 ? p->win_begin : 0;
+    next.win_n     = p->n_win_layers > 0 ? p->win_n     : 0;
+    next.gen       = ++ridgefill_part_gen;
+
+    ps = std::move(next);
+
+    return 0;
+}
+
+bool llama_context::ridgefill_check_parts(const llama_batch_ext & batch_inp, bool & replay) const {
+    replay = false;
+
+    llama_seq_id seq_lower = -1;
+    llama_seq_id seq_late  = -1;
+    bool         other     = false;
+
+    std::array<llama_pos, LLAMA_MAX_SEQ> next;
+    next.fill(-1);
+
+    for (const auto & tok : batch_inp.tokens) {
+        bool part = false;
+        for (const llama_seq_id s : tok.seq_ids) {
+            if (s < 0 || s >= LLAMA_MAX_SEQ || ridgefill_part[s].part == LLM_RIDGEFILL_PART_FULL) {
+                continue;
+            }
+            part = true;
+            if (tok.seq_ids.size() != 1) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: a RidgeFill sweep row cannot belong to several sequences\n", __func__, s);
+                return false;
+            }
+            const auto & ps = ridgefill_part[s];
+            llama_pos  & nxt = next[s];
+            if (nxt < 0) {
+                nxt = ps.part == LLM_RIDGEFILL_PART_LOWER ? ps.lower_end : ps.late_end;
+            }
+            if (tok.pos[0] != nxt || nxt >= ps.h_buf->ne[1] || (ps.part == LLM_RIDGEFILL_PART_LATE && nxt >= ps.lower_end)) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill sweep rows must arrive in order (expected pos %d, got %d) and fit "
+                        "h_buf (%lld rows)%s\n", __func__, s, nxt, tok.pos[0], (long long) ps.h_buf->ne[1],
+                        ps.part == LLM_RIDGEFILL_PART_LATE ? ", and LATE replays only the rows LOWER processed" : "");
+                return false;
+            }
+            ++nxt;
+            if (ps.part == LLM_RIDGEFILL_PART_LOWER) {
+                if (tok.output) {
+                    LLAMA_LOG_ERROR("%s: seq_id %d: a RidgeFill LOWER row cannot be an output (no output head)\n", __func__, s);
+                    return false;
+                }
+                if (seq_lower >= 0 && seq_lower != s) {
+                    // the split keeps them apart (one sequence per part ubatch), but this case is not tested yet
+                    LLAMA_LOG_ERROR("%s: RidgeFill LOWER rows of two sequences (%d, %d) in one batch\n", __func__, seq_lower, s);
+                    return false;
+                }
+                seq_lower = s;
+            } else {
+                if (seq_late >= 0 && seq_late != s) {
+                    LLAMA_LOG_ERROR("%s: RidgeFill LATE rows of two sequences (%d, %d) in one batch\n", __func__, seq_late, s);
+                    return false;
+                }
+                seq_late = s;
+            }
+        }
+        other = other || !part;
+    }
+
+    if (seq_late >= 0 && (other || seq_lower >= 0)) {
+        LLAMA_LOG_ERROR("%s: seq_id %d: a RidgeFill LATE batch (a replay) holds the LATE rows of one sequence only\n", __func__, seq_late);
+        return false;
+    }
+
+    replay = seq_late >= 0;
+
+    return true;
+}
+
 bool llama_context::ridgefill_correct(const llama_ubatch & ubatch) const {
     if (ridgefill_alpha == 0.0f || ridgefill->n_gdn_late == 0 || !ubatch.equal_seqs()) {
         return false;
@@ -1568,19 +1737,40 @@ bool llama_context::ridgefill_correct(const llama_ubatch & ubatch) const {
 llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_ubatch & ubatch, uint32_t n_outputs) const {
     llm_graph_params_ridgefill res;
 
-    // the ubatch split does not mix filled and other tokens, and filled tokens are never outputs
-    if (!ridgefill || n_outputs != 0 || ubatch.n_tokens == 0 || ubatch.n_seq_id[0] != 1 ||
-        !ridgefill_is_fill(ubatch.seq_id[0][0], ubatch.pos[0])) {
+    if (!ridgefill || ubatch.n_tokens == 0 || ubatch.n_seq_id[0] != 1) {
         return res;
     }
 
-    res.rf       = ridgefill;
-    res.n_rows   = llama_ridgefill_ubatch_rows(ubatch, ridgefill_rows.data(), nullptr);
-    res.fill     = res.n_rows > 0 ? LLM_RIDGEFILL_FILL_MASKED : LLM_RIDGEFILL_FILL_BULK;
-    res.correct  = ridgefill_correct(ubatch);
-    res.alpha    = res.correct ? ridgefill_alpha : 0.0f;
-    res.p_end    = ridgefill_p_end.data();
-    res.rows_seq = res.n_rows > 0 ? ridgefill_rows.data() : nullptr;
+    // the ubatch split does not mix filled and other tokens or parts, and filled tokens are never outputs
+    const llama_seq_id seq  = ubatch.seq_id[0][0];
+    const auto &       ps   = ridgefill_part[seq];
+    const bool         fill = ps.part != LLM_RIDGEFILL_PART_LOWER && n_outputs == 0 && ridgefill_is_fill(seq, ubatch.pos[0]);
+
+    if (ps.part == LLM_RIDGEFILL_PART_FULL && !fill) {
+        return res;
+    }
+
+    res.rf    = ridgefill;
+    res.p_end = ridgefill_p_end.data();
+
+    if (fill) {
+        res.n_rows   = llama_ridgefill_ubatch_rows(ubatch, ridgefill_rows.data(), nullptr);
+        res.fill     = res.n_rows > 0 ? LLM_RIDGEFILL_FILL_MASKED : LLM_RIDGEFILL_FILL_BULK;
+        res.correct  = ridgefill_correct(ubatch);
+        res.alpha    = res.correct ? ridgefill_alpha : 0.0f;
+        res.rows_seq = res.n_rows > 0 ? ridgefill_rows.data() : nullptr;
+    }
+
+    if (ps.part != LLM_RIDGEFILL_PART_FULL) {
+        res.part       = ps.part;
+        res.part_state = &ps;
+        res.part_gen   = ps.gen;
+        if (ps.part == LLM_RIDGEFILL_PART_LOWER && ps.win_n > 0) {
+            for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                res.n_win += ubatch.pos[i] >= ps.win_begin && ubatch.pos[i] < ps.win_begin + ps.win_n;
+            }
+        }
+    }
 
     return res;
 }
@@ -1596,6 +1786,17 @@ bool llama_context::ridgefill_mark() {
 
     bool has_fill = false;
     for (int32_t i = 0; i < batch.n_tokens; ++i) {
+        // the two-sweep parts: 2 LOWER, 3 LATE filled, 4 LATE exact (one class per ubatch, as filled vs exact)
+        if (batch.n_seq_id[i] == 1 && ridgefill_part[batch.seq_id[i][0]].part != LLM_RIDGEFILL_PART_FULL) {
+            const bool lower = ridgefill_part[batch.seq_id[i][0]].part == LLM_RIDGEFILL_PART_LOWER;
+            const bool f     = ridgefill_is_fill(batch.seq_id[i][0], batch.pos[i]);
+            fill[i]  = lower ? 2 : f ? 3 : 4;
+            has_fill = true;
+            if (lower || !f) {
+                continue;
+            }
+        }
+
         if (batch.n_seq_id[i] != 1 || !ridgefill_is_fill(batch.seq_id[i][0], batch.pos[i])) {
             continue;
         }
@@ -1619,7 +1820,7 @@ bool llama_context::ridgefill_mark() {
             }
         }
 
-        fill[i]  = 1;
+        fill[i]  = fill[i] ? fill[i] : 1;
         has_fill = true;
     }
 
@@ -2002,9 +2203,25 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         }
     }
 
-    if (!balloc->init(batch_inp, vocab, output_all)) {
-        LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
+    // RidgeFill sweeps: a LATE batch replays positions already in the memory, so it is validated without the
+    // memory's position check (llama_memory_hybrid::init_replay checks that every position is in the cache)
+    bool rf_replay = false;
+    if (ridgefill && !ridgefill_check_parts(batch_inp, rf_replay)) {
         return -1;
+    }
+
+    {
+        llama_memory_i * mem_inp = batch_inp.mem;
+        if (rf_replay) {
+            const_cast<llama_batch_ext &>(batch_inp).mem = nullptr;
+        }
+        const bool ok = balloc->init(batch_inp, vocab, output_all);
+        const_cast<llama_batch_ext &>(batch_inp).mem = mem_inp;
+
+        if (!ok) {
+            LLAMA_LOG_ERROR("%s: failed to initialize batch\n", __func__);
+            return -1;
+        }
     }
 
     const uint32_t n_tokens_all  = balloc->get_n_tokens();
@@ -2052,7 +2269,15 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
     llama_memory_context_ptr mctx;
 
     while (true) {
-        mctx = memory->init_batch(*balloc, cparams.n_ubatch, embd_all);
+        if (rf_replay) {
+            mctx = static_cast<llama_memory_hybrid *>(memory.get())->init_replay(*balloc, cparams.n_ubatch);
+            if (mctx->get_status() != LLAMA_MEMORY_STATUS_SUCCESS) {
+                LLAMA_LOG_ERROR("%s: RidgeFill LATE replay: the batch's positions are not all in the memory\n", __func__);
+                return -1;
+            }
+        } else {
+            mctx = memory->init_batch(*balloc, cparams.n_ubatch, embd_all);
+        }
         if (!mctx) {
             return -2;
         }
@@ -2149,6 +2374,15 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                     continue;
                 }
 
+                if (ridgefill && ridgefill_part[s].part != LLM_RIDGEFILL_PART_FULL) {
+                    // a sweep cannot be resumed from the middle: clear the sequence, back to FULL (L-C's draft)
+                    LLAMA_LOG_WARN("%s: RidgeFill sweep of seq_id = %d failed at pos %d: clearing the sequence\n", __func__, s, pos_min[s]);
+                    memory->seq_rm(s, -1, -1);
+                    ridgefill_part[s] = llama_ridgefill_part_state();
+                    ridgefill_part[s].gen = ++ridgefill_part_gen;
+                    continue;
+                }
+
                 LLAMA_LOG_WARN("%s: removing memory module entries for seq_id = %d, pos = [%d, +inf)\n", __func__, s, pos_min[s]);
 
                 memory->seq_rm(s, pos_min[s], -1);
@@ -2166,6 +2400,17 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
         //if (n_past%100 == 0) {
         //    ggml_graph_dump_dot(gf, NULL, "llama.dot");
         //}
+
+        if (ridgefill) {
+            for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+                auto & ps = ridgefill_part[ubatch.seq_id[i][0]];
+                if (ps.part == LLM_RIDGEFILL_PART_LOWER) {
+                    ps.lower_end = std::max(ps.lower_end, ubatch.pos[i] + 1);
+                } else if (ps.part == LLM_RIDGEFILL_PART_LATE) {
+                    ps.late_end  = std::max(ps.late_end,  ubatch.pos[i] + 1);
+                }
+            }
+        }
 
         auto * t_logits  = res->get_logits();
         auto * t_embd    = cparams.embeddings       ? res->get_embd()     : nullptr;

@@ -109,3 +109,38 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
 - Harness: the trap is named in g0_dense.sh's header; a log without "Final estimate" is rerun (<= 3 attempts, the
   count printed); comparison unchanged (all 33 chunks + the final line on both sides). Rerun: 72/0, attempts 1/1 on
   all four perplexity rows.
+
+## 18:50-19:15 two-sweep dispatch (L-C's items 1-3), compared with L-C's draft 8de161386
+- Implemented: `llama_ridgefill_seq_set_part(ctx, seq, &params)` with LOWER (layers [0, split), h_S of row p ->
+  h_buf row p via `ggml_set_rows`; optional window capture of chosen lower layers' inputs at [win_begin, +win_n)
+  into caller buffers) and LATE (a replay over positions already decoded: h_S via `ggml_get_rows`, then the fill for
+  rows < p_end — bulk, exact rows R, the correction on the ubatch holding p_end-1 — and the stock late layers + head
+  for rows >= p_end). Batch marker classes 2 / 3 / 4. Replay in the memory classes: `llama_kv_cache::find_slot_replay`
+  (the cells that already hold the positions) + a replay `llama_kv_cache_context` whose apply() skips apply_ubatch
+  (it would purge the sequence's earlier positions) and refreshes n_kv; `llama_memory_recurrent::find_slot_replay`
+  (the sequence's own cell, position unchanged, rs_z = the cell when the replay starts at the KV cache's first
+  position); `llama_memory_hybrid::init_replay`. A replay batch is validated without the memory position check.
+- Upstream traps: the hybrid input wrote the KV row indices unconditionally (a LOWER graph below split 3 has no
+  attention layer): `->buffer` guards as in `llm_graph_input_attn_kv`; a LOWER graph has no RoPE, so `inp_pos` is
+  expanded in its return path. The hybrid memory's `seq_pos_min` is the recurrent cell's position (699, not 0): the
+  replay cursor uses the attention cache's.
+- Compared with L-C's draft (same core: existing cells, no apply_ubatch, rs_z at pos 0). Kept mine: replay inside the
+  memory classes (L-C subclasses the hybrid context and writes recurrent internals), graphs reusable across
+  ubatches (L-C bakes the buffer offset into the graph and its reuse key -> a rebuild per ubatch), window capture
+  into caller buffers (L-C changes upstream's layer-input extraction). Adopted from L-C: per-sequence cursors (rows
+  in order; LOWER on an empty sequence; LATE needs a complete LOWER pass with the same h_buf; FULL refused in the
+  middle of a sweep), refusals for n_rs_seq > 0 / LoRA / control vectors / embeddings, clearing the sequence when a
+  sweep ubatch fails, and the split rule "a part ubatch holds one sequence". Not adopted yet: LATE rows mixed with
+  other sequences' rows in one batch (refused by name; the driver issues a replay ubatch as its own llama_decode),
+  several LOWER sequences in one batch (refused by name until tested).
+- G1 sweep dispatch (`rf27-gates/g1_sweep.py`, L-B's compare unchanged): 44/44. Sweep vs kva at 700/512, 128/128,
+  50/50 for speed alpha 0 / 1 and quality R1: 6.31e-07 / 6.31e-07 / 4.05e-07; sweep == single pass (max rel 0.0);
+  lower caches byte-equal to the single pass; KV cells stay 700; h_S and window captures byte-equal to upstream's
+  `llama_get_embeddings_layer_inp` (which copies every token of the last decode in batch order, not the output
+  rows: my first comparison read it wrong and failed 3 rows); wrong map 1.15; T >= N sweep == stock (0.0); after a
+  stale prompt in the same sequence: oracle agreement, and the late states after a 2-row first replay batch
+  byte-equal to a cold context. Negative check: with the zeroing disabled that row differs by 0.59 (with a 128-row
+  first batch it did not: the tiny model's gates decay 1e-3-scale stale states below float resolution, recorded so
+  nobody reads the 128-row variant as a test). Refusals by name: LOWER output, LATE without LOWER, LOWER on a
+  non-empty sequence, FULL mid-sweep, a part on a dense model.
+- Regression after the change: G0 72/0, rollback 11/11, G1 speed 27/27 (L-B's harness), G1 quality a0 27/27.
