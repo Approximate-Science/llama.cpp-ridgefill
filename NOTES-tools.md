@@ -431,3 +431,26 @@ git diff --check: PASS
 ```
 
 The suite includes an explicit missing-rg positive/negative control in addition to running the whole suite with an actually empty PATH. The first manual parity assertion compared unsorted output and observed rg's different file traversal order; compare the finding sets instead, which agree exactly. Logs: out/g5-rg-fallback-tests.log, out/g5-no-rg-tests.log, out/g5-fallback-audit-{rg,python}.log, out/g5-fallback-positive-{rg,python}.log, out/g5-fallback-rg-error.log, out/g5-rg-fallback-typecheck.log. No libllama/tool behavior changed, and no GPU/archive rebuild was performed for this scanner fallback.
+
+## 2026-10-20: publish lane-Q measurements in RIDGEFILL.md
+
+Rebased onto integration ee79ee49e, which includes L-C's native scorer. Replaced the Qwen3.8-27B NOT YET MEASURED placeholders with lane Q's measured results from /var/home/dylan/projects/inference/llama.cpp-ridgefill-validate/REPORT-Q.md (updated 22:05:34 CDT). Source SHA256: d7dd86f97d1f95655bc9cff35f7f1925f4805d559a249ba6a52d79c23944ce37. Documented the R9700/9600X machine, RADV and ROCm SDK, model filename/bytes/SHA256, the separate measured build IDs, flags and repeat counts. Native speed prefill is measured on both backends; speed and Tier 3 streaming TTFT are measured on Vulkan. Preserved every unrun mode/backend as NOT RUN rather than inventing measurements or deriving native Tier-3 throughput from server TTFT.
+
+Copied the full 24-document native reference-compatible novel-token NLL means, deltas, two-sided 95% BCa intervals, one-sided 95% uppers and the +0.00995 tuning bar verdict. Explicitly distinguished this estimator from the earlier all-token HTTP path, kept shared off controls and target-excluding qattn endpoint visible, and did not conflate tuning with held-out confirmation. Tier 3 alone meets that tuning NLL bar. Included all 48 Tier-3 tuning needles and the explicitly partial 24-of-48 speed needle result; no full quality/held-out claim follows from a degenerate interval. Retained the G2 inconclusive/shift-fail limitations from Q's report.
+
+The requested chat-template limitation was verified against /var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/REFERENCE-ARMS.md, SHA256 6427515b5043bca015070e52a585efcaa6a23643d3e80b2e60d2626e4fceca76: the four templated held-out reference documents average +0.291 nats per novel token for Tier 3, and registered confirmation is REFUTED. This is explicitly attributed to the reference, not claimed as a new engine result. Tier 3 is recommended among RidgeFill modes subject to this limitation and the raw-text tuning scope. No claim that a chat-quality fix is established was added.
+
+Added llama-ridgefill-score to the main README Tools list, linked its existing README, and added a short use entry to RIDGEFILL.md. Only README.md, RIDGEFILL.md and these notes changed. No source, scripts, inference or build was changed/run.
+
+Verification (one-off content checks, no new test suite for this doc change):
+
+```text
+PASS: all 3 NLL means/deltas/intervals/one-sided bounds/verdicts match Q's G3/one-sided95.json
+PASS: all 6 native prefill measurements/SDs/ratios match REPORT-Q
+PASS: all 6 streaming TTFT measurements/SDs/ratios match REPORT-Q
+PASS: needle coverage, tuning/held-out scope, chat limitation and scorer-link checks
+PASS: Markdown table column counts
+git diff --check: PASS
+```
+
+Real measurements remain Q's; this lane performed transcription/source-consistency checks only. Remaining quality G4, HIP TTFT/G3, full held-out engine G3, GPU archive and two-card gates stay NOT RUN as recorded by Q. No new GPU measurements or broader release verdict is implied.
