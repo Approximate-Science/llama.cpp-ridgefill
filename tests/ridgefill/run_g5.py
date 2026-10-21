@@ -77,11 +77,23 @@ def source_files(root: Path) -> list[Path]:
 def grep(files: list[Path], log: Path) -> subprocess.CompletedProcess:
     if not files:
         raise ValueError("SKIPPED: no RidgeFill sources to audit")
-    command = ["rg", "-n", "-i"]
-    for pattern in patterns():
+    audit_patterns = patterns()
+    command = ["rg", "-n", "-i", "--with-filename"]
+    for pattern in audit_patterns:
         command += ["-e", pattern]
     command += ["--", *map(str, files)]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
+    try:
+        result = subprocess.run(command, capture_output=True, text=True, check=False)
+    except FileNotFoundError:
+        expressions = [re.compile(pattern, re.IGNORECASE) for pattern in audit_patterns]
+        matches = []
+        for path in files:
+            with path.open(encoding="utf-8") as source:
+                for number, line in enumerate(source, 1):
+                    text = line.rstrip("\r\n")
+                    if any(pattern.search(text) for pattern in expressions):
+                        matches.append(f"{path}:{number}:{text}\n")
+        result = subprocess.CompletedProcess("Python portability scan", 0 if matches else 1, "".join(matches), "")
     log.write_text(result.stdout + result.stderr)
     if result.returncode not in (0, 1):
         raise RuntimeError(f"portability rg failed: {result.stderr}")

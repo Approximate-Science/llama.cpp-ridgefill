@@ -414,3 +414,20 @@ tests/ridgefill/run_g5_two_card.sh "out/g5-vulkan-$REF/build/bin" "$REF" "$MODEL
 ```
 
 Without those optional arguments, the scripts accept any matching GPU model, CMake-detected targets and any SDK meeting the backend minimum. Real backend outcomes remain for lane Q/coordinator to measure; no new hardware result is claimed here.
+
+## 2026-10-20: portability audit without ripgrep
+
+Rebased onto integration df0f9baff after L-A reported its environment could run only 6/7 GPU smoke unit tests because rg was absent. The audit now catches only a missing rg executable and performs the full scan in Python instead, using the same case-insensitive patterns and UTF-8 source lines. It returns status 0 for matches and 1 for clean input, and emits file:line findings. Installed rg errors still fail; unreadable or undecodable fallback inputs still fail. No dependency-based skip or successful no-op was introduced. Forced rg to include filenames so both instruments have comparable findings. README now documents ripgrep as optional and the standard-library fallback; the test creates its ignored out/ scratch directory when needed.
+
+```text
+Normal GPU evidence/SDK/audit suite: 8 tests OK
+Same suite with PATH set to an empty directory: 8 tests OK
+Extended audit across all 74 changed code files vs upstream 1242be66f: both scanners clean
+Old pinned-script controls: both scanners find the same 7 file/line findings
+Unreadable fallback source: refused
+Installed rg error: remains a failure
+Type checking: All checks passed!
+git diff --check: PASS
+```
+
+The suite includes an explicit missing-rg positive/negative control in addition to running the whole suite with an actually empty PATH. The first manual parity assertion compared unsorted output and observed rg's different file traversal order; compare the finding sets instead, which agree exactly. Logs: out/g5-rg-fallback-tests.log, out/g5-no-rg-tests.log, out/g5-fallback-audit-{rg,python}.log, out/g5-fallback-positive-{rg,python}.log, out/g5-fallback-rg-error.log, out/g5-rg-fallback-typecheck.log. No libllama/tool behavior changed, and no GPU/archive rebuild was performed for this scanner fallback.
