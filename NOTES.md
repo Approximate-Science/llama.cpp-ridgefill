@@ -433,3 +433,11 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   mass 1.36e-07; baseline = clean archive of b9a8e5add); L-C HTTP sweep defaults 3/3. L-B's checks run here
   independently: check_s1_tools 115/115 (architecture controls 3/3 with the dense tiny-qwen3 fixture),
   check_s1_http 72/72, check_s1_reporting 91 checks / 16 configs, worst relative error 0.
+- Vulkan build of the merged tree (build only, nothing run on the GPU: it is busy with lane T; lane Q validates after
+  a winner is confirmed): build-vulkan-d5916c0cf (ignored), lane Q's configure options (GGML_VULKAN ON, native,
+  Release, Vulkan headers from ~/.local/include, loader /usr/lib64/libvulkan.so.1 1.4.341, glslc), -j4: rc 0, 0 errors,
+  52 warnings all in upstream tools/mtmd / libstdc++ headers. llama-server, llama-ridgefill-score, llama-bench,
+  llama-perplexity and libggml-vulkan built; libllama exports the v2 entry points (checked with nm, not executed).
+- Observation (not new): llama-ext.h is upstream's C++-only extension header, so the whole RidgeFill "C API" (v1 and
+  v2) has C++ linkage (mangled symbols). Every current caller is C++; a C caller or FFI binding would need extern "C"
+  wrappers. Not changed: an API decision for the coordinator.
