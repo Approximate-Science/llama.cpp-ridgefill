@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-ridgefill-sweep.h"
 #include <atomic>
 #include <thread>
 #include "base64.hpp"
@@ -309,8 +310,11 @@ struct server_slot {
 
     server_prompt prompt;
 
+    std::unique_ptr<server_ridgefill_sweep> ridgefill_sweep;
+    server_ridgefill_sweep_params ridgefill_sweep_params;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
-        if (prompt.tokens.size() == 0) {
+        if (ridgefill_sweep || prompt.tokens.size() == 0) {
             return false;
         }
 
@@ -345,6 +349,10 @@ struct server_slot {
     }
 
     void prompt_clear() {
+        if (ridgefill_sweep) {
+            ridgefill_sweep->cancel(ctx_tgt, id);
+            ridgefill_sweep.reset();
+        }
         SLT_TRC(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
         mem.seq_rm(id, -1, -1);
@@ -385,6 +393,9 @@ struct server_slot {
     int32_t n_gen_last = 0;
 
     void reset() {
+        if (ridgefill_sweep) {
+            prompt_clear();
+        }
         SLT_DBG(*this, "%s", "\n");
 
         spec_is_replay = false;
@@ -619,7 +630,7 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             // nor of the stateless slots - no task ever reuses it
-            if (task->is_child() || task->is_stateless() || audio_stream) {
+            if (ridgefill_sweep || task->is_child() || task->is_stateless() || audio_stream) {
                 prompt_clear();
             }
 
@@ -1070,6 +1081,12 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        for (auto & slot : slots) {
+            if (slot.ridgefill_sweep) {
+                slot.prompt_clear();
+            }
+        }
+
         spec.reset();
         spec_init.reset();
 
@@ -4135,7 +4152,9 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    slot.mem.seq_rm(slot.id, p0, -1);
+                    if (!slot.ridgefill_sweep) {
+                        slot.mem.seq_rm(slot.id, p0, -1);
+                    }
 
                     // shared prompt prefix: once it is processed, the children continue from it with their own prompt
                     bool wait_shared = false;
@@ -4169,7 +4188,7 @@ private:
                         alora_disabled_id = enabled_loras[0];
                     }
 
-                    bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
+                    bool do_checkpoint = params_base.n_ctx_checkpoints > 0 && !slot.ridgefill_sweep;
 
                     // make checkpoints only for completion tasks
                     do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
@@ -4610,6 +4629,10 @@ private:
             }
 
             if (slot.state == SLOT_STATE_DONE_PROMPT) {
+                if (slot.ridgefill_sweep) {
+                    slot.ridgefill_sweep->finish_external_tail(ctx_tgt, slot.id);
+                    slot.ridgefill_sweep.reset();
+                }
                 if (slot.task->type == SERVER_TASK_TYPE_EMBEDDING) {
                     // prompt evaluated for embedding
                     send_embedding(slot, batch.view);
