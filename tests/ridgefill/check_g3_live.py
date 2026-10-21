@@ -11,6 +11,24 @@ import numpy as np
 from eval_client import needle_correct
 
 
+def class_digit_rows(root: Path, fixture: Path, ids: list[int], prefix: int) -> list[int]:
+    sys.path.insert(0, str(root / "gguf-py"))
+    import gguf
+    projector = gguf.GGUFReader(fixture / "projector-s3-f32.gguf")
+    score = next(tensor.data for tensor in projector.tensors if tensor.name == "ridgefill.rowsel.score")
+    model = gguf.GGUFReader(fixture / "tiny-qwen35-f32.gguf")
+    field = model.fields["tokenizer.ggml.tokens"]
+    pieces = [field.parts[index].tobytes() for index in field.data]
+    field = model.fields["tokenizer.ggml.token_type"]
+    types = [int(field.parts[index][0]) for index in field.data]
+    candidates = [pos for pos in range(prefix) if np.isfinite(score[ids[pos]])]
+    candidates.sort(key=lambda pos: (-float(score[ids[pos]]), pos))
+    selected = set(candidates[:int(np.rint(0.5 * len(candidates)))])
+    excluded = {gguf.TokenType.UNKNOWN, gguf.TokenType.CONTROL, gguf.TokenType.USER_DEFINED, gguf.TokenType.UNUSED}
+    selected.update(pos for pos in range(prefix) if types[ids[pos]] not in excluded and any(48 <= byte <= 57 for byte in pieces[ids[pos]]))
+    return sorted(selected)
+
+
 def main():
     root = Path(__file__).resolve().parents[2]
     parser = argparse.ArgumentParser(description=__doc__)
@@ -49,11 +67,15 @@ def main():
     for i, doc in enumerate(docs):
         tokens = work / f"doc-{i}.bin"
         np.asarray(doc["ids"], dtype=np.int32).tofile(tokens)
-        for mode in ("off", "speed"):
+        for mode in ("off", "speed", "quality"):
             prefix = work / f"native-{i}-{mode}"
             command = [str(args.dump.resolve()), "--model", str(model), "--projector", str(projector), "--tokens", str(tokens),
                        "--output", str(prefix), "--mode", mode, "--tail", "600", "--keep", "513", "--alpha", "0",
                        "--batch", "700", "--ubatch", "128"]
+            if mode == "quality":
+                rows = class_digit_rows(root, fixture, doc["ids"], 100)
+                check(bool(rows) and len(rows) < 100, "quality row control is empty or entirely exact")
+                command += ["--rows", ",".join(map(str, rows))]
             with (work / f"native-{i}-{mode}.log").open("w") as log:
                 subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=30)
             logits = np.fromfile(str(prefix) + ".logits", dtype=np.float32).reshape(513, 300)[:-1].astype(np.float64)
@@ -63,7 +85,8 @@ def main():
 
     summaries = {}
     max_error = 0.0
-    for offset, mode in enumerate(("speed", "off")):
+    check(float(np.max(np.abs(expected[0, "quality"] - expected[0, "speed"]))) > 1e-4, "quality-vs-speed positive control did not move logits")
+    for offset, mode in enumerate(("speed", "quality", "off")):
         output = work / mode
         command = [sys.executable, str(root / "tests/ridgefill/run_g3.py"), "--bin-dir", str(args.bin_dir.resolve()),
                    "--model", str(model), "--projector", str(projector), "--docs", str(work / "docs.jsonl"),
@@ -98,7 +121,7 @@ def main():
             check(row["reference"]["prompt_sha256"] == row["candidate"]["prompt_sha256"], "needle arms used different prompts")
             check(all(not row[arm]["thinking"] and row[arm]["greedy"] and row[arm]["removed_answer_tokens"] == 8 for arm in ("reference", "candidate")),
                   "needle did not remove answer suffix or disable thinking")
-            if mode == "speed":
+            if mode != "off":
                 check(row["candidate"]["filled"] > 0, "needle candidate did not fill")
         if mode == "speed":
             nll = next(row for row in summary["summaries"] if row["metric"] == "nll")
@@ -107,7 +130,7 @@ def main():
         check(needle_correct("The answer is " + value + ".", value), "seven-digit positive control failed")
         check(not needle_correct("9" + value, value) and not needle_correct(value + "8", value), "longer-number negative control failed")
     print(json.dumps(dict(result="PASS", checks=checked, max_logprob_abs_error=max_error, documents=2, scored_per_document=512,
-                          needles=2, modes=["speed", "off"], metrics=["nll", "needles", "ttft", "bench_prefill", "bench_decode"],
+                          needles=2, modes=["speed", "quality", "off"], metrics=["nll", "needles", "ttft", "bench_prefill", "bench_decode"],
                           scope="tiny G3 instrumentation controls; no real-model quality claim", summaries=summaries)))
 
 

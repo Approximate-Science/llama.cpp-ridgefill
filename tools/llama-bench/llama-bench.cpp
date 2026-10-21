@@ -2209,11 +2209,18 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
             for (int i = 0; i < n_prompt; ++i) {
                 quality_tokens[i] = i == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
             }
-            auto rows = common_ridgefill_rows(g_ridgefill, rf, quality_tokens.data(), p_fill);
+            std::vector<llama_pos> rows;
+            try {
+                rows = common_ridgefill_rows(g_ridgefill, rf, quality_tokens.data(), p_fill);
+            } catch (const std::exception & error) {
+                fprintf(stderr, "%s\n", error.what());
+                return false;
+            }
             if (llama_ridgefill_seq_set_rows(ctx, 0, rows.data(), rows.size()) < 0) {
                 fprintf(stderr, "RidgeFill: --ridgefill-mode quality exact rows were refused\n");
                 return false;
             }
+            fprintf(stderr, "RidgeFill: mode quality selected %zu exact rows of %d prefix tokens\n", rows.size(), p_fill);
         }
     }
 
@@ -2319,10 +2326,6 @@ int llama_bench(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
-    if (g_ridgefill.ridgefill_mode == "quality") {
-        fprintf(stderr, "--ridgefill-mode quality requires llama_ridgefill_select_rows, which is unavailable in this build\n");
-        return 1;
-    }
     if (g_ridgefill.ridgefill_mode == "quality+qattn") {
         fprintf(stderr, "--ridgefill-mode quality+qattn requires the server's question-attention sweep\n");
         return 1;
