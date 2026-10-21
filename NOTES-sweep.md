@@ -479,3 +479,57 @@ git diff --check
 ```
 
 The before loop intentionally failed on run 11 and captured `build-sweep/shutdown-stall-backtrace.log`; the after loop passed all 20. Per-run client/server logs and JSON results are `build-sweep/cancel-{before,after}-*`. The other logs are `build-shutdown-fix.log`, `check-http-shutdown-fix.log`, `check-http-open-shutdown-fix.log`, `check-http-signals.log`, and `check-signal-dispatch{,-before}.log` in build-sweep. The local HTTP sweep harness now also fails on a shutdown timeout/nonzero exit, instead of allowing its cleanup kill to hide a failure. The signal regression harness is `build-sweep/check-signal-dispatch.cpp`; it includes the actual server.cpp and links the existing server/common/llama/ggml libraries, with CHECK_LEGACY_SIGNAL selecting the archived dbc6afea6 source for the negative control. These local harnesses remain available for L-B to adopt; this fix only changes server.cpp and this record. Linux/CPU validated; Windows was not run. No changes to model math or native Tier-3 gates, and no GPU/full-27B claims.
+
+## 2026-10-20: one-prefill native G3 NLL scorer
+
+Base: rf27-integ e3fc64ef2. Added target `llama-ridgefill-score` in tools/ridgefill, with a JSON/JSONL token-ID input, all four modes, and per-target full-vocabulary log-probabilities/logsumexp as JSONL. The model/context are reused across documents with memory cleared between them. There is no tokenization, sampling, or HTTP. Only K prediction rows enable the output head; host float64 reduction consumes each output batch without retaining full-vocabulary logits across batches. Split comes from the projector; defaults are T=4096, K=512, share=0.5, digits on, qattn=0.2, window=64, alpha=0, and F16 KV/h_S. Common class/digit selection and the engine sweep driver are reused. The new CMake target does not depend on enabling the HTTP server/UI.
+
+Protocol correction found in the requested oracle inspection: `q27/rf27_quality.py` sets `known=N-scored`, captures `[known-window,known)`, freezes the row set, and calls `finish(...,keep=K+1)` followed by `score_tokens()` (drop the final logit row). `q27/drive.py` delegates quality tasks to q27.steps and does not define another qattn NLL window. Thus N=16384/K=512/T=4096 means P=12288, question rows [15808,15872), logits [15871,16383), and targets [15872,16384). Reading the whole document's last 64 rows would leak scored targets and does NOT match the reference. The scorer defaults to the reference boundary; an explicitly requested `--qattn-end document` diagnostic marks `selector_excludes_targets=false`. The paired wrapper always forces the reference boundary and checks target exclusion.
+
+The driver gained optional `qattn_end` and a half-open exact-tail logits range, plus the first output position. Default server/deferred-token behavior is unchanged. The full lower pass still includes the document; causal attention makes target/future keys contribute zero selector mass. The gate replaces every target ID and checks bitwise-identical selector mass/rows and first predictive logsumexp.
+
+`tools/ridgefill/run_nll.py` is the lane-Q wrapper. It prepares 16384-token documents from nll.jsonl, invokes off and quality+qattn once each over all documents (two model loads total), and writes the run_g3.py summary/paired-record structure. The reference's novel-token mask is primary, using kva.data.novel_mask; an all-token diagnostic is retained as nll_all because HTTP run_g3.py currently averages all tokens. BCa uses the existing eval_client.paired_summary and kva finals/stats.py (5000 resamples, seed 20261004, document weighting). No quality verdict is inferred; needles/TTFT/bench metrics are SKIPPED. Exact full-model commands and paths are in tools/ridgefill/README.md. Output directories must be new; failures produce FAILED.json and never a COMPLETE summary.
+
+CPU tiny split-4 gates (FP32 model, KV and h_S; alpha=0; FA off):
+
+```text
+PASS native scorer: 24/24 four-mode oracle comparisons, two K values, three chunk sizes
+K=64/T=200 and K=512/T=600, ubatches 50/128/512
+worst absolute per-position logprob/logsumexp error: 1.81e-7 (bar 1e-4)
+worst absolute document NLL error: 9.98e-9
+PASS zero qattn share == quality byte-identical, at both K values and all chunk sizes
+PASS off == separate stock rf_dump next-token scoring
+PASS selector mass/rows equal window_mass/top_rows at the known boundary
+PASS replacing all scored targets preserves selector mass/rows and first predictive LSE
+PASS paired wrapper: actual BCa, repeated-span novel mask 496/512
+PASS second document == fresh context byte-for-byte for off and quality+qattn
+PASS named refusals: prediction outside exact tail, unsupported rho correction, invalid mode, nonfinite share
+PASS existing Tier-3 native G1: 12/12 + 3/3 controls; unchanged worst error 6.63008223e-7
+PASS existing HTTP: 17 comparisons, zero-share equality, repeat and concurrent-slot reuse
+[100%] Built target llama-ridgefill-score
+[100%] Built target llama-server
+```
+
+Commands: `cmake -S . -B build-sweep`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; compile the existing tests/ridgefill/rf_dump.cpp against build-sweep/bin as score-stock-dump (README command); run tools/ridgefill/check_score.py with `--binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --stock-dump build-sweep/score-stock-dump --work build-sweep/score-gate-common`; rebuild the local g1-sweep harness against the extended driver and run g1-sweep-oracle.py and check-http-sweep.py. Evidence: build-sweep/check-score-common.log, check-score-driver-regression.log, check-score-http-regression.log, and score-gate-common/paired/summary.json. The committed gate also checks malformed/out-of-vocabulary token IDs; the final post-commit run is recorded in check-score-release.log.
+
+Rejected options: 512 truncated HTTP prompts (512 prefills and a changing selector); a last-64-document selector for the primary result (target leakage); retaining logits for all T tail rows (unneeded output-head work and memory); substituting another bootstrap implementation (would change the registered interval). JSON/JSONL avoids adding an NPY parser. GPU/full-27B validation belongs to lane Q and was not run in this CPU sandbox.
+
+## 2026-10-20: explicit selector endpoint for NLL and prompt protocols
+
+Coordinator's reference relay matches `ridgefill-tune/REFERENCE-ARMS.md`, "For the engine lanes". Added `--qattn-window-end END`, accepting a positive exclusive row index, `document` (N), or `known` (N-K for each document). The default is now document end, matching server semantics; this supersedes the previous scorer-default statement above. `--qattn-end` remains an alias. G3's paired wrapper explicitly passes the numeric N-K endpoint and validates the resulting window and target exclusion. Its full-model command in tools/ridgefill/README.md is unchanged. A direct NLL invocation must pass `--qattn-window-end known` or the numeric endpoint, e.g. 15872 for N=16384/K=512. Teacher-forced needles can pass N-answer_length; G2 uses N. No server or driver default changes were needed.
+
+For N=16384/K=512/T=4096 the NLL path still uses P=12288, question rows [15808,15872), prediction rows [15871,16383), and target IDs [15872,16384). Computing only the 512 prediction logits is equivalent to the reference's last 513 logits with the final unused row discarded. Lower computation and the frozen selector occur once per document.
+
+Validation (CPU, split 4, FP32 model/KV/h_S, alpha=0, flash attention off):
+
+```text
+[100%] Built target llama-ridgefill-score
+PASS native scorer: 24/24 four-mode oracle comparisons, two K values, three chunk sizes
+worst absolute logprob/logsumexp error: 1.81e-7; tolerance: 1e-4
+PASS window endpoints: default == N; N and N-32 match oracle mass/rows/logits; known and legacy alias == N-K
+PASS paired wrapper: real BCa, novel mask 496/512, multi-document reuse equals fresh contexts
+PASS window refusals: zero, negative, malformed, overflowing, beyond document and insufficient history
+PASS existing zero-share, stock scoring, target replacement and invalid-input controls
+```
+
+Commands: `cmake --build build-sweep --target llama-ridgefill-score -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_score.py --binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-endpoint --stock-dump build-sweep/score-stock-dump`; `git diff --check`. Logs: build-sweep/build-score-endpoint.log and build-sweep/check-score-endpoint.log. The gate also verifies the wrapper command's numeric endpoint in provenance.json. Invalid numeric endpoints fail with the option name. No GPU or 27B run, and no quality/noninferiority verdict.
