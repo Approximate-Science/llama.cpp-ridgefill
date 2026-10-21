@@ -41,11 +41,31 @@ void server_ridgefill_sweep::decode(llama_context * ctx, llama_seq_id seq, const
 void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
     const auto & model = ctx->get_model();
-    const int32_t end = params.qattn_end >= 0 ? params.qattn_end : (params.qattn_blind ? params.n_prefix : params.n_tokens);
-    const int32_t start = std::max(0, end - params.qattn_window);
     if (!hidden) {
         if (params.split <= 0 || params.split >= (int32_t) model.hparams.n_layer() || params.n_embd != (int32_t) model.hparams.n_embd) {
             throw std::runtime_error("RidgeFill quality+qattn: invalid split or embedding width");
+        }
+        win_end = params.qattn_end >= 0 ? params.qattn_end : (params.qattn_blind ? params.n_prefix : params.n_tokens);
+        win_begin = std::max(0, win_end - params.qattn_window);
+        if (params.qattn_window_mode == "turn") {
+            const std::string header = "<|im_start|>user\n";
+            const auto * vocab = llama_model_get_vocab(&model);
+            const int32_t n = -llama_tokenize(vocab, header.data(), header.size(), nullptr, 0, false, true);
+            if (n <= 0 || n > 64) {
+                throw std::runtime_error("RidgeFill qattn-window-mode turn: cannot tokenize the user header");
+            }
+            std::vector<llama_token> marker(n);
+            if (llama_tokenize(vocab, header.data(), header.size(), marker.data(), n, false, true) != n) {
+                throw std::runtime_error("RidgeFill qattn-window-mode turn: cannot tokenize the user header");
+            }
+            const int32_t start = llama_ridgefill_last_marker(tokens, win_end, marker.data(), n);
+            if (start < 0) {
+                throw std::runtime_error("RidgeFill qattn-window-mode turn: no user header before the window endpoint");
+            }
+            win_begin = std::max(start + n, win_end - params.qattn_turn_cap);
+            if (win_begin >= win_end) {
+                throw std::runtime_error("RidgeFill qattn-window-mode turn: empty user turn before the window endpoint");
+            }
         }
         for (int32_t il : {3, 7, 11, 15}) {
             if (il >= params.split) {
@@ -56,7 +76,7 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
             }
             layers.push_back(il);
             windows.push_back(std::make_unique<llama_ridgefill_sweep_buffer>(model.select_buft(il),
-                    params.n_embd, end - start, GGML_TYPE_F32));
+                    params.n_embd, win_end - win_begin, GGML_TYPE_F32));
         }
         if (layers.empty()) {
             throw std::runtime_error("RidgeFill quality+qattn: split has no lower attention layers");
@@ -71,8 +91,8 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
         part.n_win_layers = layers.size();
         part.win_layers = layers.data();
         part.win_bufs = buffers.data();
-        part.win_begin = start;
-        part.win_n = end - start;
+        part.win_begin = win_begin;
+        part.win_n = win_end - win_begin;
         if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
             throw std::runtime_error("RidgeFill quality+qattn: LOWER part was refused");
         }
@@ -86,8 +106,7 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
 void server_ridgefill_sweep::question_mass(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) {
     std::vector<ggml_tensor *> buffers;
     for (const auto & window : windows) { buffers.push_back(window->tensor()); }
-    mass = llama_ridgefill_sweep_question_mass(*ctx, seq, params.n_tokens,
-            params.qattn_end >= 0 ? params.qattn_end : (params.qattn_blind ? params.n_prefix : params.n_tokens), layers, buffers);
+    mass = llama_ridgefill_sweep_question_mass(*ctx, seq, params.n_tokens, win_end, layers, buffers);
 }
 
 void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params) {
@@ -97,7 +116,7 @@ void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_row
     if (!std::is_sorted(base_rows.begin(), base_rows.end()) ||
             std::adjacent_find(base_rows.begin(), base_rows.end()) != base_rows.end() ||
             (!base_rows.empty() && (base_rows.front() < 0 || base_rows.back() >= params.n_prefix))) {
-        throw std::runtime_error("RidgeFill quality+qattn: class and digit rows must be sorted unique prefix positions");
+        throw std::runtime_error("RidgeFill quality+qattn: base exact rows must be sorted unique prefix positions");
     }
     const auto question_rows = llama_ridgefill_sweep_top_rows(mass, params.n_prefix, params.qattn_share);
     rows.clear();
@@ -171,6 +190,15 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
     }
     if (params.n_batch <= 0 || params.qattn_window <= 0) {
         throw std::runtime_error("RidgeFill quality+qattn: batch and question window must be positive");
+    }
+    if (params.qattn_window_mode != "last" && params.qattn_window_mode != "turn") {
+        throw std::runtime_error("RidgeFill quality+qattn: qattn-window-mode must be last or turn");
+    }
+    if (params.qattn_turn_cap <= 0) {
+        throw std::runtime_error("RidgeFill quality+qattn: qattn-turn-cap must be positive");
+    }
+    if (params.qattn_window_mode == "turn" && params.qattn_blind) {
+        throw std::runtime_error("RidgeFill qattn-window-mode turn: blind selection is unsupported");
     }
     if (params.qattn_end < -1 || params.qattn_end == 0 || params.qattn_end > params.n_tokens ||
             (params.qattn_end >= 0 && params.qattn_blind)) {

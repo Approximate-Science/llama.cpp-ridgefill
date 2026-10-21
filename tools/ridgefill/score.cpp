@@ -29,11 +29,13 @@ static void require(bool value, const std::string & message) {
 struct options {
     std::string model, projector, input, output;
     std::string mode = "quality+qattn", cache = "f16", hidden = "f16", flash = "auto";
+    std::string window_mode = "last";
     int32_t window_end = -1; // -1: document end; -2: start of scored tokens.
     int32_t scored = 512, tail = 4096, min_prompt = 8192, window = 64;
+    int32_t turn_cap = 256, header_rows = 0;
     int32_t threads = 4, batch = 512, ubatch = 512, ctx = 0, gpu_layers = 0;
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
-    bool digits = true, diagnostics = false;
+    bool digits = true, special_exact = false, diagnostics = false;
 };
 
 static int32_t integer(const std::string & value) {
@@ -73,6 +75,12 @@ static options parse(int argc, char ** argv) {
         else if (key == "--tail") { o.tail = integer(value); }
         else if (key == "--min-prompt") { o.min_prompt = integer(value); }
         else if (key == "--qattn-window") { o.window = integer(value); }
+        else if (key == "--qattn-window-mode") { o.window_mode = value; }
+        else if (key == "--qattn-turn-cap") { o.turn_cap = integer(value); }
+        else if (key == "--header-rows" || key == "--ridgefill-header-rows") { o.header_rows = integer(value); }
+        else if (key == "--special-exact" || key == "--ridgefill-special-exact") {
+            require(value == "on" || value == "off", "--special-exact must be on or off"); o.special_exact = value == "on";
+        }
         else if (key == "--qattn-window-end" || key == "--qattn-end") {
             if (value == "document") { o.window_end = -1; }
             else if (value == "known") { o.window_end = -2; }
@@ -105,6 +113,11 @@ static options parse(int argc, char ** argv) {
     require(o.scored > 0 && o.tail > 0 && o.min_prompt >= 0 && o.window > 0 && o.threads > 0 && o.batch > 0 && o.ubatch > 0 && o.ctx >= 0, "invalid count");
     require(o.mode == "off" || o.tail > o.scored, "tail must exceed scored so the first prediction row is exact");
     require(o.flash == "off" || o.flash == "on" || o.flash == "auto", "invalid flash-attn mode");
+    require(o.header_rows >= 0, "--header-rows must be nonnegative");
+    require(o.mode != "speed" || (!o.special_exact && o.header_rows == 0), "--special-exact and --header-rows require a quality mode");
+    require(o.window_mode == "last" || o.window_mode == "turn", "--qattn-window-mode must be last or turn");
+    require(o.turn_cap > 0, "--qattn-turn-cap must be positive");
+    require(o.window_mode != "turn" || o.mode == "off" || o.mode == "quality+qattn", "--qattn-window-mode turn requires quality+qattn");
     tensor_type(o.cache); tensor_type(o.hidden);
     return o;
 }
@@ -159,14 +172,20 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     const int32_t prefix = o.mode != "off" && n >= o.min_prompt ? std::max(0, n - o.tail) : 0;
     const bool qattn = prefix > 0 && o.mode == "quality+qattn" && o.qattn_share > 0;
     const int32_t window_end = o.window_end == -2 ? n - o.scored : (o.window_end == -1 ? n : o.window_end);
-    require(!qattn || window_end >= o.window, "--qattn-window-end is shorter than --qattn-window");
+    require(!qattn || o.window_mode != "last" || window_end >= o.window, "--qattn-window-end is shorter than --qattn-window");
     const int32_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_ridgefill_seq_set(ctx, 0, prefix);
-    common_params selection;
-    selection.ridgefill_mode = o.mode; selection.ridgefill_share = o.share;
-    selection.ridgefill_digits = o.digits; selection.ridgefill_alpha = o.alpha;
-    auto rows = common_ridgefill_rows(selection, rf, doc.ids.data(), prefix, o.mode);
+    std::vector<llama_pos> rows;
+    if (prefix > 0 && (o.mode == "quality" || o.mode == "quality+qattn")) {
+        auto selection = llama_ridgefill_select_default_params(rf);
+        selection.share = o.share; selection.digits = o.digits;
+        selection.special_exact = o.special_exact; selection.header_rows = std::min(o.header_rows, prefix);
+        rows.resize(prefix);
+        const int32_t count = llama_ridgefill_select_rows_ext(rf, doc.ids.data(), prefix, &selection, rows.data());
+        require(count >= 0 && count <= prefix, "llama_ridgefill_select_rows_ext refused the exact row selection");
+        rows.resize(count);
+    }
     require(llama_ridgefill_seq_set_rows(ctx, 0, rows.data(), rows.size()) == 0, "exact row setup failed");
     std::vector<double> logprobs, logsumexp;
     std::vector<int32_t> positions;
@@ -196,6 +215,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         server_ridgefill_sweep_params p;
         p.n_embd = llama_model_n_embd(model); p.n_tokens = n; p.n_prefix = prefix; p.n_batch = o.batch;
         p.split = llama_ridgefill_split(rf); p.qattn_share = o.qattn_share; p.qattn_window = o.window;
+        p.qattn_window_mode = o.window_mode; p.qattn_turn_cap = o.turn_cap;
         p.qattn_end = window_end; p.logits_begin = begin; p.logits_end = end; p.type = tensor_type(o.hidden);
         try {
             while (true) {
@@ -233,9 +253,10 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         {"n", n}, {"scored", o.scored}, {"prefix", prefix}, {"filled", prefix}, {"nll", mean},
         {"logprobs", logprobs}, {"logsumexp", logsumexp}, {"target_positions", positions},
         {"logits_begin", begin}, {"logits_end", end}, {"exact_rows", rows},
-        {"qattn_window", qattn ? json::array({window_end - o.window, window_end}) : json(nullptr)},
+        {"qattn_window", qattn ? json::array({sweep.window_begin(), sweep.window_end()}) : json(nullptr)},
         {"selector_excludes_targets", !qattn || window_end <= n - o.scored},
         {"parameters", {{"tail", o.tail}, {"share", o.share}, {"digits", o.digits}, {"qattn_share", o.qattn_share},
+            {"special_exact", o.special_exact}, {"header_rows", o.header_rows}, {"qattn_window_mode", o.window_mode}, {"qattn_turn_cap", o.turn_cap},
             {"alpha", o.alpha}, {"cache_type", o.cache}, {"h_type", o.hidden}, {"flash_attn", o.flash}}},
         {"prefills", 1}, {"wall_s", std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count()},
         {"build", {{"commit", llama_commit()}, {"build", llama_build_number()}}}};
@@ -252,6 +273,8 @@ int main(int argc, char ** argv) {
                 "--qattn-window-end END uses [END-window,END), with an exclusive zero-based endpoint.\n"
                 "Default: document (N, server semantics). For NLL use known (N-K), or an explicit row index.\n"
                 "--qattn-end is an alias. NLL with endpoint N reads scored targets; the G3 wrapper uses N-K.\n"
+                "Chat: --special-exact off --header-rows 0 --qattn-window-mode last --qattn-turn-cap 256\n"
+                "turn uses [max(after_last_user_header,END-cap),END), searching only before END; missing/empty turns are refused.\n"
                 "Runtime: --gpu-layers 0 --threads 4 --batch 512 --ubatch 512 --ctx-size 0 --cache-type f16 --h-type f16 --flash-attn auto\n"
                 "JSON: token ID array, {name,ids}, array of documents, or one document per JSONL line. No tokenization.\n";
             return 0;

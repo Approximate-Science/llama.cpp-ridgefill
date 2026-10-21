@@ -5,6 +5,7 @@
 
 #include <cstddef>
 #include <memory>
+#include <string>
 #include <vector>
 
 struct server_ridgefill_sweep_params {
@@ -15,6 +16,8 @@ struct server_ridgefill_sweep_params {
     int32_t split = 0;
     float qattn_share = -1.0f;
     int32_t qattn_window = 64;
+    std::string qattn_window_mode = "last";
+    int32_t qattn_turn_cap = 256;
     // Exclusive selector boundary; -1 uses the prompt end (or prefix end when blind).
     int32_t qattn_end = -1;
     bool qattn_blind = false;
@@ -45,6 +48,8 @@ struct server_ridgefill_sweep {
     bool prefix_done() const { return next == phase::tail || next == phase::external || next == phase::done; }
     int32_t last_outputs() const { return n_outputs; }
     int32_t first_output_position() const { return output_position; }
+    int32_t window_begin() const { return win_begin; }
+    int32_t window_end() const { return win_end; }
     // Finish after the deferred token is decoded. Cancel before releasing an incomplete slot.
     void finish_external_tail(llama_context * ctx, llama_seq_id seq);
     void cancel(llama_context * ctx, llama_seq_id seq);
@@ -56,6 +61,8 @@ private:
     int32_t n_lower = 0;
     int32_t n_outputs = 0;
     int32_t output_position = -1;
+    int32_t win_begin = -1;
+    int32_t win_end = -1;
     bool active = false;
     std::unique_ptr<llama_ridgefill_sweep_buffer> hidden;
     std::vector<double> mass;
@@ -78,6 +85,7 @@ private:
 
 // Call only for quality+qattn. Zero share returns quality before allocation or context access.
 // A step runs at most one ubatch or one mass/selection stage, so the server can service other slots.
+// base_rows includes the caller's class, digit, special and header selection from select_rows_ext.
 server_ridgefill_sweep_result server_ridgefill_sweep_step(
         server_ridgefill_sweep & sweep,
         llama_context * ctx,

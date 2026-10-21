@@ -24,6 +24,16 @@ These boundaries match `ridgefill-tune/REFERENCE-ARMS.md`, "For the engine lanes
 
 The reference's primary document NLL averages only the novel tokens selected by `kva.data.novel_mask(ids, K)` (no repeated 8-token span). The existing HTTP `run_g3.py` averages all K targets and changes the qattn window for each truncation. Those are different estimators. The wrapper reports reference-compatible novel-token NLL as `metric=nll`, and retains `metric=nll_all` as an all-token diagnostic. Both summaries use the same `paired_summary` helper and `finals/stats.py` BCa implementation as `run_g3.py`: document weighting, 5000 resamples, seed 20261004. It makes no noninferiority verdict; unmeasured metrics are SKIPPED.
 
+## Chat selector controls
+
+Both the native scorer and `run_nll.py` accept `--special-exact on|off` (default off), `--header-rows K` (default 0), `--qattn-window-mode last|turn` (default last), and `--qattn-turn-cap N` (default 256). The native scorer also accepts `--ridgefill-special-exact` and `--ridgefill-header-rows` aliases. These are experimental controls; no chat quality verdict or release-default change follows from the tiny correctness gate.
+
+Special rows and the K rows following each special row are added to the prefix exact rows through `llama_ridgefill_select_rows_ext`. Header rows are independent of `special-exact`, stop at P, and can overlap. Speed mode refuses either rule when enabled. Off mode stays exact and ignores these controls, allowing paired comparisons with identical arguments.
+
+In `last` mode the window remains `[END-window,END)`. In `turn` mode the driver tokenizes the literal `<|im_start|>user\n` header with special parsing and no BOS, finds the last complete header entirely inside `[0,END)`, and sets `turn_start` to the row after that header. It captures `[max(turn_start,END-cap),END)`. The cap is independent of `--qattn-window`; header rows are excluded. Missing or empty turns are refused by name, and turn mode does not support blind selection. For NLL, END remains N-K, so teacher-forced headers after that endpoint cannot change selection. Windows are sized once per document and remain fixed while scoring all K targets.
+
+To measure a chat arm, append `--special-exact on --header-rows 3 --qattn-window-mode turn --qattn-turn-cap 256` to the paired command below and use its frozen chat document input. Each output records the resolved window and selector options.
+
 ## Lane Q command
 
 From the merged checkout, with its configured GPU build named `build` and its GPU assignment already applied:
@@ -69,3 +79,16 @@ python3 tools/ridgefill/check_score.py \
 ```
 
 The gate covers all four modes against FP32 `finish()` logits at K=64/T=200 and K=512/T=600 with ubatches 50/128/512. It also compares selector mass and row sets, zero-share versus quality, off versus stock next-token scoring, and changes all targets to prove they do not affect selection or the first predictive distribution. Endpoint controls compare the default with explicit N, compare N and N-32 with the oracle, verify the known/legacy aliases, and reject invalid endpoints. The paired wrapper runs on two documents, including repeated spans, and verifies its explicit N-K endpoint and real BCa summary. Tiny CPU agreement does not establish GPU or full-model quality.
+
+The chat gate needs a pre-chat scorer binary built at d619c13d6 (save it before rebuilding), plus the same fixture. It writes a local copy with ChatML control-token names and keeps the tiny weights and row scores unchanged:
+
+```sh
+python3 tools/ridgefill/check_chat_score.py \
+  --binary build/bin/llama-ridgefill-score \
+  --baseline-binary build/bin/llama-ridgefill-score-before-chat \
+  --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 \
+  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --work build/score-chat-gate
+```
+
+This gate compares default log-probabilities, logsumexp, mass and rows byte-for-byte on raw and templated inputs; compares chat selection, mass and `finish()` logits across three chunk sizes; covers capped, uncapped and short turns; checks future/partial/missing/empty headers and zero-share equality; and runs the paired wrapper with per-document turn bounds and BCa.

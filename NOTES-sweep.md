@@ -533,3 +533,32 @@ PASS existing zero-share, stock scoring, target replacement and invalid-input co
 ```
 
 Commands: `cmake --build build-sweep --target llama-ridgefill-score -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_score.py --binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-endpoint --stock-dump build-sweep/score-stock-dump`; `git diff --check`. Logs: build-sweep/build-score-endpoint.log and build-sweep/check-score-endpoint.log. The gate also verifies the wrapper command's numeric endpoint in provenance.json. Invalid numeric endpoints fail with the option name. No GPU or 27B run, and no quality/noninferiority verdict.
+
+## 2026-10-20: chat selector controls and last-user-turn window
+
+Base: rf27-integ d619c13d6. The coordinator resolved the window contract identically for L-C and lane T. Note for L-A to fold into RF27-INTERFACE.md: `turn` has a separate `qattn_turn_cap`, default 256; `qattn_window`, default 64, applies only to `last`. Tokenize the full literal `<|im_start|>user\n` with parse_special=true and no BOS. Search for its last complete occurrence in tokens[0,end) only. `turn_start` is the row AFTER the full header, including its newline; capture [max(turn_start,end-cap),end). The endpoint is N for server semantics, N-K for NLL. No marker or no rows after the marker: named refusal, no fallback. Blind turn selection is refused. This supersedes the earlier interface example that searched all N rows and included the header.
+
+Implemented in server-ridgefill-sweep.{h,cpp}: qattn_window_mode (string, default last), qattn_turn_cap (int32, default 256), per-prompt resolved window bounds retained for output metadata, and buffers sized from those bounds. The scorer exposes --qattn-window-mode last|turn and --qattn-turn-cap; --special-exact on|off and --header-rows (with --ridgefill-* aliases) go directly to llama_ridgefill_select_rows_ext. Header counts are clipped to the prefix length before calling the selector, which is equivalent to clipping each selected range and prevents integer overflow for a very large count. Speed refuses enabled chat row rules. Off remains exact; zero qattn share uses ordinary quality with the same chat rows. The paired wrapper forwards all four controls, records them, validates the resulting window/options, and retains the reference novel-token/BCa protocol.
+
+Driver ownership is unchanged: the caller supplies the sorted class/digit/special/header rows from select_rows_ext as base_rows, and the driver adds question rows. For L-B's server integration, fill sweep_params.qattn_window_mode and sweep_params.qattn_turn_cap from the effective request settings, and use common_ridgefill_rows after its select_rows_ext plumbing for base_rows. Its current fail-closed refusal of turn mode can be lifted when these fields are connected. This commit does not edit common or the per-request parser. The HTTP regression below covers existing/default behavior, not the pending HTTP chat knobs.
+
+Gate tools/ridgefill/check_chat_score.py writes a synthetic ChatML fixture under its work directory: original tiny split-4 model weights and projector maps/scores, two renamed control-token pieces (<|im_start|>, <|im_end|>), disabled SPM dummy-space prefix, and the matching projector vocabulary hash. Role/newline tokens use the fixture's byte IDs, independently defining the complete user header as [1,120,118,104,117,13]. The oracle uses the unchanged HF model weights, the coordinator's window/row rules, and actual kva.select.window_mass / kva.kva.finish. This does not claim validation of lane T's not-yet-present turn-window wrapper. Cases include special-only, header-only, combined rules, overlapping headers at P-1, caps 32/256/1024, a 30-row turn, endpoint N versus N-K, and a future user header inside the scored continuation. Eight configurations run at ubatches 50/128/512.
+
+Before editing, built the d619c13d6 scorer and saved build-sweep/bin/llama-ridgefill-score-before-chat. Its binary predates the source edits. Compared it with the new implicit and explicit defaults on raw and templated token streams, all four modes, F32 and F16 KV/h_S: every output log-probability, logsumexp, selected row, question-mass element and window bound is identical. Build IDs, timings and added parameter metadata are not part of the equality claim.
+
+```text
+[100%] Built target llama-ridgefill-score
+[100%] Built target llama-server
+PASS defaults: old binary == new default == explicit defaults, raw/templated tokens, all four modes, F32/F16 KV and h_S
+PASS chat oracle: 24/24 comparisons (8 configurations, 3 chunk sizes)
+worst absolute logprob/logsumexp error: 1.5213828952198583e-7 (bar 1e-4)
+worst relative question-mass error: 2.394300415746324e-7 (bar 1e-4)
+PASS future user headers/targets cannot change selector mass, rows, bounds or first predictive LSE
+PASS turn ignores last-window size; zero qattn share == chat quality byte-identical
+PASS chat paired wrapper: per-document turn bounds, fresh-context equality and actual BCa
+PASS missing/future-only/partial/empty-header refusals and incompatible/invalid-option refusals
+PASS original scorer gate: 24/24 four-mode comparisons, endpoint/stock/zero-share/target-exclusion/BCa controls
+PASS HTTP defaults: 17 comparisons, zero-share equality, repeat, cancellation/reuse and concurrent slots
+```
+
+Commands: `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_chat_score.py --binary build-sweep/bin/llama-ridgefill-score --baseline-binary build-sweep/bin/llama-ridgefill-score-before-chat --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-chat-f16`; run the original check_score.py into build-sweep/score-gate-chat-regression; `PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Evidence: build-sweep/build-score-chat.log, check-score-chat-f16.log, check-score-chat-regression.log, check-http-chat-default.log, and score-gate-chat-f16/summary.json. Rejected options: using the 64-row last-window size as the turn cap (different experiment), including header rows in the query window, searching scored future rows, and silently falling back when no user turn exists. CPU correctness only; no GPU/full-model chat quality or release claim.
