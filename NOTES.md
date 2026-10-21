@@ -203,3 +203,40 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
 ## 19:40 rf27-integ: rf27-tools tip 6622ae3ad merged (NOTES-tools.md only on top of 23da65965)
 - Code tree identical to 962f8c3f0. Rerun: canonical G1 speed 27/27, quality 27/27; G0 72/0; L-C native Tier-3 G1
   12/12 runs + 3/3 control rows; dispatch 44/44; select_rows 23/23.
+
+## 19:45-20:15 G5 CPU, independent reproduction of L-B's claims on rf27-integ dbc6afea6 (tree 713119574096)
+Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its scripts.
+- Clean archive build: `git archive dbc6afea6` into an empty directory, built under `env -i` (PATH = the cmake binary
+  dir + /usr/bin:/bin, HOME a fresh directory, GIT_CEILING_DIRECTORIES set), Release, GGML_NATIVE=OFF, curl/OpenSSL/UI/
+  tests off, -j4: llama-server, llama-bench, llama-perplexity built, 0 errors. The archive finds no git repository
+  ("commit unknown", build 0: it cannot see this checkout) and `ldd` shows it links only its own build's libraries.
+  Two false starts, both instrument errors: cmake from ~/.local/bin was outside the clean PATH (rc 127), then that
+  cmake is a pip wrapper that needs the user site-packages under HOME (used its real binary directory instead).
+- Refusals (`rf27-gates/g5_refusals.py`, own HTTP client): L-B's 15 claims + 2 of mine, 17/17 on the archive build
+  and 17/17 on the dev build: startup refusals named for LoRA, control vector, embeddings, --cache-reuse, -sm row;
+  bench refusals for -sm row and embeddings; stock missing-LoRA control fails in the normal loader without a RidgeFill
+  message; request n_cache_reuse refused (400); fill active 500/700; filled-slot save refused (501) with no file;
+  off request exact (0 filled); exact-slot save works (300876-byte file); mine: a dense qwen3 projector on the qwen35
+  model refused by architecture, quality with alpha 1 refused naming rho. Cosmetic: the alpha-1 message prints
+  "RidgeFill: RidgeFill:" (common/, L-B's).
+- Portability grep (own patterns in `rf27-gates/g5-portability-patterns.txt`: home / mount / Windows paths, user and
+  host names, PCI ids, *_VISIBLE_DEVICES, GPU model names, device indices, GPU UUIDs, TP sizes, the storage and
+  container names of this box), over every code file this fork changes vs upstream 1242be66f (66 files: L-B's 36
+  plus llama-batch, the KV cache and recurrent/hybrid memory, llama-context.h, the llama/qwen3 hooks, rf27-gates/,
+  tests/ridgefill/), on the archive; positive control (a planted file, 2 hits) and negative control (upstream
+  llama-vocab.cpp, 0) first. Engine, common, tools, converter, tests/ridgefill code: 0 hits — agrees with L-B and
+  covers the files its list misses. Hits: my own rf27-gates scripts defaulted to this machine's fixture / kva / venv
+  paths (12 lines) — fixed: they now refuse by name unless the paths are given (env or argv); all five rerun with
+  explicit inputs: G0 72/0, rollback 11/11, quality a0 27/27, dispatch 44/44, select_rows 23/23. Benign remaining:
+  .gitignore "AGENTS.local.md" (pattern false positive), run_g5.py's own pattern list and planted controls,
+  g0_dense.sh clearing *_VISIBLE_DEVICES to force the CPU.
+  First grep attempt reported 0 hits for everything: `grep -P -f` takes one pattern only and the error was hidden by
+  2>/dev/null; the planted-file positive control is why that would not pass again.
+- Functional parity (`rf27-gates/g5_parity.py`): archive vs dev server, greedy 8 tokens with top-5 logprobs on the
+  700-token prompt, modes off / speed / quality: same text, same chosen and top-5 ids, max |delta logprob| 4.77e-07,
+  fill counts 0 / 500 / 500, 4/4. Not byte-identical, and mode off (stock code) differs by the same 4.77e-07: the
+  archive is GGML_NATIVE=OFF, the dev build native (AVX-512), so the SIMD rounding differs, not RidgeFill. Two
+  instrument bugs on the way: probabilities merge partial-UTF-8 byte tokens (fewer than n_predict entries), and the
+  response's `tokens` field is empty without return_tokens (an equality of two empty lists checked nothing).
+- Agreement with L-B: archive build, the 15 controls and the empty grep over its 36 files reproduce. Not covered by
+  either instrument here: container isolation, Vulkan / HIP / CUDA execution, multi-GPU layer split (lane Q).

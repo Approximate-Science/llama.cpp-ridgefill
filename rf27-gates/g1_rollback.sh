@@ -9,8 +9,8 @@
 # (it has outputs), so the "fill" silently computed the prefix exactly. The control catches a fill that did nothing.
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; cd "$HERE"
-PY=${ORACLE_PYTHON:-/var/home/dylan/projects/inference/llama.cpp-ridgefill-tools/.venv-oracle/bin/python}
-KVA=${KVA:-/var/home/dylan/projects/research/kva-wt-q27}
+: "${ORACLE_PYTHON:?set ORACLE_PYTHON to the CPU-torch oracle python}" "${KVA:?set KVA to the kva repo (q27-projector)}"
+PY=$ORACLE_PYTHON
 W=$HERE/lb/out/gate1-qwen35
 export OMP_NUM_THREADS=4 HF_HUB_OFFLINE=1
 out=results-g1-rollback.txt; : > $out

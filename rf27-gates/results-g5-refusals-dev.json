@@ -1,0 +1,137 @@
+{
+  "summary": {
+    "gate": "G5-refusals (L-A instrument)",
+    "bin": "/var/home/dylan/projects/inference/llama.cpp-ridgefill/build-cpu/bin",
+    "checks": 17,
+    "passed": 17,
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "check": "startup-refuses-lora",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "RidgeFill",
+        "LoRA"
+      ]
+    },
+    {
+      "check": "startup-refuses-control-vector",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "RidgeFill",
+        "control vector"
+      ]
+    },
+    {
+      "check": "startup-refuses-embeddings",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "RidgeFill",
+        "embeddings"
+      ]
+    },
+    {
+      "check": "startup-refuses-cache-reuse",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "RidgeFill",
+        "--cache-reuse"
+      ]
+    },
+    {
+      "check": "startup-refuses-split-mode-row",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "RidgeFill",
+        "row"
+      ]
+    },
+    {
+      "check": "bench-refuses-split-mode-row",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "RidgeFill",
+        "row"
+      ]
+    },
+    {
+      "check": "bench-refuses-embeddings",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "RidgeFill",
+        "embeddings"
+      ]
+    },
+    {
+      "check": "stock-missing-lora-normal-loader",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "/var/home/dylan/projects/inference/llama.cpp-ridgefill/rf27-gates/g5/ref-dev/does-not-exist.gguf"
+      ]
+    },
+    {
+      "check": "startup-refuses-arch-mismatch",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "qwen3",
+        "qwen35"
+      ]
+    },
+    {
+      "check": "startup-refuses-quality-alpha1",
+      "result": "PASS",
+      "rc": 1,
+      "needles": [
+        "rho"
+      ]
+    },
+    {
+      "check": "request-refuses-n_cache_reuse",
+      "result": "PASS",
+      "status": 400
+    },
+    {
+      "check": "positive-fill-active-500-of-700",
+      "result": "PASS",
+      "status": 200,
+      "filled": 500
+    },
+    {
+      "check": "slot-save-refuses-filled-rows",
+      "result": "PASS",
+      "status": 501
+    },
+    {
+      "check": "refused-save-wrote-no-file",
+      "result": "PASS",
+      "files": []
+    },
+    {
+      "check": "negative-off-request-exact",
+      "result": "PASS",
+      "status": 200,
+      "filled": 0
+    },
+    {
+      "check": "negative-exact-slot-save-works",
+      "result": "PASS",
+      "status": 200,
+      "n_saved": 700
+    },
+    {
+      "check": "exact-slot-file-nonempty",
+      "result": "PASS",
+      "bytes": 300876
+    }
+  ]
+}

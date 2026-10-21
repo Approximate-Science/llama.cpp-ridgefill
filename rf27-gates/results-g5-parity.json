@@ -1,0 +1,46 @@
+{
+  "summary": {
+    "gate": "G5-parity (L-A)",
+    "checks": 4,
+    "passed": 4,
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "check": "parity-off",
+      "result": "PASS",
+      "byte_identical": false,
+      "chosen_and_text_equal": true,
+      "top5_ids_equal": true,
+      "max_abs_dlogprob": 4.76837158203125e-07,
+      "filled": 0,
+      "expect_filled": 0
+    },
+    {
+      "check": "parity-speed",
+      "result": "PASS",
+      "byte_identical": false,
+      "chosen_and_text_equal": true,
+      "top5_ids_equal": true,
+      "max_abs_dlogprob": 4.76837158203125e-07,
+      "filled": 500,
+      "expect_filled": 500
+    },
+    {
+      "check": "parity-quality",
+      "result": "PASS",
+      "byte_identical": false,
+      "chosen_and_text_equal": true,
+      "top5_ids_equal": true,
+      "max_abs_dlogprob": 4.76837158203125e-07,
+      "filled": 500,
+      "expect_filled": 500
+    },
+    {
+      "check": "control-modes-differ",
+      "result": "PASS"
+    }
+  ],
+  "a": "/var/home/dylan/projects/inference/llama.cpp-ridgefill/rf27-gates/g5/build/bin",
+  "b": "/var/home/dylan/projects/inference/llama.cpp-ridgefill/build-cpu/bin"
+}

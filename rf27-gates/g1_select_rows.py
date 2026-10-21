@@ -7,7 +7,9 @@ import json, subprocess, sys
 from pathlib import Path
 import numpy as np
 HERE = Path(__file__).resolve().parent
-KVA = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/var/home/dylan/projects/research/kva-wt-q27")
+if len(sys.argv) < 2:
+    sys.exit(f"usage: {sys.argv[0]} KVA_REPO   (machine-local paths are arguments, never defaults)")
+KVA = Path(sys.argv[1])
 sys.path.insert(0, str(KVA)); sys.path.insert(0, str(KVA / "q27"))
 from safetensors.numpy import load_file
 from transformers import AutoTokenizer
@@ -49,7 +51,10 @@ for tail in (200, 1):   # the tool needs tail >= 1
                    first_diff=None if rows == sorted(want) else str(sorted(set(rows or []) ^ want)[:5]))
 record("control-share-0.5!=0.25", got[(0.5, 0, 200)] != got[(0.25, 0, 200)], n=[len(got[(0.5, 0, 200)]), len(got[(0.25, 0, 200)])])
 record("control-digits-change-set", got[(0.5, 1, 200)] != got[(0.5, 0, 200)])
-F = Path("/var/mnt/qwen-storage/dylan/AI-Work/llamacpp-ridgefill-20261008/gate1/work")
+import os
+if not os.environ.get("RF_DENSE_FIXTURE"):
+    sys.exit("set RF_DENSE_FIXTURE to the dense gate1/work fixture directory (format-1 projector refusal row)")
+F = Path(os.environ["RF_DENSE_FIXTURE"])
 rows, r = engine(0.5, 1, 200, proj=F / "qproj-s2-f32.gguf", model=F / "tiny-qwen3-f32.gguf", tokens=F / "tokens.bin")
 record("refuse-format1-projector", rows is None and r.returncode == 3 and "no row table" in r.stderr, rc=r.returncode)
 summary = dict(gate="G1-select-rows", result="PASS" if all(x["result"] == "PASS" for x in records) else "FAIL",

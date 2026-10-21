@@ -9,14 +9,14 @@
 # Trap (upstream, measured 2026-10-20): llama.cpp's async logger can drop its last lines at exit with rc 0 under CPU
 # load (upstream llama-perplexity 6/40, this branch 4/40, 4 parallel runs). A perplexity log without its
 # "Final estimate" line is rerun (at most 3 attempts, the count is printed); the comparison still requires all chunks.
-# Usage: rf27-gates/g0_dense.sh   (from anywhere; needs build-cpu/ of this repo built)
+# Usage: FIX=... PY=... KVA=... rf27-gates/g0_dense.sh   (from anywhere; needs build-cpu/ of this repo built)
 set -u
 HERE="$(cd "$(dirname "$0")" && pwd)"; REPO="$(dirname "$HERE")"
 cd "$HERE"
 export CUDA_VISIBLE_DEVICES= HIP_VISIBLE_DEVICES= ROCR_VISIBLE_DEVICES= HF_HUB_OFFLINE=1 OMP_NUM_THREADS=4
-FIX=${FIX:-/var/mnt/qwen-storage/dylan/AI-Work/llamacpp-ridgefill-20261008/gate1}
-PY=${PY:-/var/home/dylan/projects/research/kva/.venv/bin/python}
-KVA=${KVA:-/var/home/dylan/projects/research/kva}
+# machine-local inputs are required, never defaulted (G5): the Oct-8 dense fixture dir (gate1/ with work/ and
+# compare.py), the kva repo of the dense oracle and its python
+: "${FIX:?set FIX to the dense gate1 fixture directory}" "${PY:?set PY to the dense oracle python}" "${KVA:?set KVA to the dense kva repo}"
 BASE=$(git -C "$REPO" merge-base HEAD origin/master)
 JOBS=${JOBS:-4}
 mkdir -p out
