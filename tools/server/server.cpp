@@ -14,7 +14,9 @@
 #include "log.h"
 
 #include <atomic>
+#include <chrono>
 #include <clocale>
+#include <cstdlib>
 #include <exception>
 #include <signal.h>
 #include <thread> // for std::thread::hardware_concurrency
@@ -25,17 +27,47 @@
 
 static std::function<void(int)> shutdown_handler;
 static std::atomic_flag is_terminating = ATOMIC_FLAG_INIT;
+static std::atomic<int> shutdown_signal{0};
+static_assert(std::atomic<int>::is_always_lock_free, "shutdown signals require lock-free atomics");
 
 static inline void signal_handler(int signal) {
-    if (is_terminating.test_and_set()) {
-        // in case it hangs, we can force terminate the server by hitting Ctrl+C twice
-        // this is for better developer experience, we can remove when the server is stable enough
-        fprintf(stderr, "Received second interrupt, terminating immediately.\n");
-        exit(1);
+    if (is_terminating.test_and_set(std::memory_order_relaxed)) {
+        std::_Exit(1);
     }
 
-    shutdown_handler(signal);
+    shutdown_signal.store(signal, std::memory_order_relaxed);
 }
+
+struct server_signal_dispatcher {
+    std::atomic<bool> stop{false};
+    std::thread thread;
+
+    explicit server_signal_dispatcher(bool enabled) {
+        if (!enabled) {
+            return;
+        }
+        is_terminating.clear(std::memory_order_relaxed);
+        shutdown_signal.store(0, std::memory_order_relaxed);
+        thread = std::thread([this]() {
+            while (!stop.load(std::memory_order_relaxed)) {
+                const int signal = shutdown_signal.load(std::memory_order_relaxed);
+                if (signal != 0) {
+                    // A signal can interrupt a thread that already owns the queue mutex.
+                    shutdown_handler(signal);
+                    return;
+                }
+                std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            }
+        });
+    }
+
+    ~server_signal_dispatcher() {
+        stop.store(true, std::memory_order_relaxed);
+        if (thread.joinable()) {
+            thread.join();
+        }
+    }
+};
 
 // satisfies -Wmissing-declarations (used by llama command)
 int llama_server(int argc, char ** argv);
@@ -524,6 +556,9 @@ int llama_server(common_params & params, int argc, char ** argv, server_child & 
             ctx_server.terminate();
         };
     }
+
+    // Join the dispatcher before the objects captured by shutdown_handler are destroyed.
+    server_signal_dispatcher signal_dispatcher(!is_run_by_cli);
 
     // register signal handler if not running by CLI
     if (!is_run_by_cli) {

@@ -421,3 +421,61 @@ PASS active HTTP cancellation/reuse and open-stream shutdown
 HTTP uses the real common helper for both quality modes and compares against the newly rebuilt native harness; its default F16 h_S reference and F32 acceptance distinction remain as documented above. The HTTP runs cover one slot, two concurrent unified-KV slots, repeated requests, and zero-share equality. L-T's real-vocabulary digit-set result (10 ids equal to kva) is accepted as relayed evidence, not a measurement performed in this CPU/tiny lane.
 
 Commands: `cmake --build build-sweep --target llama-server -j4`; compile `build-sweep/g1-sweep.cpp` with `tools/server/server-ridgefill-sweep.cpp` against the current libllama/ggml; run `g1-sweep-oracle.py`, `check-http-sweep.py`, `check-http-cancel.py`, and `check-http-shutdown-recheck.py` with PYTHONDONTWRITEBYTECODE=1 and the shared fixture. The native CLI is now `g1-sweep MODEL PROJECTOR TOKENS OUTPUT_PREFIX BATCH UBATCH MODE f32|f16`. Logs: `build-selector-g1.log`, `g1-sweep-engine-selector.log`, `check-http-selector.log`, `check-http-selector-cancel.log`, and `check-http-selector-shutdown.log` in build-sweep. Updated native/HTTP harness sources remain local/ignored for L-B to adopt. No further production changes were necessary; no GPU/full-27B claims or pushes.
+
+
+## 2026-10-20: shutdown under CPU load
+
+Rebased rf27-sweep onto the merged integration head dbc6afea6. The reported intermittent `check-http-cancel` stall reproduced on iteration 11 with four busy Python processes and the server pinned to CPUs 0-3 (server -t 4 -tb 4). The preceding ten runs passed. The failing run passed active cancellation and native-logit reuse, then exceeded the unchanged 10-second shutdown timeout.
+
+GDB attached to the stalled process before cleanup. The main thread was interrupted while `yield_to_queue()` held `mutex_tasks` and called `condition_tasks.notify_all()`. SIGTERM called the shutdown callback synchronously, and `server_queue::terminate()` tried to acquire that same mutex. The queue worker and the HTTP cancellation callback were also blocked on it. This is a signal-handler reentry deadlock, before the slot cleanup or HTTP join can run.
+
+```text
+#0  __lll_lock_wait
+#1  pthread_mutex_lock
+#2  server_queue::terminate()
+#3  signal_handler(int)
+#4  <signal handler called>
+#5  pthread_cond_broadcast
+#6  std::condition_variable::notify_all()
+#7  server_queue::yield_to_queue(...)
+#8  server_context_impl::ridgefill_sweep_prompt(...)
+```
+
+The fix in `tools/server/server.cpp` limits the signal handler to lock-free atomic operations and `_Exit(1)` on a second interrupt. A dispatcher thread polls the pending signal every 100 ms and invokes the existing shutdown callback in normal thread context. Its destructor joins before the captured server objects are destroyed. Embedded CLI termination keeps its existing direct callback. No queue locking or sweep ownership rules change.
+
+Rejected options: increasing the timeout cannot resolve recursive acquisition of the mutex; removing the mutex in `terminate()` would break the condition-variable synchronization and still call non-signal-safe notification code from the handler. The polling dispatcher avoids adding platform-specific pipes/events or changing signal masks on threads already started by the HTTP server/backends. The tradeoff is one small thread and up to one polling interval of dispatch latency, plus scheduler delay. The second-interrupt path no longer uses stdio/normal exit, which can themselves take locks.
+
+The local deterministic regression includes the actual server translation unit, holds a mutex required by the shutdown callback, and raises SIGTERM on the owning thread. It requires the signal handler to return before releasing the mutex and then requires the callback to receive SIGTERM. The patched build passes; the same source compiled against dbc6afea6's server.cpp times out after two seconds. This is a deliberately failing negative control, not a skipped check.
+
+
+Validation on the patched CPU build:
+
+```text
+[100%] Built target llama-server
+PASS after: 20/20 check-http-cancel runs under parallel CPU load
+PASS HTTP share=0.2 parallel=1: native logits, filled/processed counts, repeat, cancellation/reuse
+PASS HTTP share=0.0 parallel=1: native logits, filled/processed counts, repeat, cancellation/reuse, zero == quality
+PASS HTTP share=0.2 parallel=2: native logits, filled/processed counts, repeat, cancellation/reuse
+PASS 17 HTTP comparisons; worst error 2.066796929156567e-7
+PASS active shutdown with client stream still open: terminal response and clean exit
+PASS SIGTERM and SIGINT: signal returns while callback mutex is held; shutdown runs after unlock
+PASS second signal exits immediately with code 1
+PASS model SIGINT/SIGTERM and router SIGINT/SIGTERM: all four exit cleanly
+```
+
+All 20 load runs used the original `check-http-cancel.py` and its 10-second shutdown timeout. Each run cancels an active 3500-token sweep, verifies a subsequent 700-token request against native logits, and shuts down another incomplete 3500-token sweep. No retry/timeout increase/kill fallback counted as a pass. Total elapsed time for the 20 checks was 145.09 s (per-check range 3.58-17.24 s, including startup, cancellation, inference and shutdown). The four idle model/router signal checks each exited in 0.113 s. These are lifecycle timings, not prefill performance measurements.
+
+Commands (fixture path abbreviated here as FIXTURE = ../llama.cpp-ridgefill-tools/out/gate1-qwen35):
+
+```sh
+git rebase dbc6afea6
+cmake --build build-sweep --target llama-server -j4
+python3 build-sweep/run-cancel-load.py before check-http-cancel-probe.py 20 FIXTURE
+python3 build-sweep/run-cancel-load.py after check-http-cancel.py 20 FIXTURE
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-sweep.py FIXTURE
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-shutdown-recheck.py FIXTURE
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-signals.py FIXTURE
+git diff --check
+```
+
+The before loop intentionally failed on run 11 and captured `build-sweep/shutdown-stall-backtrace.log`; the after loop passed all 20. Per-run client/server logs and JSON results are `build-sweep/cancel-{before,after}-*`. The other logs are `build-shutdown-fix.log`, `check-http-shutdown-fix.log`, `check-http-open-shutdown-fix.log`, `check-http-signals.log`, and `check-signal-dispatch{,-before}.log` in build-sweep. The local HTTP sweep harness now also fails on a shutdown timeout/nonzero exit, instead of allowing its cleanup kill to hide a failure. The signal regression harness is `build-sweep/check-signal-dispatch.cpp`; it includes the actual server.cpp and links the existing server/common/llama/ggml libraries, with CHECK_LEGACY_SIGNAL selecting the archived dbc6afea6 source for the negative control. These local harnesses remain available for L-B to adopt; this fix only changes server.cpp and this record. Linux/CPU validated; Windows was not run. No changes to model math or native Tier-3 gates, and no GPU/full-27B claims.
