@@ -199,3 +199,7 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
 - Full gate set on the merged tree: canonical G1 speed 27/27, quality 27/27; G0 72/0; rollback 11/11; quality a0
   27/27; dispatch 44/44; select_rows 23/23. The server log shows "graphs reused = 114" for a qattn prompt (the
   dispatch's reusable part graphs).
+
+## 19:40 rf27-integ: rf27-tools tip 6622ae3ad merged (NOTES-tools.md only on top of 23da65965)
+- Code tree identical to 962f8c3f0. Rerun: canonical G1 speed 27/27, quality 27/27; G0 72/0; L-C native Tier-3 G1
+  12/12 runs + 3/3 control rows; dispatch 44/44; select_rows 23/23.
