@@ -159,3 +159,25 @@ Measurements and rejected options, newest last. Times are local (CDT), 2026-10-2
   refused. A first run failed the P = 700 half: the tool refuses --tail 0, so nothing ran there (now P = 699).
 - Not checked: the digit set on the real Qwen3.8 vocabulary against kva's digit_ids (needs the HF tokenizer.json,
   sha 0997f410..., which is not on this box) — a follow-up for whoever holds the tokenizer (lane T has kva).
+
+## 2026-10-20 22:20-22:45 chat-template row rules (CHAT-PLAN H1-H3), libllama side
+- `llama_ridgefill_select_rows_ext(rf, tokens, n_prefix, &params, out)` with `llama_ridgefill_select_params`
+  {share, digits, special_exact, header_rows}; `llama_ridgefill_select_default_params(rf)` (share / digits from the
+  projector, special off, header 0); the old `llama_ridgefill_select_rows` is unchanged (it calls _ext with those
+  defaults). Defaults stay as today until lane T confirms.
+- The rule, exactly (for lane T's kva driver): special(id) <=> the vocab attribute of id is control, user-defined or
+  unknown <=> id is in the HF tokenizer's `added_tokens_decoder` (llama.cpp's converter writes added special tokens as
+  control, added non-special ones such as <think> as user-defined, <unk> as unknown; vocabulary padding is unused
+  and not special). special_exact: every prefix row i < P with special(tokens[i]). header_rows K: rows i+1 .. i+K,
+  capped below P, after every prefix row i with special(tokens[i]) — independent of special_exact. Union with the
+  class and digit rows; ascending. Built at load as a host table next to the digit set.
+- Question window (H3): `llama_ridgefill_last_marker(tokens, n, marker, n_marker)` = the start of the last
+  occurrence of a token sequence (the caller tokenizes e.g. "<|im_start|>user" with special parsing), -1 if none.
+  The window [start, end) and its cap are the sweep driver's (L-C's file).
+- G1 (`rf27-gates/g1_select_chat.py`, expectations from the HF tokenizer's added_tokens_decoder + lane T's
+  class_rows + kva digits, never from the GGUF): 42/42 — a crafted 700-token prompt (8 added tokens in the prefix:
+  adjacent pairs, <unk>, the last prefix row, one in the tail) over share {0, 0.5} x digits x special x header
+  {0..3} = 32 identical row sets; controls: special and header change the set on the crafted prompt, change nothing
+  on the fixture's own prompt (no added tokens); header rows stop at the prefix end; the masked fill with the 158
+  selected rows vs kva finish(exact_rows=R) 6.96e-07; last_marker vs a Python search on 5 markers (incl. none and the
+  last row). Regression: select_rows 23/23, G0 72/0.

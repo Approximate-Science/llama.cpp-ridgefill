@@ -1,7 +1,7 @@
 // Derived from L-B's tests/ridgefill/rf_dump.cpp (rf27-tools e0e1fa9) with --n-rs-seq (recurrent rollback snapshots)
 // and --cross (batches cross the fill end, as the server submits them; no prefix dump then), --fa 0|1,
 // --n-seq N (the same prompt on N sequences of a unified KV cache, in the same batches; seq s dumps to <output>.s<s>)
-// and --rows1 (exact rows of sequences >= 1; empty: speed),
+// --select-special/--select-header (chat rules), --last-marker IDS, and --rows1 (exact rows of sequences >= 1; empty: speed),
 // --sweep (the two-sweep prefill: LOWER over all rows into an h_S buffer, then a LATE replay over all rows; writes
 // <output>.h.f32), --win-layers L,.. --win-n W (LOWER also captures those layers' inputs at the last W positions;
 // <output>.win<L>.f32), --layer-inp L,.. (no sweep, one batch: upstream's layer-input extraction of every row, <output>.inp<L>.f32).
@@ -70,6 +70,8 @@ static int run(int argc, char ** argv) {
     bool lower_twice = false, full_midsweep = false;
     float select_share = -1.0f;
     int select_digits = 0;
+    int select_special = 0, select_header = 0;
+    std::string marker_arg;
     std::string win_arg, inp_arg;
     int win_n = 0;
     std::string rows1_arg;
@@ -106,6 +108,9 @@ static int run(int argc, char ** argv) {
         else if (arg == "--full-midsweep") { full_midsweep = true; } // FULL right after LOWER (refused)
         else if (arg == "--select-share")  { select_share = std::stof(next()); } // write llama_ridgefill_select_rows of [0, n - tail) and exit
         else if (arg == "--select-digits") { select_digits = std::stoi(next()); }
+        else if (arg == "--select-special") { select_special = std::stoi(next()); }
+        else if (arg == "--select-header")  { select_header = std::stoi(next()); }
+        else if (arg == "--last-marker")    { marker_arg = next(); } // ids: print llama_ridgefill_last_marker over the prompt and exit
         else if (arg == "--warm")      { warm = true; } // decode a reversed prompt first, then seq_rm (stale states in the cells)
         else if (arg == "--late-only") { sweep = true; late_only = true; } // a LATE replay without LOWER first (refused)
         else if (arg == "--win-layers") { win_arg = next(); }
@@ -146,11 +151,19 @@ static int run(int argc, char ** argv) {
         if (!rf) { throw std::runtime_error("projector load failed"); }
     }
 #ifdef RF27_API
+    if (!marker_arg.empty()) {
+        std::vector<llama_token> m;
+        for (int v : int_list(marker_arg)) { m.push_back(v); }
+        printf("%d\n", llama_ridgefill_last_marker(tokens.data(), (int32_t) tokens.size(), m.data(), (int32_t) m.size()));
+        return 0;
+    }
     if (select_share >= 0.0f) {
         if (!rf) { throw std::invalid_argument("--select-share needs --projector"); }
         const int np = n - std::min(tail, n);
         std::vector<llama_pos> rows(std::max(np, 1));
-        const int32_t k = llama_ridgefill_select_rows(rf.get(), tokens.data(), np, select_share, select_digits != 0, rows.data());
+        llama_ridgefill_select_params sp = llama_ridgefill_select_default_params(rf.get());
+        sp.share = select_share; sp.digits = select_digits != 0; sp.special_exact = select_special != 0; sp.header_rows = select_header;
+        const int32_t k = llama_ridgefill_select_rows_ext(rf.get(), tokens.data(), np, &sp, rows.data());
         if (k < 0) { return 3; }
         write_bytes(output + ".rows.i32", rows.data(), (size_t) k * sizeof(llama_pos));
         fprintf(stderr, "selected %d of %d prefix rows\n", k, np);
