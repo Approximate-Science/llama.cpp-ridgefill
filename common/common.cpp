@@ -1244,6 +1244,28 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
 
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    if (!params.ridgefill_path.empty()) {
+        if (params.split_mode == LLAMA_SPLIT_MODE_ROW) {
+            COM_ERR("%s", "RidgeFill does not support --split-mode row; use --split-mode layer\n");
+            return;
+        }
+        if (!params.lora_adapters.empty()) {
+            COM_ERR("%s", "RidgeFill does not support LoRA (--lora)\n");
+            return;
+        }
+        if (!params.control_vectors.empty()) {
+            COM_ERR("%s", "RidgeFill does not support control vectors (--control-vector)\n");
+            return;
+        }
+        if (params.embedding) {
+            COM_ERR("%s", "RidgeFill does not support embeddings (--embeddings)\n");
+            return;
+        }
+        if (params.n_cache_reuse != 0) {
+            COM_ERR("%s", "RidgeFill does not support --cache-reuse; set --cache-reuse 0\n");
+            return;
+        }
+    }
     auto mparams = common_model_params_to_llama(params);
     auto cparams = common_context_params_to_llama(params);
 
@@ -1383,14 +1405,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
     pimpl->context.reset(lctx);
 
     if (!params.ridgefill_path.empty()) {
-        if (params.split_mode == LLAMA_SPLIT_MODE_ROW) {
-            COM_ERR("%s", "RidgeFill does not support --split-mode row; use --split-mode layer\n");
-            pimpl->context.reset();
-            return;
-        }
-        // the projector maps the hidden states of the base model as it is
-        if (!params.lora_adapters.empty() || !params.control_vectors.empty() || cparams.embeddings) {
-            COM_ERR("%s", "RidgeFill cannot be used with LoRA adapters, control vectors or embeddings\n");
+        if (cparams.embeddings) {
+            COM_ERR("%s", "RidgeFill does not support embeddings enabled by the model\n");
             pimpl->context.reset();
             return;
         }

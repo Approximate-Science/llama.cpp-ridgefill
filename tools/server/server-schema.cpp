@@ -527,6 +527,9 @@ task_params eval_llama_cmpl_schema(
                 params.sampling.reasoning_budget_forced.size());
     }
 
+    if (!params_base.ridgefill_path.empty() && params.n_cache_reuse != 0) {
+        throw std::invalid_argument("RidgeFill does not support n_cache_reuse (--cache-reuse); set it to 0");
+    }
     return params;
 }
 

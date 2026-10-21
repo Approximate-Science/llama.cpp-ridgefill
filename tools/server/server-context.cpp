@@ -1382,11 +1382,6 @@ private:
             }
         }
 
-        if (!params_base.ridgefill_path.empty() && params_base.n_cache_reuse) {
-            params_base.n_cache_reuse = 0;
-            SRV_WRN("%s\n", "cache_reuse is not supported with RidgeFill, it will be disabled");
-        }
-
         if (llama_model_n_swa(model_tgt) == 0) {
             if (params_base.swa_full) {
                 params_base.swa_full = false;
