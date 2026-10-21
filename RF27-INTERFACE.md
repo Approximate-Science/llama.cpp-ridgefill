@@ -270,3 +270,53 @@ int32_t llama_ridgefill_seq_set_part(struct llama_context *, llama_seq_id, const
 - A LATE batch holds LATE rows of one sequence only; a batch holds LOWER rows of at most one sequence. A failed sweep
   ubatch clears the sequence and resets it to FULL. Refused: n_rs_seq > 0, LoRA, control vectors, embeddings.
 - The window capture replaces the context-wide layer-input extraction for the question rows (item 2).
+
+## Addition 2026-10-20 22:50 (L-A): chat-template row rules in the selector (CHAT-PLAN H1-H3), engine c6c485629
+
+Libllama + C API only (`src/llama-ext.h`); the common / server / tools plumbing is L-B's, the window in the sweep
+driver L-C's. Defaults reproduce today's selection exactly.
+
+```c
+struct llama_ridgefill_select_params {
+    float   share;         // class rows: round-half-even(share x matches) rarest, [0, 1]
+    bool    digits;        // digit rows
+    bool    special_exact; // added-token rows                         (CHAT-PLAN H1)
+    int32_t header_rows;   // rows after each added token, >= 0        (CHAT-PLAN H2)
+};
+
+// share = the projector's share_default, digits = its digits_default, special_exact = false, header_rows = 0
+struct llama_ridgefill_select_params llama_ridgefill_select_default_params(const struct llama_ridgefill * rf);
+
+// sorted, unique prefix positions into out (room for n_prefix); returns the count, < 0 refused (format-1 projector,
+// null params, n_prefix < 0, share outside [0, 1], header_rows < 0, a token outside the vocabulary)
+int32_t llama_ridgefill_select_rows_ext(const struct llama_ridgefill * rf, const llama_token * tokens,
+        int32_t n_prefix, const struct llama_ridgefill_select_params * params, llama_pos * out);
+
+// unchanged: = _ext with llama_ridgefill_select_default_params(rf) and the given share / digits
+int32_t llama_ridgefill_select_rows(const struct llama_ridgefill * rf, const llama_token * tokens,
+        int32_t n_prefix, float share, bool digits, llama_pos * out);
+
+bool llama_ridgefill_token_is_special(const struct llama_ridgefill * rf, llama_token id);
+
+// start of the last occurrence of the token sequence marker[0, n_marker) in tokens[0, n); -1 if none or bad args
+int32_t llama_ridgefill_last_marker(const llama_token * tokens, int32_t n, const llama_token * marker, int32_t n_marker);
+```
+
+Rules (identical in lane T's kva driver):
+- special(id) <=> the vocab attribute of id is control, user-defined or unknown <=> id is in the HF tokenizer's
+  `added_tokens_decoder` (llama.cpp's converter: added special tokens -> control, added non-special such as <think> ->
+  user-defined, <unk> -> unknown; vocabulary padding -> unused, not special).
+- special_exact: every prefix row i < P with special(tokens[i]).
+- header_rows K: rows i+1 .. min(i+K, P-1) after every prefix row i with special(tokens[i]); independent of
+  special_exact. Both are united with the class and digit rows.
+- Question window, last user turn (H3): start = llama_ridgefill_last_marker(tokens, N, marker) with marker = the tokens
+  of "<|im_start|>user" (llama_tokenize with parse_special = true, no BOS); window = [max(start, end - cap), end),
+  end = the prompt end (non-blind). No marker: the driver's documented fallback (last-W rows) or a named refusal —
+  L-C's choice, mirrored in lane T's oracle.
+
+For L-B (proposal; names are L-B's to settle): `--ridgefill-special-exact on|off` (default off),
+`--ridgefill-header-rows K` (default 0), request fields `ridgefill_special_exact` / `ridgefill_header_rows`;
+`common_ridgefill_rows` fills llama_ridgefill_select_params and calls _ext; llama-perplexity / llama-bench call _ext
+with them or refuse them by name (never ignore them); refused with mode speed (no exact rows). For L-C: a question
+window mode `last` (today) / `turn` (above) with a cap, window buffers sized per prompt.
+Gate: rf27-gates/g1_select_chat.py, 42/42.
