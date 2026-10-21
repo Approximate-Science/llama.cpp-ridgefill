@@ -15,7 +15,9 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE / "lb/tests/ridgefill"))
 import compare_qwen35 as cq
 
-KVA = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/var/home/dylan/projects/research/kva-wt-q27")
+if len(sys.argv) < 2:
+    sys.exit(f"usage: {sys.argv[0]} KVA_REPO   (machine-local paths are arguments, never defaults)")
+KVA = Path(sys.argv[1])
 W = HERE / "lb/out/gate1-qwen35"
 OUT = HERE / "out/g1s"; OUT.mkdir(parents=True, exist_ok=True)
 DUMP = HERE / "rf_dump_rs"
@@ -124,7 +126,10 @@ pr, rc = run("refuse-lower-nonempty", 128, 128, "speed", extra=["--sweep", "--lo
 record("refuse-lower-on-nonempty-sequence", rc == 3 and "LOWER starts on an empty sequence" in Path(str(pr) + ".log").read_text(), rc=rc)
 pr, rc = run("refuse-full-midsweep", 128, 128, "speed", extra=["--sweep", "--full-midsweep"])
 record("refuse-full-reset-mid-sweep", rc == 3 and "before FULL" in Path(str(pr) + ".log").read_text(), rc=rc)
-F = Path("/var/mnt/qwen-storage/dylan/AI-Work/llamacpp-ridgefill-20261008/gate1/work")
+import os
+if not os.environ.get("RF_DENSE_FIXTURE"):
+    sys.exit("set RF_DENSE_FIXTURE to the dense gate1/work fixture directory (format-1 projector refusal row)")
+F = Path(os.environ["RF_DENSE_FIXTURE"])
 rc = subprocess.run([str(DUMP), "--model", str(F / "tiny-qwen3-f32.gguf"), "--tokens", str(F / "tokens.bin"), "--output",
                      str(OUT / "refuse-dense"), "--mode", "speed", "--tail", "200", "--keep", "200", "--projector",
                      str(F / "qproj-s2-f32.gguf"), "--sweep"], capture_output=True, text=True)

@@ -1,0 +1,17 @@
+/home/
+/var/home
+/var/mnt
+/Users/
+[A-Za-z]:\\\\
+\bdylan\b
+\bDyluhn\b
+workstation
+\b[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-9]\b
+(CUDA|HIP|ROCR|GGML_VK)_VISIBLE_DEVICES
+\b(R9700|RX ?9070|gfx1201|gfx120x|RTX ?4090|RTX ?5090)\b
+\b(Vulkan|CUDA|HIP|ROCm)[0-9]\b
+\bGPU-[0-9a-f]{8}
+\b(tensor_parallel_size|tp_size|n_gpus|world_size)\b
+qwen-storage
+radiance-build
+\.local\b

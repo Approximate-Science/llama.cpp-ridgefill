@@ -13,7 +13,9 @@ sys.path.insert(0, str(HERE / "lb/tests/ridgefill"))
 import compare_qwen35 as cq
 import numpy as np
 
-KVA = Path(sys.argv[1]) if len(sys.argv) > 1 else Path("/var/home/dylan/projects/research/kva-wt-q27")
+if len(sys.argv) < 2:
+    sys.exit(f"usage: {sys.argv[0]} KVA_REPO   (machine-local paths are arguments, never defaults)")
+KVA = Path(sys.argv[1])
 W = HERE / "lb/out/gate1-qwen35"
 OUT = HERE / "out/g1q"; OUT.mkdir(parents=True, exist_ok=True)
 DUMP = HERE / "rf_dump_q35"
