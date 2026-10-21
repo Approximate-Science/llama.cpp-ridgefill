@@ -350,3 +350,38 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   L-C check_chat_score.py against a baseline scorer built from a clean archive of d619c13d6: all PASS (defaults
   byte-identical old == new == explicit, raw and templated, four modes, F32/F16; 8 chat configurations incl. caps 32
   / 256 / 1024 across 3 chunk sizes; controls; paired wrapper; named refusals).
+
+## 2026-10-21 rf27-s1: the S1 window selector and vtail in libllama (C API v2)
+- Interface first: RF27-INTERFACE.md "Addition 2026-10-21" (2e06536c2). Implementation: parts S1_FILL (a replay of
+  [0, P) writing only the late attention layers' K/V from the projector; late GDN layers skipped; graph flag
+  s1_attn_only) and S1_PROBE (the window [s1_begin, s1_end) through the late layers from h_S; the late attention
+  layers written out non-FA (kq, KQ mask + an s1_bias that hides the unrun tail cells [P, s1_begin), soft_max_ext,
+  kqv, gate, wo) so the softmax is available; the late GDN layers start from zero at s1_begin via init_replay's new
+  zero_pos; no output head). The mass per KV cell (sum over heads, queries, late attention layers) is an F32 graph
+  output, mapped cell -> position on the host (llama_kv_cache_context::get_cell_pos) and summed across ubatches in
+  double. vtail: on the LATE ubatch that starts at P, per late attention layer, s_h = mean over its first c rows of
+  ||V(attn_norm x)|| / ||V(attn_norm(W h_S + b))||, then cache V *= (bulk ? s_h : 1) via an in-graph cpy before the
+  layer's own attention (bulk = positions < P not in the exact rows; F32 [n_kv] masks from the cell positions; both
+  V layouts). Scales are read back for reporting.
+- Refusals (named): S1_PROBE window starting in the prefix ("blind selection or a window longer than the tail is not
+  supported"), S1_PROBE without a complete S1_FILL, LATE after S1_FILL without a complete probe, FULL mid-S1, S1 rows
+  as outputs, vtail with the first tail ubatch < c_eff rows or n_ubatch < c_eff, vtail on a single-pass (FULL part)
+  tail. llama_ridgefill_seq_set clears the S1 mass and resets vtail to off (per prompt, like the rows).
+- Found while testing: llm_graph_input_mem_hybrid::set_input aborted on the unallocated rs s_copy of a graph that runs
+  no recurrent layer (S1_FILL); guarded like the kq_mask / k_idxs guards.
+- G1 (`rf27-gates/g1_s1_vtail.py REF_DIR`, lane T's dumps engine-ref/s1-vtail at lane T 4eb0a8d, SHA256SUMS checked):
+  49/49. Both prompts x T3s, T3s-vtail-k0/k72, S1gw, S1gw-vtail-k0/k72: 25 arrays each (logits, final every layer,
+  prefix late layers before vtail) worst 6.18e-07; S1 mass 1.21e-07; S1 rows identical (217 fixture, 222 selchat =
+  220 + 2 special; k-th / k+1-th reference mass gap 1.6e-04 / 7.3e-05: no ties); vtail scales <= 1.2e-7 relative
+  (k0 <-> c = 200, k72 <-> c = 128). Chunking: S1 with n_ubatch 32 (probe in 2 ubatches) and vtail with
+  c = n_ubatch = 128 (tail in 2 ubatches) also match. Controls: vtail moves late V by 7% and logits by 3%; c changes
+  the scales; S1 rows differ from T3s (88 / 95 shared). Refusals 5/5 by name. T3s rows and n_base come from the
+  reference (the qattn part of T3s is the driver's, L-C), so this G1 covers libllama's mass, top-k input and fill.
+- Regression on rf27-s1 (options off): canonical G1 speed 27/27, quality 27/27; G0 72/0; G0 server 8/8; L-C native
+  Tier-3 G1 12/12 + 3/3; check_score 24/24; g1_select_chat 42/42; select_rows 23/23; dispatch 44/44; quality a0 27/27;
+  rollback 11/11.
+- Cost (for L-B's reporting): S1_FILL computes the projector + K/V of the late attention layers for P rows, and LATE
+  computes them again (reuse is a follow-up); S1_PROBE runs W rows through every late layer with a non-FA attention
+  over n_kv cells. vtail: per late attention layer, c rows x (projector + attn_norm + V projection) twice, plus one
+  read-modify-write of that layer's V cache over n_kv cells.
+- Graph reuse: the S1_PROBE and vtail graphs are never reused (their masks are sized by n_kv); other graphs unchanged.
