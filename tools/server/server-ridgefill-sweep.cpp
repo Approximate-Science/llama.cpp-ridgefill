@@ -2,6 +2,7 @@
 
 #include "../../src/llama-ridgefill-sweep.h"
 #include "../../src/llama-context.h"
+#include "../../src/llama-memory-hybrid.h"
 #include "../../src/llama-model.h"
 
 #include <algorithm>
@@ -44,8 +45,8 @@ void server_ridgefill_sweep::prepare_cost(const llama_model & model, const serve
             }
             heads += hp.n_head_kv(il);
             cost.s1_fill_macs += params.s1 ? p * (h * h + 2 * h * hkv * d) : 0;
-            cost.s1_probe_macs += w * (3 * h * hq * d + 2 * h * hkv * d + mlp) + hq * d * w * (2 * p + w + 1);
-            cost.vtail_macs += cost.vtail_rows * (h * h + h * hkv * d);
+            cost.s1_probe_macs += w * (3 * h * hq * d + 2 * h * hkv * d + mlp);
+            cost.vtail_macs += cost.vtail_rows * (h * h + 2 * h * hkv * d);
         }
     }
     if ((params.s1 || params.vtail) && heads == 0) {
@@ -168,6 +169,18 @@ void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_row
 }
 
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+static llama_kv_cache & sweep_cache(llama_context * ctx) {
+    auto * memory = dynamic_cast<llama_memory_hybrid *>(ctx->get_memory());
+    if (!memory) { throw std::runtime_error("RidgeFill S1/vtail: cost reporting requires a hybrid cache"); }
+    return *memory->get_mem_attn();
+}
+
+static uint32_t sweep_cache_rows(const llama_kv_cache & cache, llama_seq_id seq) {
+    llama_kv_cache::slot_info slot = {};
+    slot.strm.push_back(cache.get_stream(seq));
+    return cache.get_n_kv(slot);
+}
+
 void server_ridgefill_sweep::sweep_s1_fill(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
     if (position == 0) {
@@ -193,7 +206,14 @@ void server_ridgefill_sweep::sweep_s1_probe(llama_context * ctx, llama_seq_id se
             throw std::runtime_error("RidgeFill S1: S1_PROBE was refused");
         }
     }
-    decode(ctx, seq, tokens, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), win_end - position}), false, false);
+    const int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), win_end - position});
+    const uint64_t pairs = uint64_t(count) * sweep_cache_rows(sweep_cache(ctx), seq);
+    decode(ctx, seq, tokens, count, false, false);
+    cost.s1_probe_kv_pairs += pairs;
+    const auto & hp = ctx->get_model().hparams;
+    for (uint32_t il = params.split; il < hp.n_layer(); ++il) {
+        if (!hp.is_recr(il)) { cost.s1_probe_macs += 2.0 * hp.n_head(il) * hp.n_embd_head_k(il) * pairs; }
+    }
 }
 
 void server_ridgefill_sweep::select_s1_rows(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
@@ -252,6 +272,20 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
         int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), end - position});
         const bool calibrate = params.vtail && position == params.n_prefix;
         if (calibrate) { count = std::max(count, cost.vtail_rows); }
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+        if (calibrate) {
+            const auto & cache = sweep_cache(ctx);
+            cost.vtail_cache_rows = sweep_cache_rows(cache, seq);
+            const auto & hp = ctx->get_model().hparams;
+            for (uint32_t il = params.split; il < hp.n_layer(); ++il) {
+                if (hp.is_recr(il)) { continue; }
+                const uint64_t elements = uint64_t(cost.vtail_cache_rows) * hp.n_head_kv(il) * hp.n_embd_head_v(il);
+                cost.vtail_cache_elements += elements;
+                cost.vtail_cache_read_bytes += ggml_row_size(cache.type_v(), elements);
+            }
+            cost.vtail_cache_write_bytes = cost.vtail_cache_read_bytes;
+        }
+#endif
         decode(ctx, seq, tokens, count, params.all_tail_logits,
                 params.logits_begin < 0 && !params.defer_last_token && position + count == end, params.logits_begin, params.logits_end);
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2

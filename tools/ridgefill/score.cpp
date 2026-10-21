@@ -300,13 +300,16 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
                 {"window", s1 ? json::array({window_end - o.s1_window, window_end}) : json(nullptr)},
                 {"fill_rows", cost.s1_fill_rows}, {"probe_rows", cost.s1_probe_rows},
                 {"fill_macs", cost.s1_fill_macs}, {"probe_macs", cost.s1_probe_macs},
+                {"probe_kv_pairs", cost.s1_probe_kv_pairs},
                 {"macs", cost.s1_fill_macs + cost.s1_probe_macs}, {"prefix_kv_reused", false}};
-        result["vtail"] = {{"enabled", vtail}, {"rows", cost.vtail_rows}, {"macs", cost.vtail_macs}, {"scales", sweep.get_vtail_scales()}};
+        result["vtail"] = {{"enabled", vtail}, {"rows", cost.vtail_rows}, {"macs", cost.vtail_macs}, {"scales", sweep.get_vtail_scales()},
+                {"cache_rows", cost.vtail_cache_rows}, {"cache_elements_scaled", cost.vtail_cache_elements},
+                {"cache_read_bytes", cost.vtail_cache_read_bytes}, {"cache_write_bytes", cost.vtail_cache_write_bytes}};
         if (s1) {
             auto & sources = result["ridgefill"]["n_exact_prefix_by_source"];
             sources["s1"] = sources["qattn"]; sources["qattn"] = 0;
         }
-        result["ridgefill"]["mac_model"] = "kva analytic cold prefill + S1 window and recomputed prefix projector/KV + vtail projection";
+        result["ridgefill"]["mac_model"] = "kva analytic cold prefill + S1 linear/GDN and dense all-cell attention + recomputed prefix projector/KV + vtail projector and two V projections; V cache traffic reported separately";
         if (o.diagnostics && s1) { result["s1_mass"] = sweep.get_s1_mass(); }
     }
     if (o.diagnostics && qattn) { result["question_mass"] = sweep.get_mass(); }

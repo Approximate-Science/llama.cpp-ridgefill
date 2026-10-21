@@ -117,14 +117,18 @@ The driver runs LOWER, computes the Tier-3 base count, runs S1_FILL over [0,P), 
 
 For S1/vtail the standalone scorer defaults END to N-K unless explicitly overridden. Serving keeps the driver's prompt-end default. S1 requires its full W-row window to lie in the exact tail. Vtail calibration uses the first min(C,N-P) tail rows, and the scorer refuses calibration that reaches scored NLL targets. It raises the context batch/ubatch capacity as needed and makes the first LATE tail decode large enough. A server caller must provide sufficient context capacity; calibration that would consume its deferred final token is refused. No calibration range is silently shortened.
 
-Outputs include the base count, S1 window and mass (with diagnostics), vtail scales, and separate analytic costs for S1_FILL, S1_PROBE and vtail. S1_FILL charges P rows of late-attention projector plus K/V work even though LATE recomputes them; `prefix_kv_reused` is false. S1_PROBE charges W rows through every late layer against the visible prefix/window. These costs are added to the existing cold-prefill MAC estimate. Final row-source reporting uses `s1`, with class/digit/header/qattn counts zero and special rows counted separately. The paired wrapper and HTTP request/reporting integration remain with L-B; their legacy report validator needs the new S1 source key.
+Outputs include the base count, S1 window and mass (with diagnostics), vtail scales, and separate analytic costs for S1_FILL, S1_PROBE and vtail. S1_FILL charges P rows of late-attention projector plus K/V work even though LATE recomputes them; `prefix_kv_reused` is false. S1_PROBE charges W rows through every late layer, including dense QK/PV products over the actual padded KV-cell count at each probe ubatch; masked cells still cost work. `probe_kv_pairs` records the sum of query rows times cache cells. Vtail charges one projector and two additional V projections on the calibration rows. Its cache read/write bytes and elementwise scale count are reported separately from MACs, using the actual V-cache type and cell count. The extra MACs are added to the existing cold-prefill estimate. Final row-source reporting uses `s1`, with class/digit/header/qattn counts zero and special rows counted separately. The paired wrapper and HTTP request/reporting integration remain with L-B; their legacy report validator needs the new S1 source key.
 
-The gate verifies lane T's frozen reference hashes, default equality against a saved pre-S1 binary, mass, row sets, logits, vtail scales, and total MACs including recomputed prefix K/V:
+The gate verifies lane T's frozen reference hashes, default equality against a saved pre-S1 binary, the driver's own base counts and final rows, mass, logits, vtail scales, and total MACs including recomputed prefix K/V. It also compares L-A's native harness, tests reused contexts, and checks the N-K endpoint against the reference with changed future targets. Run it with the reference's Python environment (NumPy, CPU PyTorch, safetensors and transformers). Build the native harness with `-DRF27_API`:
 
 ```sh
+c++ -std=c++17 -O2 -DRF27_API -Iinclude -Isrc -Iggml/include \
+  rf27-gates/rf_dump_rs.cpp -Lbuild/bin -Wl,-rpath,'$ORIGIN/bin' \
+  -lllama -lggml -lggml-base -lggml-cpu -o build/rf-dump-s1
 python3 tools/ridgefill/check_s1_score.py \
   --binary build/bin/llama-ridgefill-score \
   --baseline-binary build/bin/llama-ridgefill-score-before-s1 \
+  --native-dump build/rf-dump-s1 \
   --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 \
   --reference /var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail \
   --kva /var/home/dylan/projects/research/kva-wt-q27 \

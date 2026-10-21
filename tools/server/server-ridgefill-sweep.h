@@ -46,6 +46,11 @@ struct server_ridgefill_sweep_cost {
     double s1_fill_macs = 0;
     double s1_probe_macs = 0;
     double vtail_macs = 0;
+    uint64_t s1_probe_kv_pairs = 0;
+    uint32_t vtail_cache_rows = 0;
+    uint64_t vtail_cache_elements = 0;
+    uint64_t vtail_cache_read_bytes = 0;
+    uint64_t vtail_cache_write_bytes = 0;
 };
 
 int32_t server_ridgefill_sweep_api_version();
