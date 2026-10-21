@@ -37,7 +37,7 @@ struct options {
     int32_t threads = 4, batch = 512, ubatch = 512, ctx = 0, gpu_layers = 0;
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
     int32_t s1_window = 0, vtail_rows = 512;
-    float s1_factor = 1.0f;
+    double s1_factor = 1.0;
     bool vtail = false;
     bool digits = true, special_exact = false, diagnostics = false;
 };
@@ -126,6 +126,7 @@ static options parse(int argc, char ** argv) {
     require(o.mode == "off" || o.tail > o.scored, "tail must exceed scored so the first prediction row is exact");
     require(o.flash == "off" || o.flash == "on" || o.flash == "auto", "invalid flash-attn mode");
     common_params selection;
+    selection.ridgefill_qattn_share = o.qattn_share;
     selection.ridgefill_s1_window = o.s1_window;
     selection.ridgefill_s1_factor = o.s1_factor;
     selection.ridgefill_vtail = o.vtail;
@@ -197,6 +198,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     common_params selection;
     selection.ridgefill_mode = o.mode; selection.ridgefill_share = o.share;
     selection.ridgefill_digits = o.digits; selection.ridgefill_alpha = o.alpha;
+    selection.ridgefill_qattn_share = o.qattn_share;
     selection.ridgefill_s1_window = o.s1_window;
     selection.ridgefill_s1_factor = o.s1_factor;
     selection.ridgefill_vtail = o.vtail;

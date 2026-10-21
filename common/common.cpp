@@ -1769,8 +1769,8 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         params.ridgefill_header_rows = result;
     } else if (option == "--ridgefill-s1-factor") {
         size_t end = 0;
-        float factor;
-        try { factor = std::stof(value, &end); }
+        double factor;
+        try { factor = std::stod(value, &end); }
         catch (const std::exception &) { throw std::invalid_argument(option + " must be finite and nonnegative"); }
         if (end != value.size() || !std::isfinite(factor) || factor < 0) {
             throw std::invalid_argument(option + " must be finite and nonnegative");
@@ -1858,6 +1858,12 @@ void common_ridgefill_validate_options(const common_params & params, const std::
         }
         if (params.attention_type == LLAMA_ATTENTION_TYPE_NON_CAUSAL) {
             throw std::invalid_argument("RidgeFill: S1/vtail does not support non-causal contexts");
+        }
+        if (params.ridgefill_s1_window > 0 && params.ridgefill_header_rows > 0) {
+            throw std::invalid_argument("RidgeFill: S1 base selection does not support --ridgefill-header-rows");
+        }
+        if (params.ridgefill_s1_window > 0 && params.ridgefill_qattn_share == 0) {
+            throw std::invalid_argument("RidgeFill: S1 base selection requires positive --ridgefill-qattn-share");
         }
         if (params.ridgefill_s1_window > 0 && params.ridgefill_qattn_blind) {
             throw std::invalid_argument("RidgeFill: S1 does not support --ridgefill-qattn-blind (window overlaps the prefix)");
@@ -1958,9 +1964,12 @@ common_json common_ridgefill_report::to_json() const {
     if (s1_begin >= 0) {
         result["n_exact_prefix_by_source"]["s1"] = exact_by_source[5];
         result["s1"] = common_json {{"window", std::vector<int32_t>{s1_begin, s1_end}}, {"macs_fill", macs_s1_fill},
-            {"macs_probe", macs_s1_probe}, {"fill_recomputed", true}};
+            {"macs_probe", macs_s1_probe}, {"probe_kv_pairs", s1_probe_kv_pairs}, {"fill_recomputed", true}};
     }
     if (vtail_rows > 0) { result["vtail"] = common_json {{"rows", vtail_rows}, {"macs_measure", macs_vtail}}; }
+    if (s1_begin >= 0 || vtail_rows > 0) {
+        result["mac_model"] = "kva cold prefill + S1 dense probe pairs and recomputed prefix projector/KV + vtail projector and two V projections";
+    }
     return result;
 }
 
@@ -2008,12 +2017,16 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
                     int64_t(sweep->s1_end) - sweep->s1_begin == params.ridgefill_s1_window, "invalid completed S1 window");
             report.s1_begin = sweep->s1_begin;
             report.s1_end = sweep->s1_end;
-        } else { require(sweep->s1_begin == -1 && sweep->s1_end == -1, "unexpected S1 work"); }
+            const uint64_t width = params.ridgefill_s1_window;
+            require(sweep->s1_probe_kv_pairs >= width * uint64_t(n_prefix) + width * (width + 1) / 2,
+                    "S1 probe needs the dense query/key pair count from the completed driver");
+            report.s1_probe_kv_pairs = sweep->s1_probe_kv_pairs;
+        } else { require(sweep->s1_begin == -1 && sweep->s1_end == -1 && sweep->s1_probe_kv_pairs == 0, "unexpected S1 work"); }
         if (vtail) {
             require(sweep->vtail_rows == std::min(params.ridgefill_vtail_rows, n_prompt - n_prefix), "invalid completed vtail row count");
             report.vtail_rows = sweep->vtail_rows;
         } else { require(sweep->vtail_rows == 0, "unexpected vtail work"); }
-    } else { require(!sweep || (sweep->s1_begin == -1 && sweep->s1_end == -1 && sweep->vtail_rows == 0), "unexpected sweep work"); }
+    } else { require(!sweep || (sweep->s1_begin == -1 && sweep->s1_end == -1 && sweep->s1_probe_kv_pairs == 0 && sweep->vtail_rows == 0), "unexpected sweep work"); }
     double exact_keys = 0;
     for (auto row : rows) { exact_keys += double(row) + 1; }
     if (s1) {
@@ -2117,11 +2130,11 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
                 report.macs_s1_probe += window * (linear + mlp);
                 if (!hp.is_recr(il)) {
                     report.macs_s1_fill += p * (hidden * hidden + fill);
-                    report.macs_s1_probe += double(hp.n_head(il)) * hp.n_embd_head_k(il) * window * (2 * p + window + 1);
+                    report.macs_s1_probe += 2.0 * hp.n_head(il) * hp.n_embd_head_k(il) * report.s1_probe_kv_pairs;
                 }
             }
             if (vtail && !hp.is_recr(il)) {
-                report.macs_vtail += report.vtail_rows * (hidden * hidden + fill / 2);
+                report.macs_vtail += report.vtail_rows * (hidden * hidden + fill);
             }
         }
         const double exact = n * (linear + mlp) + context;

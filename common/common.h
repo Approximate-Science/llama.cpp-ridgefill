@@ -553,7 +553,7 @@ struct common_params {
     std::string ridgefill_qattn_window_mode = "last";
     int32_t ridgefill_qattn_turn_cap = 256;
     int32_t ridgefill_s1_window = 0;
-    float ridgefill_s1_factor = 1.0f;
+    double ridgefill_s1_factor = 1.0;
     bool ridgefill_vtail = false;
     int32_t ridgefill_vtail_rows = 512;
 
@@ -1067,15 +1067,17 @@ struct common_ridgefill_report {
     double macs_vtail = 0;
     int32_t s1_begin = -1;
     int32_t s1_end = -1;
+    uint64_t s1_probe_kv_pairs = 0;
     int32_t vtail_rows = 0;
 
     common_json to_json() const;
 };
 
-// Completed sweep work, supplied by the driver; bounds exclude masked tail rows in the S1 probe.
+// Completed sweep work, including the dense query/key pairs actually evaluated by the probe.
 struct common_ridgefill_sweep_report {
     int32_t s1_begin = -1;
     int32_t s1_end = -1;
+    uint64_t s1_probe_kv_pairs = 0;
     int32_t vtail_rows = 0;
 };
 

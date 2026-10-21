@@ -56,6 +56,12 @@ def run(args):
         call([args.bin_dir / "llama-cli", "-m", "missing-model", "--ridgefill", "missing-projector",
               "--ridgefill-mode", "quality+qattn", flag, value], "llama-cli-unsupported-" + flag, "unavailable in llama-cli")
 
+    for tool in ("llama-server", "llama-perplexity", "llama-bench", "llama-cli"):
+        for flag, value, message in (("--ridgefill-header-rows", 1, "header-rows"),
+                                     ("--ridgefill-qattn-share", 0, "positive --ridgefill-qattn-share")):
+            call([args.bin_dir / tool, "-m", "missing-model", "--ridgefill", "missing-projector",
+                  "--ridgefill-mode", "quality+qattn", "--ridgefill-s1-window", 64, flag, value], tool + "-s1-base-" + flag, message)
+
     unsupported = (("LoRA", ["--lora", "missing-adapter"]),
                    ("control vectors", ["--control-vector", "missing-control"]),
                    ("embeddings", ["--embeddings"]),
@@ -99,7 +105,7 @@ def run(args):
                 check(implicit[field] == explicit[field], "HTTP-byte-default-" + field)
             check(implicit["timings"]["ridgefill"] == explicit["timings"]["ridgefill"], "HTTP-byte-default-report")
             for name, value in (("ridgefill_s1_window", -1), ("ridgefill_s1_window", 1.5), ("ridgefill_s1_window", 2147483648),
-                                ("ridgefill_s1_factor", -1), ("ridgefill_s1_factor", "1"), ("ridgefill_s1_factor", 1e300),
+                                ("ridgefill_s1_factor", -1), ("ridgefill_s1_factor", "1"), ("ridgefill_s1_factor", True),
                                 ("ridgefill_vtail", "on"), ("ridgefill_vtail_rows", 0), ("ridgefill_vtail_rows", 1.5)):
                 try:
                     client.request("/completion", dict(body, **{name: value}))
@@ -107,6 +113,12 @@ def run(args):
                     check(name in str(error), "HTTP-bad-" + name + "-" + str(value))
                 else:
                     raise AssertionError("HTTP accepted invalid " + name)
+            try:
+                client.request("/completion", dict(body, ridgefill_s1_window=64, ridgefill_header_rows=1))
+            except EvalError as error:
+                check("header-rows" in str(error), "HTTP-refuse-S1-header-rule")
+            else:
+                raise AssertionError("HTTP accepted the unsupported S1 header-row rule")
             for name, value in (("ridgefill_s1_window", 64), ("ridgefill_vtail", True)):
                 try:
                     client.request("/completion", dict(body, ridgefill_mode="quality", **{name: value}))

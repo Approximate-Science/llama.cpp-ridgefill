@@ -31,6 +31,7 @@ int main(int argc, char ** argv) {
         };
         common_params p;
         p.ridgefill_mode = "quality+qattn";
+        p.ridgefill_qattn_share = 0.2f;
         p.ridgefill_s1_window = 64;
         p.ridgefill_vtail = true;
         p.ridgefill_vtail_rows = 32;
@@ -41,6 +42,12 @@ int main(int argc, char ** argv) {
         refused([&]() { common_ridgefill_validate_sweep(p, 700, 500, 563, 128); }, "overlap the prefix");
         refused([&]() { common_ridgefill_validate_sweep(p, 700, 500, 701, 128); }, "within LOWER rows");
         refused([&]() { common_ridgefill_validate_sweep(p, 700, 500, 636, 31); }, "vtail first tail ubatch");
+        p.ridgefill_header_rows = 1;
+        refused([&]() { common_ridgefill_validate_options(p); }, "header-rows");
+        p.ridgefill_header_rows = 0;
+        p.ridgefill_qattn_share = 0;
+        refused([&]() { common_ridgefill_validate_options(p); }, "positive --ridgefill-qattn-share");
+        p.ridgefill_qattn_share = 0.2f;
         p.speculative.types = {COMMON_SPECULATIVE_TYPE_DRAFT_MTP};
         refused([&]() { common_ridgefill_validate_options(p); }, "n_rs_seq > 0");
         p.speculative.types.clear();
@@ -91,7 +98,10 @@ int main(int argc, char ** argv) {
                 p.ridgefill_vtail = config[2] != 0;
                 p.ridgefill_vtail_rows = config[2] ? config[2] : 512;
                 common_ridgefill_sweep_report work;
-                if (config[0]) { work.s1_begin = config[1] - config[0]; work.s1_end = config[1]; }
+                if (config[0]) {
+                    work.s1_begin = config[1] - config[0]; work.s1_end = config[1];
+                    work.s1_probe_kv_pairs = uint64_t(config[0]) * (config[1] == 700 ? 768 : 1024);
+                }
                 work.vtail_rows = p.ridgefill_vtail ? std::min(config[2], 200) : 0;
                 auto report = common_ridgefill_get_report(model.get(), rf.get(), p, tokens.data(), 700, 500, rows,
                         p.ridgefill_mode, 636, 700, 0, 500, &work);
@@ -99,8 +109,14 @@ int main(int argc, char ** argv) {
                 check(report.exact_by_source[2] == 2 && report.exact_by_source[config[0] ? 5 : 4] == 4);
                 check(report.macs_ridgefill == base.macs_ridgefill + report.macs_s1_fill + report.macs_s1_probe + report.macs_vtail);
                 refused([&]() { common_ridgefill_get_report(model.get(), rf.get(), p, tokens.data(), 700, 500, rows, p.ridgefill_mode, 636, 700); }, "completed sweep metadata");
+                if (config[0]) {
+                    auto incomplete = work;
+                    incomplete.s1_probe_kv_pairs = 0;
+                    refused([&]() { common_ridgefill_get_report(model.get(), rf.get(), p, tokens.data(), 700, 500, rows,
+                            p.ridgefill_mode, 636, 700, 0, 500, &incomplete); }, "dense query/key pair count");
+                }
                 records.push_back(common_json {{"split", split}, {"window", config[0]}, {"end", config[1]},
-                    {"vtail_rows", work.vtail_rows}, {"rows", rows}, {"base", base.to_json()}, {"report", report.to_json()}});
+                    {"vtail_rows", work.vtail_rows}, {"kv_pairs", work.s1_probe_kv_pairs}, {"rows", rows}, {"base", base.to_json()}, {"report", report.to_json()}});
             }
         }
         std::cout << common_json {{"result", "PASS"}, {"scope", "reporting math only; S1 engine not exercised"}, {"checks", checks}, {"records", records}}.dump() << '\n';

@@ -1,6 +1,7 @@
 // Test the shared option parser and prompt boundary without an engine or projector implementation.
 #include "common.h"
 
+#include <cmath>
 #include <cstdio>
 #include <stdexcept>
 #include <string>
@@ -19,6 +20,8 @@ int main() {
     common_ridgefill_set_option(params, "--ridgefill-vtail", "on");
     common_ridgefill_set_option(params, "--ridgefill-vtail-rows", "32");
     check(params.ridgefill_s1_window == 256 && params.ridgefill_s1_factor == 2.5f && params.ridgefill_vtail && params.ridgefill_vtail_rows == 32);
+    common_ridgefill_set_option(params, "--ridgefill-s1-factor", "0.1");
+    check(std::nearbyint(params.ridgefill_s1_factor * 25) == 2);
     common_ridgefill_set_option(params, "--ridgefill-s1-window", "0");
     common_ridgefill_set_option(params, "--ridgefill-s1-factor", "1");
     common_ridgefill_set_option(params, "--ridgefill-vtail", "off");

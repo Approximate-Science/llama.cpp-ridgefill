@@ -99,7 +99,7 @@ class EvaluationTests(unittest.TestCase):
         report: dict = dict(n_prompt=700, n_prefix=100, n_filled=97, n_exact_prefix=3, n_cached_exact_prefix=0, n_exact_tail=600,
                       n_exact_prefix_by_source={"class": 0, "digit": 0, "special": 1, "header": 0, "qattn": 0, "s1": 2},
                       tokens_skipped=97/700, macs_exact=100.0, macs_ridgefill=80.0, mac_share_skipped=0.2,
-                      s1=dict(window=[650, 700], macs_fill=10, macs_probe=20, fill_recomputed=True),
+                      s1=dict(window=[650, 700], macs_fill=10, macs_probe=20, probe_kv_pairs=35000, fill_recomputed=True),
                       vtail=dict(rows=32, macs_measure=5))
         self.assertEqual(evaluation.validate_ridgefill_report(report, 700, "quality+qattn"), report)
         legacy = dict(report, n_filled=100, n_exact_prefix=0, tokens_skipped=100/700,

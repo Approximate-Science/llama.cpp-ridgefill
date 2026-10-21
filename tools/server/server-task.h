@@ -83,7 +83,7 @@ struct task_params {
     std::string ridgefill_qattn_window_mode = "last";
     int32_t ridgefill_qattn_turn_cap = 256;
     int32_t ridgefill_s1_window = 0;
-    float ridgefill_s1_factor = 1.0f;
+    double ridgefill_s1_factor = 1.0;
     bool ridgefill_vtail = false;
     int32_t ridgefill_vtail_rows = 512;
 

@@ -34,11 +34,12 @@ def run(args):
         split, width, count = row["split"], row["window"], row["vtail_rows"]
         late = range(split, dims.L)
         attention = [i for i in late if dims.types[i] == "attn"]
-        # Probe keys are prefix + causal window rows; the uncomputed intervening tail is masked.
+        # Dense probe work includes padded/masked cells; the driver records the actual query/key pairs.
         fill = sum(500 * (dims.H**2 + dims.attn_fill()) for _ in attention) if width else 0
         probe = sum(dims.layer_exact(i, 0, width) for i in late)
-        probe += len(attention) * 2 * dims.hq * dims.d * width * 500
-        vtail = len(attention) * count * (dims.H**2 + dims.H * dims.hkv * dims.d)
+        probe -= len(attention) * dims.attn_ctx(0, width)
+        probe += len(attention) * 2 * dims.hq * dims.d * row["kv_pairs"]
+        vtail = len(attention) * count * (dims.H**2 + 2 * dims.H * dims.hkv * dims.d)
         positions = sum(value + 1 for value in row["rows"]) / len(row["rows"]) / 501
         base = compute.bypass(dims, 700, split, 200, len(row["rows"]), pos=positions)
         base += compute.qattn_select(dims, 700, split, window=64)

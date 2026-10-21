@@ -128,6 +128,7 @@ def validate_ridgefill_report(report: dict | None, n_prompt: int, mode: str) -> 
         window = s1.get("window") if isinstance(s1, dict) else None
         if (not isinstance(window, list) or len(window) != 2 or any(type(row) is not int for row in window) or
                 not report["n_prefix"] <= window[0] < window[1] <= n_prompt or s1.get("fill_recomputed") is not True or
+                type(s1.get("probe_kv_pairs")) is not int or s1["probe_kv_pairs"] < (window[1] - window[0]) * report["n_prefix"] + (window[1] - window[0]) * (window[1] - window[0] + 1) // 2 or
                 any(sources[key] != 0 for key in ("class", "digit", "header", "qattn")) or
                 any(type(s1.get(key)) not in (int, float) or not math.isfinite(s1[key]) or s1[key] < 0 for key in ("macs_fill", "macs_probe"))):
             raise EvalError("invalid S1 window/source/cost reporting")
