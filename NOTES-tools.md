@@ -267,3 +267,21 @@ An initial local refusal probe was started before the schema rebuild finished an
 For Q, the same command uses --backend vulkan or --backend hip, --gpu-layers 99, a new output directory, the integrated release ref, and explicit toolchain settings through --cmake-arg. The bridge supplies the environment and selected GPU. This lane ran CPU only: clean-container isolation, Vulkan/HIP/CUDA/Metal execution and multi-GPU layer split are NOT RUN here. The scoped CPU pass is not a pass for those remaining G5 hardware/environment gates.
 
 Updated RIDGEFILL.md's Qwen3.8-27B section: distinguish supported speed/off from explicit-row quality engine tests and pending automatic selectors/sweep; state class/digit/qattn row rules and rounding, all knobs/defaults/ranges, exact-tail/cache behavior, startup/request/persistence refusals, quality rho limitation, per-tool mode limits, and G3/G5 commands. Moved the shared flag table there and linked the generic usage section to it to avoid conflicting copies. Real-model result cells remain NOT YET MEASURED; no lane-Q stock/reference numbers were substituted.
+
+### Common class/digit helper for L-C (2026-10-20)
+
+L-A landed the real `llama_ridgefill_select_rows` API in `ff598e03d`. Rebased rf27-tools onto that engine revision, then replaced the temporary common helper's unavailable-API refusal with the real call. This commit makes no tools/server edits and leaves L-C's slot lifecycle/cancellation/deferred-token hunks untouched. Before any later tools/server edits, rebase over L-C's lifecycle commit as the coordinator requested.
+
+Contract: call `common_ridgefill_resolve(params_base, rf)` during initialization, then `common_ridgefill_rows(params_base, rf, tokens.data(), P, effective_request_mode)`. Quality and quality+qattn both return only sorted, unique class/digit base rows. Qattn share/window/blind do not change this base set; the sweep caller computes and unions question rows. Off, speed and an empty prefix return no rows. An active quality request with a missing projector/token buffer, negative prefix, unresolved/invalid share or digit flag refuses by name; a negative/out-of-range API result or unsorted/duplicate/out-of-prefix positions also refuses. No selector logic is duplicated in common and no mock API is supplied.
+
+Built the real engine/common libraries CPU -j4 and compiled `tests/ridgefill/test_row_selection.cpp` against them. With the existing tiny model and split-3 format-2 projector, 21 checks passed: manifest defaults; class-only vs class+digit union; half-even rounding at 0.5 and 1.5; lower-position score ties; digit-only selection at a rounded-zero class budget; quality+qattn base invariance at qattn shares 0/0.2/1; off/speed/empty controls; and named refusals for invalid token IDs/modes/prefixes, missing projector, NaN share and unresolved digit choice. Example tokens [259,261,269,297,299,260,269] select [2,3,4,6] at share 0.5/digits on, versus [2,3,4] with digits off. The 18 existing argument/boundary checks still passed.
+
+```text
+cmake --build out/tools-cpu-build --target llama-common -j4: BUILT
+out/test-row-selection out/gate1-qwen35/tiny-qwen35-f32.gguf out/gate1-qwen35/projector-s3-f32.gguf
+PASS: 21 common class/digit selector checks
+out/test-tool-args-real
+PASS: 18 RidgeFill argument/boundary checks
+```
+
+Evidence: `out/select-helper-build.log`, `out/select-helper-test-build.log`, `out/select-helper-tests.log`, `out/select-helper-argument-tests.log`, and `out/select-helper-rebase.log`. Native test uses real libllama/common and hand-computed expectations, with invalid-token rejection as an API failure control. No HTTP/qattn positive inference claim is made here; L-C owns that integration, and bench/perplexity retain their temporary quality guards until their own follow-up tests.

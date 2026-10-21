@@ -1,0 +1,81 @@
+// Exercise the common selector with the real tiny model/projector and hand-computed positions.
+#include "common.h"
+#include "llama-ext.h"
+
+#include <cstdio>
+#include <limits>
+#include <memory>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+int main(int argc, char ** argv) {
+    if (argc != 3) {
+        fprintf(stderr, "usage: test-row-selection TINY_MODEL_GGUF SPLIT3_PROJECTOR_GGUF\n");
+        return 2;
+    }
+    try {
+        llama_backend_init();
+        auto mp = llama_model_default_params();
+        mp.n_gpu_layers = 0;
+        std::unique_ptr<llama_model, decltype(&llama_model_free)> model(llama_model_load_from_file(argv[1], mp), llama_model_free);
+        if (!model || llama_vocab_n_tokens(llama_model_get_vocab(model.get())) != 300) { throw std::runtime_error("requires the tiny 300-token fixture"); }
+        std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(llama_ridgefill_init(model.get(), argv[2]), llama_ridgefill_free);
+        if (!rf || llama_ridgefill_split(rf.get()) != 3) { throw std::runtime_error("requires the tiny split-3 projector"); }
+        int checks = 0;
+        auto check = [&](bool condition) {
+            if (!condition) { throw std::runtime_error("common row selection check failed"); }
+            ++checks;
+        };
+        common_params params;
+        params.ridgefill_mode = "quality";
+        common_ridgefill_resolve(params, rf.get());
+        check(params.ridgefill_share == 0.5f && params.ridgefill_digits == 1);
+        const std::vector<llama_token> tokens = {259, 261, 269, 297, 299, 260, 269};
+        auto select = [&](const std::vector<llama_token> & ids, const std::string & mode = "") {
+            return common_ridgefill_rows(params, rf.get(), ids.data(), ids.size(), mode);
+        };
+        const std::vector<llama_pos> base = {2, 3, 4, 6};
+        check(select(tokens) == base);
+        params.ridgefill_digits = 0;
+        check(select(tokens) == std::vector<llama_pos>({2, 3, 4}));
+        params.ridgefill_share = 0.25f;
+        check(select(tokens) == std::vector<llama_pos>({3, 4}));
+        params.ridgefill_share = 0.5f;
+        check(select({259}).empty());
+        check(select({259, 261, 263}) == std::vector<llama_pos>({1, 2}));
+        check(select({299, 297, 299, 297, 260}) == std::vector<llama_pos>({0, 1}));
+        params.ridgefill_share = 0.25f;
+        check(select({269}).empty());
+        params.ridgefill_digits = 1;
+        check(select({269}) == std::vector<llama_pos>({0}));
+        params.ridgefill_share = 0.5f;
+        for (float share : {0.0f, 0.2f, 1.0f}) {
+            params.ridgefill_qattn_share = share;
+            check(select(tokens, "quality+qattn") == base);
+        }
+        check(select(tokens, "off").empty());
+        check(select(tokens, "speed").empty());
+        check(common_ridgefill_rows(params, nullptr, nullptr, 0).empty());
+        auto refused = [&](auto operation, const std::string & message) {
+            bool caught = false;
+            try { operation(); }
+            catch (const std::exception & error) { caught = std::string(error.what()).find(message) != std::string::npos; }
+            check(caught);
+        };
+        refused([&]() { select({300}); }, "llama_ridgefill_select_rows");
+        refused([&]() { select(tokens, "invalid"); }, "invalid mode");
+        refused([&]() { common_ridgefill_rows(params, nullptr, tokens.data(), tokens.size()); }, "requires a projector");
+        refused([&]() { common_ridgefill_rows(params, rf.get(), tokens.data(), -1); }, "nonnegative prefix");
+        params.ridgefill_share = std::numeric_limits<float>::quiet_NaN();
+        refused([&]() { select(tokens); }, "--ridgefill-share");
+        params.ridgefill_share = 0.5f;
+        params.ridgefill_digits = -1;
+        refused([&]() { select(tokens); }, "--ridgefill-digits");
+        printf("PASS: %d common class/digit selector checks\n", checks);
+        return 0;
+    } catch (const std::exception & error) {
+        fprintf(stderr, "FAIL: %s\n", error.what());
+        return 1;
+    }
+}

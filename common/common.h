@@ -1036,6 +1036,7 @@ int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, i
 bool common_ridgefill_mode_valid(const std::string & mode);
 void common_ridgefill_set_option(common_params & params, const std::string & option, const std::string & value);
 void common_ridgefill_resolve(common_params & params, const struct llama_ridgefill * rf);
+// Class/digit base rows for quality modes; the sweep caller adds question-attention rows.
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const struct llama_ridgefill * rf,
         const llama_token * tokens, int32_t n_prefix, const std::string & mode = "");
 
