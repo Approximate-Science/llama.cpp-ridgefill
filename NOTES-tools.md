@@ -540,3 +540,30 @@ The canonical HTTP script and native g1-sweep.cpp were copied read-only from L-C
 Logs use out/chat-turn-{final-build3,argument-tests,selector-tests,score-gate2,http2,http17-final,tool-gate3,refusals3,gpu-parser-tests2,typecheck6,portability-full}.log and per-gate result directories. Initial failures are kept: a test compile omitted -Isrc; the first refusal run exposed perplexity's formerly unregistered embeddings/cache flags; the old special/header HTTP case expected the superseded pending-turn message; the first type check lacked its oracle environment/import paths, then identified missing tokenizer-field null checks in the borrowed chat gate. The first HTTP count-hardening compile used comparisons unavailable on common_json; changed to a checked numeric extraction before narrowing. Corrected these; none is counted as a pass. The workspace-local ty cache was initially empty, so downloaded the same pinned 0.0.84 version into .cache/uv, then reran offline with the real oracle environment. Rejected leaving device handlers eager or relying on missing-adapter errors: either would reproduce the late GPU failures.
 
 No GPU, full-model chat inference, CHAT-TUNE/CHAT-HELDOUT measurements, release/publish or push was attempted. The frozen lane T corpus/needle schema relay is still pending; this commit does not guess it or claim chat quality. These changes are experimental plumbing and CPU correctness evidence; the release remains on hold.
+
+## Integration ownership handoff: full CPU gate run after merge f1060fee5
+
+Checked out the available rf27-integ branch and merged rf27-tools 440d8ada6 with --no-ff. Merge f1060fee5 names the chat selector/window plumbing and immediate named refusals. Rebuilt all four tools and both native dump harnesses from the merged tree, CPU -j4. The gate scripts run in out/integ-f106; L-C's Tier-3 native/HTTP gates use the locally rebuilt driver. G0's upstream comparison uses the existing read-only build from the verified matching 1242be66f archive; all fork binaries are from this worktree.
+
+One real harness failure: two identical SIGINT signals sent back-to-back can coalesce, so the two-slot server appeared to hang after receiving only its first shutdown request. g0_server.py now waits for the first shutdown handler's log message, refuses if that message is absent or the busy server exits, then sends the second interrupt. Its original less-than-one-second exit requirement remains. This fixes signal delivery in the test, not server code. All three server parity cases pass 8/8 with that handshake. SIGTERM during an in-flight request still waits in both upstream and fork, as the existing gate records.
+
+```text
+canonical G1 speed: PASS 27/27
+canonical G1 quality: PASS 27/27
+G0: PASS 72, FAIL 0, SKIPPED 0
+G0 server vs upstream llama: PASS 8/8
+G0 server vs upstream qwen35: PASS 8/8
+G0 server vs upstream qwen35p2: PASS 8/8
+Tier-3 G1: PASS 12/12 + 3/3 controls
+check_score: PASS 24/24
+check_chat_score: PASS 24; defaults byte-identical
+select-chat: PASS 42/42
+select-rows: PASS 23/23
+sweep-dispatch: PASS 44/44
+HTTP default: PASS 17
+http-turn: PASS 25
+tool: PASS 40
+refusals: PASS 23
+```
+
+Evidence: out/integ-f106/summary.txt validates those counts against the actual JSON/log artifacts. Gate commands and return codes are in out/integ-f106/run_gates.py, run_gates_tail.py, run2.log, run3.log and run5.log; individual .log files and result subdirectories contain raw output. The chat gate's preserved final output is chat-score-final.log/ and chat-score-final/summary.json (the original passing log was overwritten by an attempted duplicate-directory invocation, which failed as intended). Initial gate-harness builds omitted -DRF27_API and correctly refused or produced no selector artifact; rebuilt both with that required macro before the passing runs. No failed/empty run is counted as passed. No GPU, publishing or push was attempted.

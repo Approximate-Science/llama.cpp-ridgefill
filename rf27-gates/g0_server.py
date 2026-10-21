@@ -86,8 +86,19 @@ def sig_case(bin_dir, port, tag, sigs, busy):
         if not any(sl.get("is_processing") for sl in slots):
             raise RuntimeError(f"{tag}: the generation is not running when the signal is sent (the busy case would test nothing)")
     t0 = time.time()
-    for s in sigs:
-        p.send_signal(s)  # back to back: a second signal must arrive while the first shutdown is still running
+    for index, s in enumerate(sigs):
+        p.send_signal(s)
+        if index + 1 < len(sigs):
+            # Wait for the first handler; back-to-back identical signals can coalesce.
+            deadline = time.monotonic() + 1.0
+            while "cleaning up before exit" not in (OUT / f"server-{tag}.txt").read_text():
+                if p.poll() is not None or time.monotonic() >= deadline:
+                    p.kill(); p.wait(); log.close()
+                    raise RuntimeError(f"{tag}: first signal was not observed while the server remained busy")
+                time.sleep(0.001)
+            if p.poll() is not None:
+                log.close()
+                raise RuntimeError(f"{tag}: first signal ended the busy server before the second signal")
     try:
         rc = p.wait(timeout=20)
     except subprocess.TimeoutExpired:
