@@ -14,4 +14,4 @@ PASS repeated requests: reused context == fresh contexts, vtail enabled again af
 PASS fixture: N-K default matches reference mass/base/rows/logits; future targets do not change selection or calibration
 PASS selchat: N-K default matches reference mass/base/rows/logits; future targets do not change selection or calibration
 PASS S1 factor: zero minimum, ties-to-even budgets 108.5/325.5, saturation at P
-{"result": "PASS", "checks": 24, "native_checks": 12, "worst_logprob_lse": 1.7611186819976865e-07, "worst_mass_relative": 1.357874859459952e-07, "cost": "includes recomputed prefix projector/KV, dense all-cell probe attention, two vtail V projections and cache read/write bytes", "vtail_k0": "PASS native harness; scorer target-reading calibration refused by name"}
+{"result": "PASS", "checks": 24, "native_checks": 12, "worst_logprob_lse": 1.7611186908794707e-07, "worst_mass_relative": 1.357874859459952e-07, "cost": "includes recomputed prefix projector/KV, dense all-cell probe attention, two vtail V projections and cache read/write bytes", "vtail_k0": "PASS native harness; scorer target-reading calibration refused by name"}

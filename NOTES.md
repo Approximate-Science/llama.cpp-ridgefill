@@ -402,3 +402,34 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   mass 1.36e-07; canonical G1 speed 27/27, quality 27/27; G0 72/0; G0 server 8/8; L-C native Tier-3 G1 12/12 + 3/3;
   check_score 24/24; g1_select_chat 42/42; select_rows 23/23; dispatch 44/44; quality a0 27/27; rollback 11/11; L-C
   HTTP sweep (defaults) 3/3.
+
+## 2026-10-21 rf27-s1: L-C 705d6bf3c (README portability) and L-B 0ca58254d (S1/vtail CLI, HTTP, reporting) merged
+- 705d6bf3c: README only; machine paths replaced by placeholder variables; the portability patterns
+  (rf27-gates/g5-portability-patterns.txt, positive control planted) find nothing in tools/ridgefill/README.md.
+  Merged as 7d60dd6f1.
+- 0ca58254d review (L-B's branch already contains 705d6bf3c through its own merge, which resolved conflicts in L-C's
+  score.cpp / README and also edits check_s1_score.py and run_nll.py). The decisions hold:
+  - S1/vtail run only in the quality+qattn two-sweep flow: common_ridgefill_validate_options refuses them by name in
+    speed / quality; llama-cli, llama-bench and llama-perplexity refuse them; non-qwen35, header rows with S1, a
+    blind window, qattn share 0 with S1, n_rs_seq > 0 and non-causal contexts are refused by name; API v2 is checked
+    at run time.
+  - Order: seq_set before vtail-on (the driver's); vtail off before FULL.
+  - Server prompt cache: a cached fill is reused only with the same mode, rows and vtail row count (c), so a request
+    with vtail off never reuses rescaled V; the cached prompt state carries c.
+  - Reporting: common prices S1_FILL (P rows of projector + K/V, recomputed), the probe (W rows through every late
+    layer + 2 x n_head x d x the dense query/cell pairs the driver counted) and vtail (c rows of projector + V
+    projections) once; the scorer requires driver cost == report cost (1e-12) and no longer adds them itself.
+  - Behaviour to know: with S1 or vtail enabled, a prompt too short to fill, or one whose tail is <= the vtail rows
+    (the server defers its last token), is refused by name instead of running exactly (fail closed, no silent
+    shortening).
+  - Flags: (1) L-B's commits edit L-C-owned files (tools/ridgefill/score.cpp, check_s1_score.py, run_nll.py, README):
+    the scorer's S1 flags now use the --ridgefill-* names, --s1-window defaults to 0 (--s1 on sets 256) and a refusal
+    needle in check_s1_score.py is looser ("S1 window"); L-C should acknowledge. (2) L-B's commit messages carry
+    "Assisted-by: Codex" instead of the campaign trailer; not changed here.
+  Merged as abc4117e2 (tree == 0ca58254d + my NOTES / results).
+- Gates on abc4117e2 (CPU, -j4 build clean): G1 S1/vtail 49/49; canonical G1 speed 27/27, quality 27/27; G0 72/0;
+  G0 server 8/8; L-C native Tier-3 G1 12/12 + 3/3; check_score 24/24; g1_select_chat 42/42; select_rows 23/23;
+  dispatch 44/44; quality a0 27/27; rollback 11/11; L-C check_s1_score PASS 24 + 12 native (worst logprob 1.76e-07,
+  mass 1.36e-07; baseline = clean archive of b9a8e5add); L-C HTTP sweep defaults 3/3. L-B's checks run here
+  independently: check_s1_tools 115/115 (architecture controls 3/3 with the dense tiny-qwen3 fixture),
+  check_s1_http 72/72, check_s1_reporting 91 checks / 16 configs, worst relative error 0.
