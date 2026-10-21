@@ -21,14 +21,15 @@ def digest(path: Path) -> str:
     return value.hexdigest()
 
 
-def select_devices(inventory: str, backend: str, two_card: bool) -> list[str]:
+def select_devices(inventory: str, backend: str, two_card: bool, device_name_pattern: str | None = None) -> list[str]:
     prefix = r"Vulkan" if backend == "vulkan" else r"(?:ROCm|HIP)"
     rows = re.findall(r"^\s*(" + prefix + r"\d+): (.+) \((\d+) MiB, (\d+) MiB free\)\s*$", inventory, re.M)
-    if two_card:
-        rows = [row for row in rows if re.search(r"\b(?:R9700|Radeon\s+AI\s+PRO\s+9700)\b", row[1], re.I)]
+    if device_name_pattern is not None:
+        name = re.compile(device_name_pattern, re.I)
+        rows = [row for row in rows if name.search(row[1])]
     expected = 2 if two_card else 1
     if len(rows) != expected or len({row[0] for row in rows}) != expected:
-        raise ValueError(f"GPU smoke requires exactly {expected} visible {'R9700 Vulkan' if two_card else backend} device(s)")
+        raise ValueError(f"GPU smoke requires exactly {expected} visible {backend} device(s)")
     if any(int(row[3]) < 3072 for row in rows):
         raise ValueError("GPU smoke requires at least 3072 MiB free on each selected device")
     return [row[0] for row in rows]
@@ -102,7 +103,7 @@ def run(args) -> dict:
             raise ValueError("GPU smoke cannot identify the expected benchmark revision")
         inventory = subprocess.run([str(binary), "--list-devices"], capture_output=True, text=True, check=True, timeout=30)
         (args.out / "devices.log").write_text(inventory.stdout + inventory.stderr)
-        devices = select_devices(inventory.stdout, args.backend, args.two_card)
+        devices = select_devices(inventory.stdout, args.backend, args.two_card, args.device_name_pattern)
         command = [str(binary), "-m", str(args.model), "--ridgefill", str(args.projector),
                    "--ridgefill-mode", "speed", "--ridgefill-alpha", "0", "--ridgefill-tail", "4096",
                    "-p", "8192", "-n", "0", "-r", "1", "--no-warmup", "-b", "512", "-ub", "128", "-t", "4",
@@ -115,7 +116,7 @@ def run(args) -> dict:
             subprocess.run(command, stdout=stdout, stderr=stderr, check=True, timeout=600)
         details = validate_bench(json.loads((args.out / "bench.json").read_text()), (args.out / "bench.log").read_text(),
                                  devices, match[2], args.backend)
-        result = dict(gate="G5-GPU-smoke", result="PASS", backend=args.backend, devices=devices, commit=match[2],
+        result = dict(gate="G5-GPU-smoke", result="PASS", backend=args.backend, devices=devices, commit=match[2], device_name_pattern=args.device_name_pattern,
                       scope="short speed-mode prefill; no performance, numerical-equivalence or container-isolation claim",
                       model=str(args.model), model_sha256=digest(args.model), projector=str(args.projector),
                       projector_sha256=digest(args.projector), **details)
@@ -133,11 +134,17 @@ if __name__ == "__main__":
     parser.add_argument("--projector", type=Path, required=True)
     parser.add_argument("--out", type=Path, required=True)
     parser.add_argument("--backend", choices=("vulkan", "hip"), required=True)
-    parser.add_argument("--two-card", action="store_true", help="Vulkan only: require both visible R9700 cards")
+    parser.add_argument("--two-card", action="store_true", help="Vulkan only: require two matching visible GPUs")
     parser.add_argument("--expect-commit")
+    parser.add_argument("--device-name-pattern", help="optional regex over device descriptions; default accepts any GPU")
     args = parser.parse_args()
     for key in ("bin_dir", "model", "projector", "out"):
         setattr(args, key, getattr(args, key).resolve())
+    if args.device_name_pattern is not None:
+        try:
+            re.compile(args.device_name_pattern)
+        except re.error as error:
+            parser.error(f"invalid --device-name-pattern: {error}")
     if args.two_card and args.backend != "vulkan":
         parser.error("--two-card requires Vulkan")
     try:

@@ -20,11 +20,46 @@ from pathlib import Path
 
 def patterns() -> list[str]:
     return [r"/(?:var/)?(?:home|mnt|Users)/", r"[A-Z]:[\\/]Users[\\/]",
-            r"\b[0-9a-f]{4}:[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]\b",
-            r"\b(?:Vulkan|CUDA|HIP)[0-9]+\b", r"\bGPU-[0-9a-f-]{8,}\b",
+            r"\b(?:[0-9a-f]{4}:)?[0-9a-f]{2}:[0-9a-f]{2}\.[0-7]\b",
+            r"\b(?:Vulkan|CUDA|HIP|ROCm)[0-9]+\b", r"\bGPU-[0-9a-f-]{8,}\b",
+            r"\bR9[0-9]{3}\b", r"\bRadeon\s+AI\s+PRO\s+[0-9]+\b", r"\bgfx(?:11|12)[0-9a-z]+\b",
+            r"\b(?:ROCm|HIP|SDK)[ /-]*(?:version[ :=-]*)?[vV]?[0-9]+\.[0-9]+(?:\.[0-9]+)?\b",
+            r"(?:^|[^\w.])(?:[6-9]|[1-9][0-9]+)\.[0-9]+\.[0-9]+(?:[a-z][0-9]+)?(?:$|[^\w.])",
             r"(?:CUDA|HIP|ROCR|GGML_VK)_VISIBLE_DEVICES\s*=\s*[\"']?[0-9]",
             r"\b(?:tp_size|tensor_parallel_size|world_size|n_gpus)\s*(?:==|=|:)\s*[2-9]\b",
             r"[\w-]+\.(?:local|lan)\b", re.escape(platform.node())]
+
+
+def sdk_version(version: str) -> tuple[int, int, int]:
+    match = re.fullmatch(r"\s*(\d+)\.(\d+)(?:\.(\d+))?(?:[a-zA-Z+~.-].*)?\s*", version)
+    if match is None:
+        raise ValueError("SDK version must start with major.minor[.patch]")
+    return int(match[1]), int(match[2]), int(match[3] or 0)
+
+
+def check_sdk_version(observed: str, cmake: str, requested: str | None = None) -> None:
+    match = re.search(r"\$\{hip_VERSION\}\s+VERSION_LESS\s+(\d+\.\d+(?:\.\d+)?)", cmake)
+    if match is None:
+        raise ValueError("cannot determine the backend's minimum HIP version")
+    minimum = max(sdk_version(match[1]), sdk_version(requested) if requested else (0, 0, 0))
+    if sdk_version(observed) < minimum:
+        raise ValueError("ROCm SDK version is below the backend or --sdk-min-version requirement")
+
+
+def hip_environment(args, source: Path, env: dict[str, str]) -> dict[str, str]:
+    if args.backend != "hip":
+        return env
+    sdk_path = args.rocm_sdk or env.get("ROCM_PATH") or env.get("HIP_PATH")
+    if sdk_path is None:
+        sdk_path = subprocess.check_output(["hipconfig", "-R"], text=True, env=env).strip()
+    sdk = Path(sdk_path).resolve()
+    if not (sdk / "bin/hipcc").is_file():
+        raise ValueError("ROCm SDK lacks bin/hipcc; supply --rocm-sdk or configure HIP_PATH")
+    check_sdk_version((sdk / ".info/version").read_text(), (source / "ggml/src/ggml-hip/CMakeLists.txt").read_text(), args.sdk_min_version)
+    env.update(ROCM_PATH=str(sdk), HIP_PATH=str(sdk), CMAKE_PREFIX_PATH=str(sdk),
+               PATH=str(sdk / "bin") + os.pathsep + str(sdk / "llvm/bin") + os.pathsep + env.get("PATH", ""),
+               LD_LIBRARY_PATH=str(sdk / "lib") + (os.pathsep + env["LD_LIBRARY_PATH"] if env.get("LD_LIBRARY_PATH") else ""))
+    return env
 
 
 def source_files(root: Path) -> list[Path]:
@@ -88,10 +123,12 @@ def run(args) -> dict:
         record("portability-grep-empty", result.returncode == 1 and not result.stdout, files=len(files))
         (args.out / "audit.json").write_text(json.dumps(dict(files=[str(path.relative_to(source)) for path in files], patterns=patterns()), indent=2) + "\n")
         bad = args.out / "nonportable.cpp"
-        bad.write_text('const char * path = "/' + 'home/user/model.gguf";\nconst char * host = "' + platform.node() +
-                       '";\nconst char * device = "Vulkan' + str(2) + '";\nint tp_size = ' + str(2) + ';\n')
+        assumptions = ['/' + 'home/user/model.gguf', platform.node(), 'Vulkan' + str(2), 'int tp_size = ' + str(2),
+                       'R9' + str(123), 'gfx' + str(1200), 'gfx' + str(1100), 'ROCm ' + '.'.join(map(str, (8, 0, 0))),
+                       ':'.join(('abcd', '12', '34.5')), ':'.join(('56', '78.0'))]
+        bad.write_text('\n'.join(assumptions) + '\n')
         result = grep([bad], args.out / "positive-grep.log")
-        record("positive-grep-detects-assumptions", result.returncode == 0 and len(result.stdout.splitlines()) == 4)
+        record("positive-grep-detects-assumptions", result.returncode == 0 and len(result.stdout.splitlines()) == len(assumptions))
         clean = args.out / "portable.cpp"
         clean.write_text("int count(int argc) { return argc; }\n")
         result = grep([clean], args.out / "negative-grep.log")
@@ -101,6 +138,9 @@ def run(args) -> dict:
                  "-DGGML_CUDA=OFF", "-DGGML_METAL=OFF", "-DGGML_VULKAN=" + ("ON" if args.backend == "vulkan" else "OFF"),
                  "-DGGML_HIP=" + ("ON" if args.backend == "hip" else "OFF"), "-DLLAMA_BUILD_COMMIT=" + revision[:9],
                  "-DLLAMA_BUILD_NUMBER=" + count]
+        env = hip_environment(args, source, env)
+        if args.hip_targets:
+            flags += ["-DAMDGPU_TARGETS=" + args.hip_targets]
         command(["cmake", "-S", str(source), "-B", str(build), *flags, *args.cmake_arg], "configure", env)
         command(["cmake", "--build", str(build), "--target", "llama-server", "llama-bench", "llama-perplexity", "-j" + str(args.jobs)], "build", env)
         record("archive-tools-build", all((build / "bin" / name).is_file() for name in ("llama-server", "llama-bench", "llama-perplexity")))
@@ -128,9 +168,10 @@ def run(args) -> dict:
                 if sdk:
                     version = Path(sdk) / ".info/version"
                     (args.out / "rocm-sdk-version.log").write_text(version.read_text())
+            name_options = ["--device-name-pattern", args.device_name_pattern] if args.device_name_pattern is not None else []
             command([sys.executable, str(checker), "--bin-dir", str(build / "bin"), "--expect-commit", revision,
                      "--backend", args.backend, "--model", str(args.smoke_model), "--projector", str(args.smoke_projector),
-                     "--out", str(args.out / "gpu-smoke")], "gpu-smoke", env)
+                     "--out", str(args.out / "gpu-smoke"), *name_options], "gpu-smoke", env)
             smoke = json.loads((args.out / "gpu-smoke/results.json").read_text())
             record("real-model-speed-smoke", smoke["result"] == "PASS", devices=smoke["devices"])
         result = dict(gate="G5", result="PASS", scope="archive build, source audit, named refusals on selected backend", backend=args.backend,
@@ -156,8 +197,24 @@ if __name__ == "__main__":
     parser.add_argument("--port", type=int, default=18110)
     parser.add_argument("--smoke-model", type=Path, help="GPU only: finish with a short 27B speed-mode benchmark")
     parser.add_argument("--smoke-projector", type=Path)
+    parser.add_argument("--rocm-sdk", type=Path, help="HIP SDK directory; default uses ROCM_PATH, HIP_PATH or hipconfig -R")
+    parser.add_argument("--hip-targets", help="semicolon-separated HIP targets; default lets CMake detect targets")
+    parser.add_argument("--sdk-min-version", help="require this SDK version or the backend's minimum, whichever is newer")
+    parser.add_argument("--device-name-pattern", help="optional regex over GPU descriptions; default accepts any GPU")
     args = parser.parse_args()
     args.out, args.fixture = args.out.resolve(), args.fixture.resolve()
+    if args.backend != "hip" and any((args.rocm_sdk, args.hip_targets, args.sdk_min_version)):
+        parser.error("HIP toolchain options require --backend hip")
+    if args.sdk_min_version is not None:
+        try:
+            sdk_version(args.sdk_min_version)
+        except ValueError as error:
+            parser.error(str(error))
+    if args.device_name_pattern is not None:
+        try:
+            re.compile(args.device_name_pattern)
+        except re.error as error:
+            parser.error(f"invalid --device-name-pattern: {error}")
     if bool(args.smoke_model) != bool(args.smoke_projector):
         parser.error("--smoke-model and --smoke-projector must be supplied together")
     if args.smoke_model:

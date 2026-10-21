@@ -57,8 +57,8 @@ Machine/backend, build revision, cache precision and paired 95% BCa intervals wi
 |---|---|---|
 | CPU | Release, `GGML_NATIVE=OFF`, GPU backends off | tiny oracle/tool gates and clean archive/refusal checks passed; 27B NOT YET MEASURED |
 | Vulkan / one GPU | Release, `GGML_VULKAN=ON`, layer split, F16 KV, FA off | archive build + short 27B speed smoke script available; NOT YET MEASURED |
-| HIP / one GPU | Release, `GGML_HIP=ON`, `AMDGPU_TARGETS=gfx1201`, ROCm 7.10.0a20251120 SDK, F16 KV, FA off | host archive build + short 27B speed smoke script available; NOT YET MEASURED |
-| Vulkan / two GPUs | same archived Vulkan build, `-sm layer`, equal layer weights | separate two-R9700 speed smoke script available; NOT YET MEASURED |
+| HIP / one GPU | Release, `GGML_HIP=ON`, user-supplied or detected HIP targets, ROCm at least the backend minimum (currently 6.1), F16 KV, FA off | host archive build + short 27B speed smoke script available; NOT YET MEASURED |
+| Vulkan / two GPUs | same archived Vulkan build, `-sm layer`, equal layer weights | separate two-GPU speed smoke script available; NOT YET MEASURED |
 | CUDA | no Qwen35 RidgeFill backend gate run | NOT RUN |
 | Metal | no Qwen35 RidgeFill backend gate run | NOT RUN |
 
@@ -136,7 +136,7 @@ Perplexity and bench support off, speed and quality at alpha 0. Both still refus
 
 The paired client and CPU gates are documented in [tests/ridgefill/README.md](tests/ridgefill/README.md). `run_g3.py --mode ... --docs ... --needles ... --out ...` runs NLL, needles, TTFT and native bench against one build's mode-off arm. NLL uses only the last 512 teacher-forced targets and keeps the approximate prefix fixed; it requires T-512 >= tail_min and N-512 >= min-prompt. Needle evaluation removes appended answer IDs, applies the loaded Qwen chat template with `enable_thinking=false`, generates greedily, and checks seven digits at digit boundaries. Timing runs alternate off and candidate for at least three repeats. Paired 95% BCa intervals use the oracle's `finals/stats.py`; an inactive eligible fill or missing probability fails the run. Tiny instrumentation checks are not real-model quality/speed measurements.
 
-`run_g5.py --ref COMMIT --backend cpu|vulkan|hip --fixture ... --out ...` audits and builds a clean git archive, then tests named refusals and exact/filled slot-save controls. It uses the caller's environment and does not provide container isolation. The host wrappers `run_g5_gpu.sh` and `run_g5_two_card.sh` add single-GPU archive builds/27B speed smokes and the separate two-R9700 layer-split smoke. See [GPU G5 commands](tests/ridgefill/README.md#gpu-g5-commands). They require real device enumeration, model tensors on every selected GPU and a completed filled prefix. Container isolation and numerical/performance validation remain separate; the CPU archive result does not establish them.
+`run_g5.py --ref COMMIT --backend cpu|vulkan|hip --fixture ... --out ...` audits and builds a clean git archive, then tests named refusals and exact/filled slot-save controls. It uses the caller's environment and does not provide container isolation. The host wrappers `run_g5_gpu.sh` and `run_g5_two_card.sh` add single-GPU archive builds/27B speed smokes and the separate two-GPU layer-split smoke. See [GPU G5 commands](tests/ridgefill/README.md#gpu-g5-commands). They require real device enumeration, model tensors on every selected GPU and a completed filled prefix. Container isolation and numerical/performance validation remain separate; the CPU archive result does not establish them.
 
 ## Earlier measured results: dense Llama and Qwen3
 
