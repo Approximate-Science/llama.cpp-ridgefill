@@ -12,6 +12,48 @@
 server_ridgefill_sweep::server_ridgefill_sweep() = default;
 server_ridgefill_sweep::~server_ridgefill_sweep() = default;
 
+int32_t server_ridgefill_sweep_api_version() {
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+    return llama_ridgefill_api_version();
+#else
+    return 1;
+#endif
+}
+
+void server_ridgefill_sweep::prepare_cost(const llama_model & model, const server_ridgefill_sweep_params & params) {
+    const auto & hp = model.hparams;
+    const double h = hp.n_embd, p = params.n_prefix, w = params.s1 ? params.s1_window : 0;
+    cost.s1_fill_rows = params.s1 ? params.n_prefix : 0;
+    cost.s1_probe_rows = w;
+    cost.vtail_rows = params.vtail ? std::min(params.vtail_rows, params.n_tokens - params.n_prefix) : 0;
+    int32_t heads = 0;
+    for (uint32_t il = params.split; il < hp.n_layer(); ++il) {
+        const double mlp = 3 * h * hp.n_ff(il);
+        if (hp.is_recr(il)) {
+            if (!hp.ssm_dt_rank || hp.ssm_d_inner % hp.ssm_dt_rank) {
+                throw std::runtime_error("RidgeFill S1: invalid GDN value heads for cost reporting");
+            }
+            const double nk = hp.ssm_n_group, nv = hp.ssm_dt_rank, dk = hp.ssm_d_state, dv = hp.ssm_d_inner / hp.ssm_dt_rank;
+            const double conv = 2 * nk * dk + nv * dv;
+            const double linear = h * conv + 2 * h * nv + conv * hp.ssm_d_conv + 2 * h * nv * dv + 4 * nv * dk * dv;
+            cost.s1_probe_macs += w * (linear + mlp);
+        } else {
+            const double hq = hp.n_head(il), hkv = hp.n_head_kv(il), d = hp.n_embd_head_k(il);
+            if (d != hp.n_embd_head_v(il)) {
+                throw std::runtime_error("RidgeFill S1/vtail: cost reporting requires equal K/V head widths");
+            }
+            heads += hp.n_head_kv(il);
+            cost.s1_fill_macs += params.s1 ? p * (h * h + 2 * h * hkv * d) : 0;
+            cost.s1_probe_macs += w * (3 * h * hq * d + 2 * h * hkv * d + mlp) + hq * d * w * (2 * p + w + 1);
+            cost.vtail_macs += cost.vtail_rows * (h * h + h * hkv * d);
+        }
+    }
+    if ((params.s1 || params.vtail) && heads == 0) {
+        throw std::runtime_error("RidgeFill S1/vtail: no late attention layers");
+    }
+    if (params.vtail) { vtail_scales.resize(heads); }
+}
+
 void server_ridgefill_sweep::decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         int32_t count, bool output_all, bool output_last, int32_t logits_begin, int32_t logits_end) {
     llama_batch batch = llama_batch_init(count, 0, 1);
@@ -45,9 +87,10 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
         if (params.split <= 0 || params.split >= (int32_t) model.hparams.n_layer() || params.n_embd != (int32_t) model.hparams.n_embd) {
             throw std::runtime_error("RidgeFill quality+qattn: invalid split or embedding width");
         }
+        if (params.s1 || params.vtail) { prepare_cost(model, params); }
         win_end = params.qattn_end >= 0 ? params.qattn_end : (params.qattn_blind ? params.n_prefix : params.n_tokens);
         win_begin = std::max(0, win_end - params.qattn_window);
-        if (params.qattn_window_mode == "turn") {
+        if (params.qattn_share > 0 && params.qattn_window_mode == "turn") {
             const std::string header = "<|im_start|>user\n";
             const auto * vocab = llama_model_get_vocab(&model);
             const int32_t n = -llama_tokenize(vocab, header.data(), header.size(), nullptr, 0, false, true);
@@ -68,7 +111,7 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
             }
         }
         for (int32_t il : {3, 7, 11, 15}) {
-            if (il >= params.split) {
+            if (il >= params.split || params.qattn_share == 0) {
                 continue;
             }
             if (model.hparams.is_recr(il)) {
@@ -78,7 +121,7 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
             windows.push_back(std::make_unique<llama_ridgefill_sweep_buffer>(model.select_buft(il),
                     params.n_embd, win_end - win_begin, GGML_TYPE_F32));
         }
-        if (layers.empty()) {
+        if (layers.empty() && params.qattn_share > 0) {
             throw std::runtime_error("RidgeFill quality+qattn: split has no lower attention layers");
         }
         hidden = std::make_unique<llama_ridgefill_sweep_buffer>(model.select_buft(params.split),
@@ -91,8 +134,8 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
         part.n_win_layers = layers.size();
         part.win_layers = layers.data();
         part.win_bufs = buffers.data();
-        part.win_begin = win_begin;
-        part.win_n = win_end - win_begin;
+        part.win_begin = layers.empty() ? 0 : win_begin;
+        part.win_n = layers.empty() ? 0 : win_end - win_begin;
         if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
             throw std::runtime_error("RidgeFill quality+qattn: LOWER part was refused");
         }
@@ -110,7 +153,7 @@ void server_ridgefill_sweep::question_mass(llama_context * ctx, llama_seq_id seq
 }
 
 void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params) {
-    if (mass.size() != size_t(params.n_tokens)) {
+    if (params.qattn_share > 0 && mass.size() != size_t(params.n_tokens)) {
         throw std::runtime_error("RidgeFill quality+qattn: question mass does not cover the prompt");
     }
     if (!std::is_sorted(base_rows.begin(), base_rows.end()) ||
@@ -118,10 +161,65 @@ void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_row
             (!base_rows.empty() && (base_rows.front() < 0 || base_rows.back() >= params.n_prefix))) {
         throw std::runtime_error("RidgeFill quality+qattn: base exact rows must be sorted unique prefix positions");
     }
-    const auto question_rows = llama_ridgefill_sweep_top_rows(mass, params.n_prefix, params.qattn_share);
+    const auto question_rows = params.qattn_share > 0 ? llama_ridgefill_sweep_top_rows(mass, params.n_prefix, params.qattn_share) : std::vector<int32_t>();
     rows.clear();
     std::set_union(base_rows.begin(), base_rows.end(), question_rows.begin(), question_rows.end(), std::back_inserter(rows));
+    n_base = rows.size();
 }
+
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+void server_ridgefill_sweep::sweep_s1_fill(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
+        const server_ridgefill_sweep_params & params) {
+    if (position == 0) {
+        auto part = llama_ridgefill_part_default_params();
+        part.part = LLAMA_RIDGEFILL_PART_S1_FILL;
+        part.h_buf = hidden->tensor();
+        if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
+            throw std::runtime_error("RidgeFill S1: S1_FILL was refused");
+        }
+    }
+    decode(ctx, seq, tokens, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), params.n_prefix - position}), false, false);
+}
+
+void server_ridgefill_sweep::sweep_s1_probe(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
+        const server_ridgefill_sweep_params & params) {
+    if (position == win_end - params.s1_window) {
+        auto part = llama_ridgefill_part_default_params();
+        part.part = LLAMA_RIDGEFILL_PART_S1_PROBE;
+        part.h_buf = hidden->tensor();
+        part.s1_begin = position;
+        part.s1_end = win_end;
+        if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
+            throw std::runtime_error("RidgeFill S1: S1_PROBE was refused");
+        }
+    }
+    decode(ctx, seq, tokens, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), win_end - position}), false, false);
+}
+
+void server_ridgefill_sweep::select_s1_rows(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
+        const server_ridgefill_sweep_params & params) {
+    s1_mass.resize(params.n_prefix);
+    if (llama_ridgefill_seq_get_s1_mass(ctx, seq, s1_mass.data(), s1_mass.size()) != params.n_prefix) {
+        throw std::runtime_error("RidgeFill S1: complete prefix mass is unavailable");
+    }
+    const double budget = std::min(double(params.n_prefix), params.s1_factor * n_base);
+    int32_t count = int32_t(std::floor(budget));
+    const double fraction = budget - count;
+    if (fraction > 0.5 || (fraction == 0.5 && (count & 1))) { ++count; }
+    const auto selected = llama_ridgefill_sweep_top_k(s1_mass, params.n_prefix, std::max(1, count));
+    std::vector<llama_pos> special;
+    if (params.special_exact) {
+        auto select = llama_ridgefill_select_default_params(params.projector);
+        select.share = 0; select.digits = false; select.special_exact = true; select.header_rows = 0;
+        special.resize(params.n_prefix);
+        const int32_t n = llama_ridgefill_select_rows_ext(params.projector, tokens, params.n_prefix, &select, special.data());
+        if (n < 0 || n > params.n_prefix) { throw std::runtime_error("RidgeFill S1: special-row selection was refused"); }
+        special.resize(n);
+    }
+    rows.clear();
+    std::set_union(selected.begin(), selected.end(), special.begin(), special.end(), std::back_inserter(rows));
+}
+#endif
 
 void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
@@ -129,9 +227,19 @@ void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq,
         auto part = llama_ridgefill_part_default_params();
         part.part = LLAMA_RIDGEFILL_PART_LATE;
         part.h_buf = hidden->tensor();
-        if (llama_ridgefill_seq_set_rows(ctx, seq, rows.data(), rows.size()) < 0 ||
-                llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
-            throw std::runtime_error("RidgeFill quality+qattn: exact rows or LATE part were refused");
+        if (llama_ridgefill_seq_set_rows(ctx, seq, rows.data(), rows.size()) < 0) {
+            throw std::runtime_error("RidgeFill quality+qattn: exact rows were refused");
+        }
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+        if (params.vtail) {
+            if (llama_ridgefill_seq_set_vtail(ctx, seq, true, params.vtail_rows) < 0) {
+                throw std::runtime_error("RidgeFill vtail: enabling value rescaling was refused");
+            }
+            vtail_enabled = true;
+        }
+#endif
+        if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
+            throw std::runtime_error("RidgeFill quality+qattn: LATE part was refused");
         }
     }
     decode(ctx, seq, tokens, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), params.n_prefix - position}), false, false);
@@ -141,9 +249,19 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
         const server_ridgefill_sweep_params & params) {
     const int32_t end = params.n_tokens - int(params.defer_last_token);
     if (position < end) {
-        const int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), end - position});
+        int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), end - position});
+        const bool calibrate = params.vtail && position == params.n_prefix;
+        if (calibrate) { count = std::max(count, cost.vtail_rows); }
         decode(ctx, seq, tokens, count, params.all_tail_logits,
                 params.logits_begin < 0 && !params.defer_last_token && position + count == end, params.logits_begin, params.logits_end);
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+        if (calibrate && llama_ridgefill_seq_get_vtail_scales(ctx, seq, vtail_scales.data(), vtail_scales.size()) != int32_t(vtail_scales.size())) {
+            throw std::runtime_error("RidgeFill vtail: complete per-layer value scales are unavailable");
+        }
+        if (calibrate && !std::all_of(vtail_scales.begin(), vtail_scales.end(), [](float scale) { return std::isfinite(scale) && scale >= 0; })) {
+            throw std::runtime_error("RidgeFill vtail: nonfinite or negative value scale");
+        }
+#endif
     }
     if (position == end && !params.defer_last_token) {
         finish_external_tail(ctx, seq);
@@ -152,6 +270,12 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
 
 void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq_id seq) {
     llama_synchronize(ctx);
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+    if (vtail_enabled && llama_ridgefill_seq_set_vtail(ctx, seq, false, 1) < 0) {
+        throw std::runtime_error("RidgeFill vtail: disabling value rescaling before FULL was refused");
+    }
+#endif
+    vtail_enabled = false;
     if (llama_ridgefill_seq_set_part(ctx, seq, nullptr) < 0) {
         throw std::runtime_error("RidgeFill quality+qattn: completed replay could not reset FULL");
     }
@@ -179,7 +303,7 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
     if (!std::isfinite(params.qattn_share) || params.qattn_share < 0.0f || params.qattn_share > 1.0f) {
         throw std::runtime_error("RidgeFill quality+qattn: qattn share must be finite and in [0, 1]");
     }
-    if (params.qattn_share == 0.0f) {
+    if (params.qattn_share == 0.0f && !params.s1 && !params.vtail) {
         return server_ridgefill_sweep_result::quality;
     }
     if (params.n_tokens <= 0 || params.n_prefix < 0 || params.n_prefix >= params.n_tokens) {
@@ -187,6 +311,17 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
     }
     if (params.n_prefix == 0) {
         return server_ridgefill_sweep_result::quality;
+    }
+    if ((params.s1 || params.vtail) && server_ridgefill_sweep_api_version() < 2) {
+        throw std::runtime_error("RidgeFill S1/vtail: libllama C API v2 is required");
+    }
+    const int32_t end = params.qattn_end >= 0 ? params.qattn_end : params.n_tokens;
+    if (params.s1 && (!params.projector || params.qattn_blind || params.s1_window <= 0 ||
+            params.s1_window > end - params.n_prefix || !std::isfinite(params.s1_factor) || params.s1_factor < 0)) {
+        throw std::runtime_error("RidgeFill S1: requires a projector, nonnegative finite factor, and a nonempty window entirely in the known exact tail");
+    }
+    if (params.vtail && params.vtail_rows <= 0) {
+        throw std::runtime_error("RidgeFill vtail: calibration rows must be positive");
     }
     if (params.n_batch <= 0 || params.qattn_window <= 0) {
         throw std::runtime_error("RidgeFill quality+qattn: batch and question window must be positive");
@@ -214,6 +349,15 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
     if (!ctx || !tokens) {
         throw std::runtime_error("RidgeFill quality+qattn: missing context or prompt tokens");
     }
+    if (params.vtail) {
+        const int32_t needed = std::min(params.vtail_rows, params.n_tokens - params.n_prefix);
+        if (llama_n_ubatch(ctx) < uint32_t(needed) || llama_n_batch(ctx) < uint32_t(needed)) {
+            throw std::runtime_error("RidgeFill vtail: context batch and ubatch must hold the first calibration rows");
+        }
+        if (params.defer_last_token && needed == params.n_tokens - params.n_prefix) {
+            throw std::runtime_error("RidgeFill vtail: calibration cannot consume the server's deferred final token; reduce vtail rows");
+        }
+    }
     sweep.n_outputs = 0;
     sweep.output_position = -1;
     using phase = server_ridgefill_sweep::phase;
@@ -221,7 +365,7 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
         case phase::lower:
             sweep.sweep_lower(ctx, seq, tokens, params);
             if (sweep.position == params.n_tokens) {
-                sweep.next = phase::mass;
+                sweep.next = params.qattn_share > 0 ? phase::mass : phase::rows;
             }
             break;
         case phase::mass:
@@ -231,8 +375,30 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
         case phase::rows:
             sweep.select_rows(base_rows, params);
             sweep.position = 0;
-            sweep.next = phase::prefix;
+            sweep.next = params.s1 ? phase::s1_fill : phase::prefix;
             break;
+        case phase::s1_fill:
+        case phase::s1_probe:
+        case phase::s1_rows:
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+            if (sweep.next == phase::s1_fill) {
+                sweep.sweep_s1_fill(ctx, seq, tokens, params);
+                if (sweep.position == params.n_prefix) {
+                    sweep.position = sweep.win_end - params.s1_window;
+                    sweep.next = phase::s1_probe;
+                }
+            } else if (sweep.next == phase::s1_probe) {
+                sweep.sweep_s1_probe(ctx, seq, tokens, params);
+                if (sweep.position == sweep.win_end) { sweep.next = phase::s1_rows; }
+            } else {
+                sweep.select_s1_rows(ctx, seq, tokens, params);
+                sweep.position = 0;
+                sweep.next = phase::prefix;
+            }
+            break;
+#else
+            throw std::runtime_error("RidgeFill S1: libllama C API v2 is required");
+#endif
         case phase::prefix:
             sweep.sweep_prefix(ctx, seq, tokens, params);
             if (sweep.position == params.n_prefix) {

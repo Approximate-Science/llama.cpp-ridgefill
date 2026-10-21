@@ -295,18 +295,24 @@ std::vector<int32_t> llama_ridgefill_sweep_top_rows(const std::vector<double> & 
     if (prefix < 0 || size_t(prefix) > mass.size() || !std::isfinite(share) || share < 0.0 || share > 1.0) {
         throw std::runtime_error("RidgeFill quality+qattn: invalid prefix or qattn share");
     }
-    for (int32_t i = 0; i < prefix; ++i) {
-        if (!std::isfinite(mass[i]) || mass[i] < 0.0) {
-            throw std::runtime_error("RidgeFill quality+qattn: non-finite or negative question mass");
-        }
-    }
-
     // Python round uses ties to even; do not depend on the process rounding mode.
     const double budget = share * prefix;
     int32_t count = int32_t(std::floor(budget));
     const double fraction = budget - count;
     if (fraction > 0.5 || (fraction == 0.5 && (count & 1))) {
         ++count;
+    }
+    return llama_ridgefill_sweep_top_k(mass, prefix, count);
+}
+
+std::vector<int32_t> llama_ridgefill_sweep_top_k(const std::vector<double> & mass, int32_t prefix, int32_t count) {
+    if (prefix < 0 || size_t(prefix) > mass.size() || count < 0 || count > prefix) {
+        throw std::runtime_error("RidgeFill: invalid prefix or exact-row count");
+    }
+    for (int32_t i = 0; i < prefix; ++i) {
+        if (!std::isfinite(mass[i]) || mass[i] < 0.0) {
+            throw std::runtime_error("RidgeFill quality+qattn: non-finite or negative question mass");
+        }
     }
     std::vector<int32_t> rows(prefix);
     std::iota(rows.begin(), rows.end(), 0);

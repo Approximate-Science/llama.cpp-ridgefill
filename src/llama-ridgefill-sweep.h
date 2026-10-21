@@ -73,6 +73,8 @@ std::vector<int32_t> llama_ridgefill_sweep_top_rows(
         int32_t prefix,
         double share);
 
+std::vector<int32_t> llama_ridgefill_sweep_top_k(const std::vector<double> & mass, int32_t prefix, int32_t count);
+
 std::vector<double> llama_ridgefill_sweep_question_mass(
         llama_context & ctx, int32_t seq_id, int32_t n_tokens, int32_t window_end,
         const std::vector<int32_t> & layers, const std::vector<ggml_tensor *> & windows);
