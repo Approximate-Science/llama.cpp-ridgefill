@@ -562,3 +562,68 @@ PASS HTTP defaults: 17 comparisons, zero-share equality, repeat, cancellation/re
 ```
 
 Commands: `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_chat_score.py --binary build-sweep/bin/llama-ridgefill-score --baseline-binary build-sweep/bin/llama-ridgefill-score-before-chat --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-chat-f16`; run the original check_score.py into build-sweep/score-gate-chat-regression; `PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Evidence: build-sweep/build-score-chat.log, check-score-chat-f16.log, check-score-chat-regression.log, check-http-chat-default.log, and score-gate-chat-f16/summary.json. Rejected options: using the 64-row last-window size as the turn cap (different experiment), including header rows in the query window, searching scored future rows, and silently falling back when no user turn exists. CPU correctness only; no GPU/full-model chat quality or release claim.
+
+## 2026-10-21: S1/vtail orchestration draft, blocked on libllama C API v2
+
+Created rf27-sweep-s1 from 2e06536c2, after reading the entire S1 C API v2 addition in RF27-INTERFACE.md. That commit contains the interface only. At this checkpoint rf27-s1 still points to it and src/llama-ext.h has no API_VERSION/S1/vtail declarations. The v2-dependent code is compile-guarded and requests fail by name with API v1. This is a driver/scorer draft, NOT a built or passing S1 implementation; its v2 paths cannot yet be compiled or executed against L-A's library.
+
+Implemented the orchestration in the driver: LOWER -> lower qattn mass/base count -> S1_FILL [0,P) -> S1_PROBE [end-W,end) -> get mass/top-k/special union -> set rows -> optional vtail -> LATE prefix/tail -> disable vtail -> FULL. Added an integer-count top-k helper so the half-even S1 budget is not converted back to a floating share. S1 exact rows replace the base rows; only requested special rows are explicitly united back in. Factor 0 selects at least one row; the budget saturates at P. Existing cancellation clears sequence memory before restoring FULL. The new C API must preserve that existing empty-sequence reset contract.
+
+Vtail uses a first LATE tail decode of at least min(C,N-P) rows. The scorer raises context batch/ubatch capacities to fit; the driver refuses undersized contexts and the short-tail case where calibration would consume the server's deferred final token. The scorer refuses calibration reaching scored NLL targets rather than changing C. S1/vtail requests default to end=N-K in the scorer; explicit endpoint overrides still work, and serving defaults to N. Both features default off. S1 is restricted to quality+qattn with positive qattn share and no header-row rule; registered class/digit/special settings are supplied through the existing base selector. Exact controls can carry the new options with mode off and remain exact.
+
+Reporting is explicit about extra work: S1_FILL = P*(H^2 + K/V projection MACs) at each late attention layer; S1_PROBE = W exact rows at every late layer over the visible prefix plus causal window; vtail = calibration rows*(H^2 + V projection MACs) at each late attention layer. The standalone scorer adds all three terms to the existing analytic cold-prefill cost and reports the counts/terms individually, with prefix_kv_reused=false. Final source counts use s1 rather than qattn. Note for L-B: wire the new driver fields s1/s1_window/s1_factor/projector/special_exact/vtail/vtail_rows, consume get_cost()/base_row_count()/get_s1_mass()/get_vtail_scales(), and extend the strict source-key validator to accept s1. run_nll.py and the HTTP parser/reporting have NOT been modified in this draft, per ownership; their current source-key validator rejects an S1 result.
+
+Found lane T's completed dumps at kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail without needing the pending path relay. MANIFEST records kva commit 9dcf6d1a487e39b16d8b6796bdba17539b5e745e, N=700/P=500/S=4/W=64/end=700, two prompts, T3s/S1gw with and without vtail. The gate verifies SHA256SUMS and the tiny input hashes. It compares the last 64 target log-probabilities/LSE against the corresponding last 65 oracle logits with the final row dropped, rows exactly, S1 mass, and vtail scales for c=128 (rescale_skip_last=72), at chunks 50/128/512. Cost expectations use kva.compute and explicitly add the S1 prefix projector/KV pass. The c=200 oracle case is left to L-A's native harness because that calibration reads this scorer's NLL targets and is refused. L-A's native harness/port is not yet present at this checkpoint; native-harness comparison and the N-K S1 mass gate remain pending.
+
+Saved the baseline executable from 2e06536c2 as build-sweep/bin/llama-ridgefill-score-before-s1 (build 11883). Current completed checks:
+
+```text
+[100%] Built target llama-ridgefill-score
+[100%] Built target llama-server
+PASS defaults: byte-identical numerical outputs, row selection and cost report; two prompts, four modes, F32/F16
+PASS native scorer: 24/24 four-mode oracle comparisons, two K values, three chunk sizes
+PASS HTTP defaults: 17 comparisons, repeat, zero-share equality, cancellation/reuse, concurrent slots
+PASS named API v1 refusals for S1 and vtail
+SKIPPED S1 mass/rows/logits, vtail and S1 cost: libllama C API v2 is not available (gate exit 77)
+```
+
+Commands: `git switch -c rf27-sweep-s1 2e06536c2`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; the original tools/ridgefill/check_score.py with work=build-sweep/score-gate-s1-default; tools/ridgefill/check_s1_score.py with the paths in its README command, work=build-sweep/score-gate-s1-final-v1 and the saved baseline; `PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Logs: build-sweep/build-s1-final-v1.log, check-score-s1-default.log, check-score-s1-final-v1.log, check-http-s1-default.log. An initial server rebuild caught a missing relative include path for llama-ext.h; corrected it, and the subsequent full CPU build passed. No GPU work, no push, no quality or speedup claim. Next: rebase onto L-A's implementation, compile the guarded paths, run the frozen-reference/native-harness gates, and relay the source-key/cost interface to L-B.
+
+## 2026-10-21: S1/vtail v2 gates completed on L-A's implementation
+
+Rebased rf27-sweep-s1 onto b9a8e5add (engine 55605f1f0). The draft commit is now b455ebb95. This entry supersedes the draft's blocked/SKIPPED status and its provisional cost formulas. Both scorer and server compile against C API v2. The existing request order is correct for the updated reset contract: the caller runs seq_set, then the driver computes selection and calls set_vtail before LATE on every request. No libllama files changed here.
+
+The driver computes n_base itself through common_ridgefill_rows/select_rows_ext plus lower question mass, without loading reference rows. At all three chunk sizes (50, 128, 512), the frozen fixture gives n_base=217 and 217 final S1 rows; selchat gives n_base=220 and 222 final rows, including the special-only union. Both counts and every selected position equal lane T's dumps. T3s/S1gw, each with vtail off/on (c=128), pass 24/24 scorer comparisons over both prompts. Worst absolute target log-probability/LSE error is 1.7611186819976865e-7; worst relative S1 mass error is 1.357874859459952e-7 (bars 1e-4). Lower question mass, exact rows and vtail scales also match. S1 changes the row set and vtail changes logits, so both positive controls exercise their features.
+
+The gate compiles and invokes L-A's unmodified rf27-gates/rf_dump_rs.cpp with -DRF27_API. All 12 native arms match the frozen logits/scales, including c=200 (k0); native mass/rows/scales agree with the driver. The scorer continues to refuse c=200 for K=64 because that calibration would read NLL targets. Thus k0 is tested natively, not SKIPPED. A three-document run (fixture, selchat, fixture with unique document names) matches fresh contexts byte-for-byte in log-probabilities, LSE, rows, S1 mass, vtail scales and cost. This tests re-enabling vtail after every seq_set. Factor controls cover 0 (one row minimum), 0.5/1.5 (half-even 108.5/325.5), and saturation at P.
+
+Added a live reference gate using lane T's engine_ref_s1_vtail.s1_mass_gdnwin and run_arm with end=N-K=636. On both prompts, S1 with and without vtail matches the reference's base count, mass, rows and NLL logits. Replacing all 64 scored targets leaves selection, calibration and the first predictive LSE byte-identical. The scorer's implicit endpoint and explicit known endpoint agree. The gate uses lane T's existing Python environment for transformers; no package was installed.
+
+Cost correction from the actual engine graph:
+- S1_FILL charges P*(H^2 + 2*H*hkv*d) per late attention layer, in addition to the existing LATE estimate. No prefix KV reuse is claimed.
+- S1_PROBE charges W linear/GDN/MLP rows and dense QK/PV over n_kv, including masked and padded cells. The driver queries the existing cache get_n_kv for the sequence's stream at each probe ubatch, rather than estimating visible causal pairs. It reports the accumulated probe_kv_pairs.
+- build_ridgefill_vtail applies one projector and calls its V projection twice (true and filled values), so extra MACs are c*(H^2 + 2*H*hkv*d) per late attention layer. The full-cache elementwise scale and one read/write are reported separately as element count and bytes, using actual cache cells and V type; they are not silently converted into MACs. Norms and other elementwise arithmetic remain outside the existing analytic MAC model. L-A's NOTES wording "projector ... twice" does not match its code: only the V projection runs twice.
+
+Concrete tiny F32 cost: S1_FILL 4,096,000 MACs; S1_PROBE 19,333,120 MACs (64*768=49,152 query/cell pairs); vtail(c=128) 1,048,576 MACs, 24,576 cache elements scaled, 98,304 bytes read and 98,304 bytes written. The gate independently derives these from kva.compute dimensions and the tiny cache padding, checks the total report, and would fail with the old causal-only probe or single-V calibration formulas. These are analytic counts, not a speedup measurement.
+
+```text
+[100%] Built target llama-ridgefill-score
+[100%] Built target llama-server
+PASS defaults: byte-identical numerical outputs, row selection and cost report; two prompts, four modes, F32/F16
+PASS scorer S1/T3s/vtail: 24/24 frozen-reference comparisons, chunks 50/128/512
+PASS fixture: computed base count 217, final S1 rows 217
+PASS selchat: computed base count 220, final S1 rows 222
+PASS native harness: 12/12 arms including c=200; scorer/native mass, rows and vtail scales agree
+PASS repeated requests: reused context == fresh contexts, vtail enabled again after each seq_set
+PASS both prompts: N-K default matches reference; future targets do not change selection or calibration
+PASS S1 factor: zero minimum, ties-to-even budgets 108.5/325.5, saturation at P
+PASS original native scorer: 24/24 four-mode oracle comparisons and stock/zero-share/endpoint/BCa controls
+PASS HTTP defaults: 17 comparisons, repeat, zero-share equality, cancellation/reuse and concurrent slots
+PASS named refusals: S1 window overlaps prefix; vtail calibration reads NLL targets
+```
+
+Commands: `git rebase b9a8e5add`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; native harness compile command in tools/ridgefill/README.md (build directory build-sweep); `/var/home/dylan/projects/research/kva-wt-q27/.venv/bin/python tools/ridgefill/check_s1_score.py --binary build-sweep/bin/llama-ridgefill-score --baseline-binary build-sweep/bin/llama-ridgefill-score-before-s1 --native-dump build-sweep/rf-dump-s1 --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --reference /var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-s1-v2-full3`; original check_score.py with work=build-sweep/score-gate-s1-v2-regression; `python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Python checks used PYTHONDONTWRITEBYTECODE=1. Logs: build-sweep/build-s1-v2-cost.log, check-score-s1-v2-full3.log, check-score-s1-v2-regression.log, check-http-s1-v2-default.log; machine-readable new gate result: score-gate-s1-v2-full3/summary.json.
+
+Harness setup failures were corrected before the final passing run: the native dump initially lacked -DRF27_API and refused quality; the reuse test initially repeated a document name and hit the scorer's input validation; system Python lacked transformers, so the live reference uses its existing environment. No engine fallback or weakened tolerance was introduced.
+
+L-B handoff: the earlier driver fields remain unchanged; get_cost now also returns s1_probe_kv_pairs, vtail_cache_rows/elements/read_bytes/write_bytes. Copy those into HTTP reports, add the S1 extra MACs to the base report, and allow the s1 source key in the wrapper validator. S1 HTTP parser/report integration remains L-B's work; the HTTP checks above cover existing/default modes only. No GPU/full-model quality or speed measurement, no release approval, no push.

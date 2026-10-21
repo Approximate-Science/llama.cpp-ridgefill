@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "../../src/llama-ext.h"
 #include "../../src/llama-ridgefill-sweep.h"
 
 #include <cstddef>
@@ -21,6 +22,13 @@ struct server_ridgefill_sweep_params {
     // Exclusive selector boundary; -1 uses the prompt end (or prefix end when blind).
     int32_t qattn_end = -1;
     bool qattn_blind = false;
+    bool s1 = false;
+    int32_t s1_window = 256;
+    double s1_factor = 1.0;
+    const llama_ridgefill * projector = nullptr;
+    bool special_exact = false;
+    bool vtail = false;
+    int32_t vtail_rows = 512;
     bool all_tail_logits = false;
     // Optional half-open range of exact tail rows whose logits are needed for scoring.
     int32_t logits_begin = -1;
@@ -30,6 +38,22 @@ struct server_ridgefill_sweep_params {
     ggml_type type = GGML_TYPE_F16;
     size_t max_bytes = LLAMA_RIDGEFILL_SWEEP_MAX_BYTES;
 };
+
+struct server_ridgefill_sweep_cost {
+    int32_t s1_fill_rows = 0;
+    int32_t s1_probe_rows = 0;
+    int32_t vtail_rows = 0;
+    double s1_fill_macs = 0;
+    double s1_probe_macs = 0;
+    double vtail_macs = 0;
+    uint64_t s1_probe_kv_pairs = 0;
+    uint32_t vtail_cache_rows = 0;
+    uint64_t vtail_cache_elements = 0;
+    uint64_t vtail_cache_read_bytes = 0;
+    uint64_t vtail_cache_write_bytes = 0;
+};
+
+int32_t server_ridgefill_sweep_api_version();
 
 enum class server_ridgefill_sweep_result {
     quality,
@@ -50,12 +74,16 @@ struct server_ridgefill_sweep {
     int32_t first_output_position() const { return output_position; }
     int32_t window_begin() const { return win_begin; }
     int32_t window_end() const { return win_end; }
+    int32_t base_row_count() const { return n_base; }
+    const std::vector<double> & get_s1_mass() const { return s1_mass; }
+    const std::vector<float> & get_vtail_scales() const { return vtail_scales; }
+    const server_ridgefill_sweep_cost & get_cost() const { return cost; }
     // Finish after the deferred token is decoded. Cancel before releasing an incomplete slot.
     void finish_external_tail(llama_context * ctx, llama_seq_id seq);
     void cancel(llama_context * ctx, llama_seq_id seq);
 
 private:
-    enum class phase { lower, mass, rows, prefix, tail, external, done };
+    enum class phase { lower, mass, rows, s1_fill, s1_probe, s1_rows, prefix, tail, external, done };
     phase next = phase::lower;
     int32_t position = 0;
     int32_t n_lower = 0;
@@ -63,9 +91,14 @@ private:
     int32_t output_position = -1;
     int32_t win_begin = -1;
     int32_t win_end = -1;
+    int32_t n_base = 0;
     bool active = false;
+    bool vtail_enabled = false;
     std::unique_ptr<llama_ridgefill_sweep_buffer> hidden;
     std::vector<double> mass;
+    std::vector<double> s1_mass;
+    std::vector<float> vtail_scales;
+    server_ridgefill_sweep_cost cost;
     std::vector<llama_pos> rows;
     std::vector<int32_t> layers;
     std::vector<std::unique_ptr<llama_ridgefill_sweep_buffer>> windows;
@@ -73,6 +106,10 @@ private:
     void sweep_lower(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void question_mass(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params);
     void select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params);
+    void prepare_cost(const llama_model & model, const server_ridgefill_sweep_params & params);
+    void sweep_s1_fill(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
+    void sweep_s1_probe(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
+    void select_s1_rows(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void sweep_tail(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, int32_t count, bool output_all, bool output_last,
@@ -83,7 +120,7 @@ private:
             const std::vector<llama_pos> &, const server_ridgefill_sweep_params &);
 };
 
-// Call only for quality+qattn. Zero share returns quality before allocation or context access.
+// Zero qattn share returns quality before allocation unless S1 or vtail needs the two-sweep flow.
 // A step runs at most one ubatch or one mass/selection stage, so the server can service other slots.
 // base_rows includes the caller's class, digit, special and header selection from select_rows_ext.
 server_ridgefill_sweep_result server_ridgefill_sweep_step(
