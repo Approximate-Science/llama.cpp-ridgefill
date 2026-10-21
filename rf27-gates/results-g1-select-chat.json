@@ -1,0 +1,256 @@
+{
+  "summary": {
+    "gate": "G1-select-chat",
+    "checks": 42,
+    "passed": 42,
+    "added_in_prefix": 8,
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "check": "crafted-share0-digits0-special0-header0",
+      "result": "PASS",
+      "n": 0,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits0-special0-header1",
+      "result": "PASS",
+      "n": 7,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits0-special0-header2",
+      "result": "PASS",
+      "n": 12,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits0-special0-header3",
+      "result": "PASS",
+      "n": 16,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits0-special1-header0",
+      "result": "PASS",
+      "n": 8,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits0-special1-header1",
+      "result": "PASS",
+      "n": 13,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits0-special1-header2",
+      "result": "PASS",
+      "n": 17,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits0-special1-header3",
+      "result": "PASS",
+      "n": 21,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special0-header0",
+      "result": "PASS",
+      "n": 20,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special0-header1",
+      "result": "PASS",
+      "n": 27,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special0-header2",
+      "result": "PASS",
+      "n": 32,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special0-header3",
+      "result": "PASS",
+      "n": 36,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special1-header0",
+      "result": "PASS",
+      "n": 28,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special1-header1",
+      "result": "PASS",
+      "n": 33,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special1-header2",
+      "result": "PASS",
+      "n": 37,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0-digits1-special1-header3",
+      "result": "PASS",
+      "n": 41,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special0-header0",
+      "result": "PASS",
+      "n": 124,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special0-header1",
+      "result": "PASS",
+      "n": 130,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special0-header2",
+      "result": "PASS",
+      "n": 133,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special0-header3",
+      "result": "PASS",
+      "n": 136,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special1-header0",
+      "result": "PASS",
+      "n": 132,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special1-header1",
+      "result": "PASS",
+      "n": 136,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special1-header2",
+      "result": "PASS",
+      "n": 138,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits0-special1-header3",
+      "result": "PASS",
+      "n": 141,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special0-header0",
+      "result": "PASS",
+      "n": 144,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special0-header1",
+      "result": "PASS",
+      "n": 150,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special0-header2",
+      "result": "PASS",
+      "n": 153,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special0-header3",
+      "result": "PASS",
+      "n": 156,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special1-header0",
+      "result": "PASS",
+      "n": 152,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special1-header1",
+      "result": "PASS",
+      "n": 156,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special1-header2",
+      "result": "PASS",
+      "n": 158,
+      "diff": null
+    },
+    {
+      "check": "crafted-share0.5-digits1-special1-header3",
+      "result": "PASS",
+      "n": 161,
+      "diff": null
+    },
+    {
+      "check": "control-crafted-special-changes-set",
+      "result": "PASS"
+    },
+    {
+      "check": "control-crafted-header-changes-set",
+      "result": "PASS"
+    },
+    {
+      "check": "control-no-added-tokens-rules-neutral",
+      "result": "PASS",
+      "n": 147
+    },
+    {
+      "check": "edge-header-rows-stop-at-prefix-end",
+      "result": "PASS"
+    },
+    {
+      "check": "oracle-fill-with-chat-rows",
+      "result": "PASS",
+      "max_rel": 6.958451876926119e-07,
+      "rows": 158
+    },
+    {
+      "check": "last-marker-[2, 1]",
+      "result": "PASS",
+      "engine": 10,
+      "python": 10
+    },
+    {
+      "check": "last-marker-[1]",
+      "result": "PASS",
+      "engine": 499,
+      "python": 499
+    },
+    {
+      "check": "last-marker-[2, 284]",
+      "result": "PASS",
+      "engine": 600,
+      "python": 600
+    },
+    {
+      "check": "last-marker-[7, 7, 7, 7, 7]",
+      "result": "PASS",
+      "engine": -1,
+      "python": -1
+    },
+    {
+      "check": "last-marker-[274]",
+      "result": "PASS",
+      "engine": 699,
+      "python": 699
+    }
+  ]
+}

@@ -39,6 +39,7 @@ struct llama_ridgefill {
     // host tables for the exact-row selection (format 2)
     std::vector<float>   score;    // [n_vocab], non-finite = the token is in no class
     std::vector<uint8_t> is_digit; // [n_vocab], token text contains an ASCII digit (added tokens excluded)
+    std::vector<uint8_t> is_special; // [n_vocab], an added token: vocab attribute control, user-defined or unknown
 
     std::vector<ggml_context_ptr>        ctxs;
     std::vector<ggml_backend_buffer_ptr> bufs;

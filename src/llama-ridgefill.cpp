@@ -493,10 +493,15 @@ static void llama_ridgefill_init_impl(const llama_model & model, const char * pa
         const float * score = (const float *) read_tensor(score_meta->name, n_vocab*sizeof(float));
         rf.score.assign(score, score + n_vocab);
 
-        // digit rows: the token text contains an ASCII digit; added tokens (control, user-defined) excluded
+        // digit rows: the token text contains an ASCII digit; added tokens (control, user-defined) excluded.
+        // special rows: the added tokens themselves (llama.cpp's converter stores HF added_tokens_decoder entries as
+        // control (special) or user-defined (non-special) tokens, <unk> as unknown); padding (unused) is neither
         rf.is_digit.assign(n_vocab, 0);
+        rf.is_special.assign(n_vocab, 0);
         const int excluded = LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_UNUSED;
+        const int special  = LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN;
         for (size_t id = 0; id < n_vocab; ++id) {
+            rf.is_special[id] = (model.vocab.token_get_attr(id) & special) != 0;
             if (model.vocab.token_get_attr(id) & excluded) {
                 continue;
             }
@@ -558,17 +563,41 @@ void llama_ridgefill_seq_set(llama_context * ctx, llama_seq_id seq_id, llama_pos
     ctx->ridgefill_seq_set(seq_id, p_end);
 }
 
+llama_ridgefill_select_params llama_ridgefill_select_default_params(const llama_ridgefill * rf) {
+    llama_ridgefill_select_params p = {};
+    p.share         = rf ? rf->share_default  : 0.5f;
+    p.digits        = rf ? rf->digits_default : false;
+    p.special_exact = false;
+    p.header_rows   = 0;
+    return p;
+}
+
 int32_t llama_ridgefill_select_rows(const llama_ridgefill * rf, const llama_token * tokens, int32_t n_prefix,
         float share, bool digits, llama_pos * out) {
+    llama_ridgefill_select_params p = llama_ridgefill_select_default_params(rf);
+    p.share  = share;
+    p.digits = digits;
+    return llama_ridgefill_select_rows_ext(rf, tokens, n_prefix, &p, out);
+}
+
+int32_t llama_ridgefill_select_rows_ext(const llama_ridgefill * rf, const llama_token * tokens, int32_t n_prefix,
+        const llama_ridgefill_select_params * params, llama_pos * out) {
     // SPEC §4, the oracle's class_rows (q27/rf27_quality.py) + select.digits, per prompt: of the prefix rows whose
     // token has a finite class score, the round-half-even(share x matches) rarest (highest score), ties by lower
-    // position; united with the rows whose token text has an ASCII digit (added tokens excluded); ascending
-    if (!rf || rf->score.empty() || rf->is_digit.size() != rf->score.size()) {
+    // position; united with the rows whose token text has an ASCII digit (added tokens excluded); with
+    // special_exact, the rows whose token is an added token (is_special); with header_rows K, the K rows after each
+    // added token (positions i+1 .. i+K of an added token at i, within the prefix); ascending
+    if (!rf || rf->score.empty() || rf->is_digit.size() != rf->score.size() || rf->is_special.size() != rf->score.size()) {
         LLAMA_LOG_ERROR("%s: the projector has no row table (format 2 needed)\n", __func__);
         return -1;
     }
-    if (n_prefix < 0 || (n_prefix > 0 && (!tokens || !out)) || !(share >= 0.0f && share <= 1.0f)) {
-        LLAMA_LOG_ERROR("%s: invalid arguments (n_prefix %d, share %g)\n", __func__, n_prefix, share);
+    if (!params) {
+        LLAMA_LOG_ERROR("%s: missing selection parameters\n", __func__);
+        return -1;
+    }
+    const float share = params->share;
+    if (n_prefix < 0 || (n_prefix > 0 && (!tokens || !out)) || !(share >= 0.0f && share <= 1.0f) || params->header_rows < 0) {
+        LLAMA_LOG_ERROR("%s: invalid arguments (n_prefix %d, share %g, header_rows %d)\n", __func__, n_prefix, share, params->header_rows);
         return -1;
     }
 
@@ -596,9 +625,15 @@ int32_t llama_ridgefill_select_rows(const llama_ridgefill * rf, const llama_toke
     for (int64_t j = 0; j < k && j < (int64_t) matches.size(); ++j) {
         pick[matches[j]] = 1;
     }
-    if (digits) {
-        for (int32_t i = 0; i < n_prefix; ++i) {
+    for (int32_t i = 0; i < n_prefix; ++i) {
+        if (params->digits) {
             pick[i] |= rf->is_digit[tokens[i]];
+        }
+        if (rf->is_special[tokens[i]]) {
+            pick[i] |= params->special_exact;
+            for (int32_t j = i + 1; j <= i + params->header_rows && j < n_prefix; ++j) {
+                pick[j] = 1;
+            }
         }
     }
 
@@ -610,6 +645,23 @@ int32_t llama_ridgefill_select_rows(const llama_ridgefill * rf, const llama_toke
     }
 
     return n;
+}
+
+bool llama_ridgefill_token_is_special(const llama_ridgefill * rf, llama_token id) {
+    return rf && id >= 0 && id < (llama_token) rf->is_special.size() && rf->is_special[id];
+}
+
+int32_t llama_ridgefill_last_marker(const llama_token * tokens, int32_t n, const llama_token * marker, int32_t n_marker) {
+    // the start of the last occurrence of the token sequence `marker` in tokens[0, n), -1 if none
+    if (!tokens || !marker || n < 0 || n_marker <= 0) {
+        return -1;
+    }
+    for (int32_t i = n - n_marker; i >= 0; --i) {
+        if (std::equal(marker, marker + n_marker, tokens + i)) {
+            return i;
+        }
+    }
+    return -1;
 }
 
 int32_t llama_ridgefill_set_alpha(llama_context * ctx, float alpha) {

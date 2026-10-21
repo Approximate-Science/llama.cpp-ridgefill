@@ -213,6 +213,31 @@ LLAMA_API const char * llama_ridgefill_desc          (const struct llama_ridgefi
 LLAMA_API int32_t llama_ridgefill_select_rows(const struct llama_ridgefill * rf, const llama_token * tokens,
         int32_t n_prefix, float share, bool digits, llama_pos * out);
 
+// the same, with the chat-template rules (CHAT-PLAN H1/H2; defaults: off): special_exact keeps the rows whose token
+// is an added token exact (vocab attribute control, user-defined or unknown = HF tokenizer added_tokens_decoder, e.g.
+// <|im_start|>, <|im_end|>, <think>); header_rows K keeps the K rows after each added token exact (positions i+1 ..
+// i+K for an added token at i, within the prefix; independent of special_exact)
+struct llama_ridgefill_select_params {
+    float   share;         // class rows, [0, 1]
+    bool    digits;        // digit rows
+    bool    special_exact; // added-token rows
+    int32_t header_rows;   // rows after each added token, >= 0
+};
+
+// share and digits from the projector, special_exact off, header_rows 0
+LLAMA_API struct llama_ridgefill_select_params llama_ridgefill_select_default_params(const struct llama_ridgefill * rf);
+
+LLAMA_API int32_t llama_ridgefill_select_rows_ext(const struct llama_ridgefill * rf, const llama_token * tokens,
+        int32_t n_prefix, const struct llama_ridgefill_select_params * params, llama_pos * out);
+
+// the token is an added token (the special_exact / header_rows rule)
+LLAMA_API bool llama_ridgefill_token_is_special(const struct llama_ridgefill * rf, llama_token id);
+
+// question window = the last turn (CHAT-PLAN H3): the start of the last occurrence of the token sequence `marker`
+// (e.g. the tokens of "<|im_start|>user", tokenized with special parsing) in tokens[0, n), -1 if none. The window
+// is then [start, window_end) capped to its last C rows by the caller (the sweep driver)
+LLAMA_API int32_t llama_ridgefill_last_marker(const llama_token * tokens, int32_t n, const llama_token * marker, int32_t n_marker);
+
 // the recurrent-state correction scale in [0, 1] (default: the projector's alpha_default); 0 ok, < 0 refused
 LLAMA_API int32_t llama_ridgefill_set_alpha(struct llama_context * ctx, float alpha);
 
