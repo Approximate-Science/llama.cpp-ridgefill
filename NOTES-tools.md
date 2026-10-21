@@ -377,3 +377,40 @@ tests/ridgefill/run_g5_two_card.sh "out/g5-vulkan-$RF_REF/build/bin" "$RF_REF" "
 ```
 
 The scripts never submit bridge jobs themselves. Lane Q/coordinator supply access and record their actual GPU outcomes. The pinned archive version checks prevent a changed branch or stale executable from being reported as the selected build.
+
+## 2026-10-20: remove machine policy from the GPU G5 tools
+
+Coordinator relayed L-A's independent audit on integration fc3ee1cbb. The prior source audit was incomplete: it found paths/device IDs/TP assumptions but had no patterns for GPU models, target names or SDK releases. Removed the machine policy rather than excluding the new scripts from the audit. Rebased onto that integration tip; no src or server source changes.
+
+check_gpu_smoke.py now accepts any GPU descriptions by default, including any two Vulkan devices for --two-card. Optional --device-name-pattern REGEX restricts descriptions; both host wrappers accept it. The HIP target list is optional --hip-targets TARGETS (semicolon-separated); omission leaves CMake target detection intact. The optional SDK path keeps positional compatibility and also supports --rocm-sdk; default discovery uses ROCM_PATH, HIP_PATH, then hipconfig -R. SDK version validation moved into run_g5.py and derives the minimum from the pinned archive's ggml-hip/CMakeLists.txt. Any newer SDK is accepted. Optional --sdk-min-version VERSION raises that floor and cannot lower the backend requirement. SDK exports are prepared for child commands and preserve existing library search paths. Neither a GPU model/architecture nor a particular SDK release is required by code.
+
+Extended the audit with device-model names, architecture targets, SDK version strings, and both full and short PCI slot IDs. Its synthetic controls detect all new classes. It also rejects the actual old GPU scripts extracted from 20261fbe3 (regression control). Generic device inventories and loopback addresses are negative controls; loopback IPv4 is not mistaken for an SDK version. An initial regex used unsupported lookahead in rg's default engine; replaced it with ordinary delimiters, retaining the loopback negative control. No PCRE dependency or exclusions were added.
+
+```text
+GPU evidence/SDK/audit unit tests: 7 passed
+Wrapper/CLI invalid-input controls: 7 passed
+Real installed SDK: accepted above backend minimum; optional higher minimum refused (no HIP execution)
+Extended audit detects original machine-pinned scripts: PASS
+Extended RidgeFill manifest audit: 44 code files; rg rc 1; empty output
+Extended ALL changed-code audit vs upstream 1242be66f: 72 files; rg rc 1; empty output
+bash -n: both wrappers pass
+ty: All checks passed!
+git diff --check: PASS
+```
+
+Evidence: out/g5-neutral-gpu-tests.log, out/g5-portability-extended.log, out/g5-portability-all-changed.log, out/g5-portability-all-changed-files.json, out/g5-extended-old-regression.log. The first SDK export probe compared a lib64 spelling with the resolved lib spelling and failed its test assertion; the corrected probe compares canonical paths and passes. It did not execute a compiler/GPU. No GPU, full archive rebuild or numerical rerun was needed or performed for these tool-policy changes.
+
+This box's settings are explicit caller policy, only in these examples. After merging, pin REF to the integration SHA and use the existing MODEL/PROJECTOR/SDK paths from the previous handoff. Lane Q submits each single-card command as its own kind=host bridge job:
+
+```sh
+tests/ridgefill/run_g5_gpu.sh vulkan "$REF" out/gate1-qwen35 "$MODEL" "$PROJECTOR" "out/g5-vulkan-$REF"
+tests/ridgefill/run_g5_gpu.sh hip "$REF" out/gate1-qwen35 "$MODEL" "$PROJECTOR" "out/g5-hip-$REF" "$SDK" --hip-targets gfx1201 --sdk-min-version 7.10.0
+```
+
+Coordinator outside the bridge, same Vulkan archive build and exact REF:
+
+```sh
+tests/ridgefill/run_g5_two_card.sh "out/g5-vulkan-$REF/build/bin" "$REF" "$MODEL" "$PROJECTOR" "out/g5-two-card-$REF" --device-name-pattern 'R9700|Radeon AI PRO 9700'
+```
+
+Without those optional arguments, the scripts accept any matching GPU model, CMake-detected targets and any SDK meeting the backend minimum. Real backend outcomes remain for lane Q/coordinator to measure; no new hardware result is claimed here.
