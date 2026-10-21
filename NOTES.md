@@ -240,3 +240,15 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   response's `tokens` field is empty without return_tokens (an equality of two empty lists checked nothing).
 - Agreement with L-B: archive build, the 15 controls and the empty grep over its 36 files reproduce. Not covered by
   either instrument here: container isolation, Vulkan / HIP / CUDA execution, multi-GPU layer split (lane Q).
+
+## 20:20 rf27-integ: rf27-tools 20261fbe3 merged (afdaa3e26)
+- One conflict, NOTES-tools.md (a rebased copy of L-B's already-merged notes commit): took L-B's version; L-B's files
+  equal 20261fbe3. Code change: 5 lines in llama-bench (a RidgeFill summary line). Build clean.
+- Gates: canonical G1 speed 27/27, quality 27/27; G0 72/0; L-C native Tier-3 G1 12/12 runs + 3/3 controls; dispatch
+  44/44; select_rows 23/23.
+- My portability grep (72 changed code files) disagrees with L-B's "empty over 44 sources" on the new GPU smoke
+  scripts, which L-B's patterns do not cover (no GPU model / target names): tests/ridgefill/check_gpu_smoke.py
+  `--two-card` accepts only devices named R9700 / Radeon AI PRO 9700; tests/ridgefill/run_g5_gpu.sh fixes
+  `-DAMDGPU_TARGETS=gfx1201` and requires ROCm 7.10. Product code is unaffected (engine/common/tools: 0 hits); these
+  are this box's validation harness, but shipped in tests/ they should take the device-name pattern, the AMDGPU
+  target and the SDK version as arguments. L-B's files: reported, not edited.
