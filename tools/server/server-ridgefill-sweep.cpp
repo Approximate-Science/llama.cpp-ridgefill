@@ -13,29 +13,35 @@ server_ridgefill_sweep::server_ridgefill_sweep() = default;
 server_ridgefill_sweep::~server_ridgefill_sweep() = default;
 
 void server_ridgefill_sweep::decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
-        int32_t count, bool output_all, bool output_last) {
+        int32_t count, bool output_all, bool output_last, int32_t logits_begin, int32_t logits_end) {
     llama_batch batch = llama_batch_init(count, 0, 1);
     batch.n_tokens = count;
+    n_outputs = 0;
+    output_position = -1;
     for (int32_t i = 0; i < count; ++i) {
         batch.token[i] = tokens[position + i];
         batch.pos[i] = position + i;
         batch.n_seq_id[i] = 1;
         batch.seq_id[i][0] = seq;
-        batch.logits[i] = output_all || (output_last && i == count - 1);
+        batch.logits[i] = output_all || (output_last && i == count - 1) ||
+                (logits_begin >= 0 && position + i >= logits_begin && position + i < logits_end);
+        if (batch.logits[i]) {
+            if (n_outputs == 0) { output_position = position + i; }
+            ++n_outputs;
+        }
     }
     const int rc = llama_decode(ctx, batch);
     llama_batch_free(batch);
     if (rc != 0) {
         throw std::runtime_error("RidgeFill quality+qattn: sweep decode failed with code " + std::to_string(rc));
     }
-    n_outputs = output_all ? count : int(output_last);
     position += count;
 }
 
 void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
     const auto & model = ctx->get_model();
-    const int32_t end = params.qattn_blind ? params.n_prefix : params.n_tokens;
+    const int32_t end = params.qattn_end >= 0 ? params.qattn_end : (params.qattn_blind ? params.n_prefix : params.n_tokens);
     const int32_t start = std::max(0, end - params.qattn_window);
     if (!hidden) {
         if (params.split <= 0 || params.split >= (int32_t) model.hparams.n_layer() || params.n_embd != (int32_t) model.hparams.n_embd) {
@@ -81,7 +87,7 @@ void server_ridgefill_sweep::question_mass(llama_context * ctx, llama_seq_id seq
     std::vector<ggml_tensor *> buffers;
     for (const auto & window : windows) { buffers.push_back(window->tensor()); }
     mass = llama_ridgefill_sweep_question_mass(*ctx, seq, params.n_tokens,
-            params.qattn_blind ? params.n_prefix : params.n_tokens, layers, buffers);
+            params.qattn_end >= 0 ? params.qattn_end : (params.qattn_blind ? params.n_prefix : params.n_tokens), layers, buffers);
 }
 
 void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params) {
@@ -117,7 +123,8 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
     const int32_t end = params.n_tokens - int(params.defer_last_token);
     if (position < end) {
         const int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), end - position});
-        decode(ctx, seq, tokens, count, params.all_tail_logits, !params.defer_last_token && position + count == end);
+        decode(ctx, seq, tokens, count, params.all_tail_logits,
+                params.logits_begin < 0 && !params.defer_last_token && position + count == end, params.logits_begin, params.logits_end);
     }
     if (position == end && !params.defer_last_token) {
         finish_external_tail(ctx, seq);
@@ -165,12 +172,22 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
     if (params.n_batch <= 0 || params.qattn_window <= 0) {
         throw std::runtime_error("RidgeFill quality+qattn: batch and question window must be positive");
     }
+    if (params.qattn_end < -1 || params.qattn_end == 0 || params.qattn_end > params.n_tokens ||
+            (params.qattn_end >= 0 && params.qattn_blind)) {
+        throw std::runtime_error("RidgeFill quality+qattn: invalid or conflicting question-window boundary");
+    }
+    if ((params.logits_begin != -1 || params.logits_end != -1) &&
+            (params.logits_begin < params.n_prefix || params.logits_end <= params.logits_begin ||
+             params.logits_end > params.n_tokens || params.defer_last_token || params.all_tail_logits)) {
+        throw std::runtime_error("RidgeFill quality+qattn: scoring logits must be a nonempty exact-tail range without deferred output");
+    }
     llama_ridgefill_sweep_buffer::required_bytes(params.n_embd, params.n_tokens, params.type, params.max_bytes);
 
     if (!ctx || !tokens) {
         throw std::runtime_error("RidgeFill quality+qattn: missing context or prompt tokens");
     }
     sweep.n_outputs = 0;
+    sweep.output_position = -1;
     using phase = server_ridgefill_sweep::phase;
     switch (sweep.next) {
         case phase::lower:

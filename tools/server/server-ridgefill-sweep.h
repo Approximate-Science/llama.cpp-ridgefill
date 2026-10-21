@@ -15,8 +15,13 @@ struct server_ridgefill_sweep_params {
     int32_t split = 0;
     float qattn_share = -1.0f;
     int32_t qattn_window = 64;
+    // Exclusive selector boundary; -1 uses the prompt end (or prefix end when blind).
+    int32_t qattn_end = -1;
     bool qattn_blind = false;
     bool all_tail_logits = false;
+    // Optional half-open range of exact tail rows whose logits are needed for scoring.
+    int32_t logits_begin = -1;
+    int32_t logits_end = -1;
     // Leave the last token for the server's normal output/sampling batch.
     bool defer_last_token = false;
     ggml_type type = GGML_TYPE_F16;
@@ -39,6 +44,7 @@ struct server_ridgefill_sweep {
     int32_t lower_progress() const { return n_lower; }
     bool prefix_done() const { return next == phase::tail || next == phase::external || next == phase::done; }
     int32_t last_outputs() const { return n_outputs; }
+    int32_t first_output_position() const { return output_position; }
     // Finish after the deferred token is decoded. Cancel before releasing an incomplete slot.
     void finish_external_tail(llama_context * ctx, llama_seq_id seq);
     void cancel(llama_context * ctx, llama_seq_id seq);
@@ -49,6 +55,7 @@ private:
     int32_t position = 0;
     int32_t n_lower = 0;
     int32_t n_outputs = 0;
+    int32_t output_position = -1;
     bool active = false;
     std::unique_ptr<llama_ridgefill_sweep_buffer> hidden;
     std::vector<double> mass;
@@ -61,7 +68,8 @@ private:
     void select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params);
     void sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void sweep_tail(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
-    void decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, int32_t count, bool output_all, bool output_last);
+    void decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, int32_t count, bool output_all, bool output_last,
+            int32_t logits_begin = -1, int32_t logits_end = -1);
 
     friend server_ridgefill_sweep_result server_ridgefill_sweep_step(
             server_ridgefill_sweep &, llama_context *, llama_seq_id, const llama_token *,
