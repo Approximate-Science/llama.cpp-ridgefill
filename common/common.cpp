@@ -1804,10 +1804,27 @@ void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf
 }
 
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const llama_ridgefill * rf,
-        const llama_token *, int32_t n_prefix, const std::string & mode) {
+        const llama_token * tokens, int32_t n_prefix, const std::string & mode) {
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
-    if (!rf || n_prefix <= 0 || selected_mode == "off" || selected_mode == "speed") { return {}; }
-    throw std::runtime_error("RidgeFill: mode " + selected_mode + " requires llama_ridgefill_select_rows, which is unavailable in this build");
+    if (!common_ridgefill_mode_valid(selected_mode)) { throw std::invalid_argument("RidgeFill: invalid mode " + selected_mode); }
+    if (selected_mode == "off" || selected_mode == "speed" || n_prefix == 0) { return {}; }
+    if (!rf || !tokens || n_prefix < 0) { throw std::invalid_argument("RidgeFill: class/digit selection requires a projector, tokens and nonnegative prefix length"); }
+    if (!(params.ridgefill_share > 0 && params.ridgefill_share <= 1)) {
+        throw std::invalid_argument("RidgeFill: --ridgefill-share must be resolved and in (0, 1]");
+    }
+    if (params.ridgefill_digits != 0 && params.ridgefill_digits != 1) {
+        throw std::invalid_argument("RidgeFill: --ridgefill-digits must be resolved to on or off");
+    }
+    std::vector<llama_pos> rows(n_prefix);
+    const int32_t count = llama_ridgefill_select_rows(rf, tokens, n_prefix, params.ridgefill_share, params.ridgefill_digits != 0, rows.data());
+    if (count < 0 || count > n_prefix) { throw std::runtime_error("RidgeFill: llama_ridgefill_select_rows refused mode " + selected_mode); }
+    rows.resize(count);
+    for (size_t i = 0; i < rows.size(); ++i) {
+        if (rows[i] < 0 || rows[i] >= n_prefix || (i > 0 && rows[i] <= rows[i - 1])) {
+            throw std::runtime_error("RidgeFill: llama_ridgefill_select_rows returned invalid prefix positions");
+        }
+    }
+    return rows;
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {
