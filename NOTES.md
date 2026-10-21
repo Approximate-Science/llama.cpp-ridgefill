@@ -288,4 +288,9 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   hits are gone (now --device-name-pattern / --hip-targets / --sdk-min-version, defaults: any GPU, CMake-detected
   targets, SDK minimum only); the remaining 4 hits are the known benign ones (.gitignore AGENTS.local.md,
   run_g5.py's pattern list and planted controls, g0_dense.sh clearing *_VISIBLE_DEVICES). Agrees with L-B's empty
-  result over the same 72+ files (its patterns do not flag those 4). L-B's test_gpu_smoke.py unit tests run here.
+  result over the same 72+ files (its patterns do not flag those 4).
+- L-B's tests/ridgefill/test_gpu_smoke.py here (run from its directory, with <repo>/out/ created): 6 of 7 tests
+  pass; test_extended_audit_positive_and_neutral_controls errors because run_g5.py's audit runs `rg` (ripgrep) as a
+  subprocess and this sandbox has no rg executable (only a shell function). An environment dependency, not a logic
+  failure: run_g5.py needs ripgrep installed (worth stating in tests/ridgefill/README.md or a grep fallback; L-B's).
+  An earlier version of this note said the tests ran; it was written before reading the result.
