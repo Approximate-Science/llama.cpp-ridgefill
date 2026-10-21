@@ -1,0 +1,12 @@
+PASS defaults: old binary == new default == explicit defaults, raw/templated tokens, all four modes, F32/F16 KV and h_S
+PASS chat special=False headers=0 mode=turn cap=256 window=[380,636) across 3 chunks
+PASS chat special=True headers=0 mode=last cap=256 window=[572,636) across 3 chunks
+PASS chat special=False headers=3 mode=last cap=256 window=[572,636) across 3 chunks
+PASS chat special=True headers=3 mode=turn cap=256 window=[380,636) across 3 chunks
+PASS chat special=True headers=3 mode=turn cap=32 window=[604,636) across 3 chunks
+PASS chat special=True headers=3 mode=turn cap=1024 window=[306,636) across 3 chunks
+PASS chat special=True headers=2 mode=turn cap=256 window=[606,636) across 3 chunks
+PASS chat special=True headers=2 mode=turn cap=256 window=[666,700) across 3 chunks
+PASS controls: future user headers/targets excluded; turn ignores last-window size; zero share == chat quality; chat rows change selection
+PASS chat paired wrapper: both selector knobs, per-document turn bounds, fresh-context equality and real BCa
+PASS named refusals: missing/future-only/partial/empty headers, invalid knobs and incompatible modes

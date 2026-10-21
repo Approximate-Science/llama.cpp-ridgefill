@@ -1,4 +1,4 @@
-INFO upstream base 1242be66f65d5d8a3d996ba56d6de106ced98cf6, branch a40a4ad17+dirty
+INFO upstream base 1242be66f65d5d8a3d996ba56d6de106ced98cf6, branch cbfebd8c0+dirty
 PASS G0 off        llama-fa0-b128-ub64: no projector, byte-identical to upstream
 PASS G0 T>=N       llama-fa0-b128-ub64: projector loaded, nothing filled, byte-identical
 PASS dense fill      llama-fa0-b128-ub64 (tol 1e-4): logits rel 4.28e-07 kv rel max 8.14e-06

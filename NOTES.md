@@ -336,3 +336,17 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
 - rf27-integ after merging c6c485629 (a40a4ad17): build clean; g1_select_chat 42/42; canonical G1 speed 27/27,
   quality 27/27; G0 72/0; G0 server 8/8; L-C native Tier-3 G1 12/12 + 3/3; check_score 24/24; dispatch 44/44;
   select_rows 23/23. Plumbing (flags / per-request fields) not done here: specified for L-B, window for L-C.
+
+## 23:10-23:30 rf27-integ: L-C's last-user-turn window + chat rows in the scorer (rf27-sweep 51d57b1fd) merged
+- Review: libllama untouched (tools/ridgefill, tools/server/server-ridgefill-sweep.{h,cpp}, notes). Defaults
+  (qattn_window_mode "last", qattn_turn_cap 256) give win_end = the old end expression and win_begin =
+  max(0, end - qattn_window) as before, same window-buffer size, mass end unchanged, new validations accept them:
+  a no-op for existing modes. Turn rule vs my 22:50 note: the marker is "<|im_start|>user\n" (newline included) and
+  the window starts after it, [max(start + n, end - cap), end); missing marker / empty turn / turn+blind are named
+  refusals (no fallback). L-C's choice for the driver; RF27-INTERFACE.md corrected (23:10) so lane T mirrors it.
+  The scorer now calls select_rows_ext directly (defaults select the same rows; chat knobs refused with speed).
+- Gates on the merged tree: canonical G1 speed 27/27, quality 27/27; G0 72/0; L-C native Tier-3 G1 12/12 + 3/3;
+  check_score 24/24; g1_select_chat 42/42; select_rows 23/23; dispatch 44/44; L-C HTTP sweep (defaults) 3/3;
+  L-C check_chat_score.py against a baseline scorer built from a clean archive of d619c13d6: all PASS (defaults
+  byte-identical old == new == explicit, raw and templated, four modes, F32/F16; 8 chat configurations incl. caps 32
+  / 256 / 1024 across 3 chunk sizes; controls; paired wrapper; named refusals).
