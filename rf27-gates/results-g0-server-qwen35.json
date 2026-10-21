@@ -73,13 +73,13 @@
       "check": "signal-sigint-twice-busy-fork-exits-1-promptly",
       "result": "PASS",
       "up": {
-        "rc": -11,
-        "seconds": 0.414,
+        "rc": 1,
+        "seconds": 0.003,
         "second_interrupt_message": true
       },
       "fork": {
         "rc": 1,
-        "seconds": 0.004,
+        "seconds": 0.003,
         "second_interrupt_message": false
       }
     }
@@ -111,13 +111,13 @@
     },
     "sigint-twice-busy": {
       "up": {
-        "rc": -11,
-        "seconds": 0.414,
+        "rc": 1,
+        "seconds": 0.003,
         "second_interrupt_message": true
       },
       "fork": {
         "rc": 1,
-        "seconds": 0.004,
+        "seconds": 0.003,
         "second_interrupt_message": false
       }
     }

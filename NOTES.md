@@ -333,3 +333,6 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   on the fixture's own prompt (no added tokens); header rows stop at the prefix end; the masked fill with the 158
   selected rows vs kva finish(exact_rows=R) 6.96e-07; last_marker vs a Python search on 5 markers (incl. none and the
   last row). Regression: select_rows 23/23, G0 72/0.
+- rf27-integ after merging c6c485629 (a40a4ad17): build clean; g1_select_chat 42/42; canonical G1 speed 27/27,
+  quality 27/27; G0 72/0; G0 server 8/8; L-C native Tier-3 G1 12/12 + 3/3; check_score 24/24; dispatch 44/44;
+  select_rows 23/23. Plumbing (flags / per-request fields) not done here: specified for L-B, window for L-C.
