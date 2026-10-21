@@ -38,18 +38,23 @@ def run(args) -> dict:
              ("embeddings", ["--embeddings"], "embeddings"),
              ("cache-reuse", ["--cache-reuse", "16"], "--cache-reuse"),
              ("row-split", ["-sm", "row"], "--split-mode row"))
-    for name, extra, message in cases:
-        command = [str(args.bin_dir / "llama-server"), *common, *server_args, *extra]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        text = result.stdout + result.stderr
-        (args.work / (name + ".log")).write_text(text)
-        check("startup-refuses-" + name, result.returncode == 1 and "RidgeFill" in text and message in text, returncode=result.returncode)
-    for name, extra, message in (("row-split", ["-sm", "row"], "--split-mode row"), ("embeddings", ["--embeddings", "1"], "embeddings")):
-        command = [str(args.bin_dir / "llama-bench"), *common, "-p", "700", "-n", "0", "-r", "1", *extra]
-        result = subprocess.run(command, capture_output=True, text=True, timeout=60)
-        text = result.stdout + result.stderr
-        (args.work / ("bench-" + name + ".log")).write_text(text)
-        check("bench-refuses-" + name, result.returncode == 1 and "RidgeFill" in text and message in text, returncode=result.returncode)
+    # Missing models/projectors and an invalid device prove validation precedes all loading.
+    for tool in ("llama-server", "llama-perplexity", "llama-bench"):
+        for index, (name, extra, message) in enumerate(cases):
+            options = extra + (["1"] if tool == "llama-bench" and name == "embeddings" else [])
+            path_args = ["-m", str(missing), "--ridgefill", str(missing), "-dev", "must-not-enumerate"]
+            # Alternate flag order; neither order may open an adapter, model or backend.
+            argv = [*options, *path_args] if index % 2 else [*path_args, *options]
+            command = [str(args.bin_dir / tool), *argv]
+            started = time.monotonic()
+            result = subprocess.run(command, capture_output=True, text=True, timeout=args.refusal_timeout)
+            elapsed = time.monotonic() - started
+            text = result.stdout + result.stderr
+            (args.work / (tool + "-" + name + ".log")).write_text(text)
+            check(tool + "-arguments-refuse-" + name,
+                  result.returncode != 0 and "RidgeFill" in text and message in text and
+                  "invalid device" not in text and "llama_model_loader" not in text and "initializing ..." not in text,
+                  returncode=result.returncode, seconds=elapsed)
 
     stock_args = common[:]
     index = stock_args.index("--ridgefill")
@@ -117,6 +122,7 @@ if __name__ == "__main__":
     parser.add_argument("--bin-dir", type=Path, required=True)
     parser.add_argument("--fixture", type=Path, required=True)
     parser.add_argument("--work", type=Path, required=True)
+    parser.add_argument("--refusal-timeout", type=float, default=5, help="maximum seconds for pre-load named refusals")
     parser.add_argument("--port", type=int, default=18110)
     parser.add_argument("--gpu-layers", type=int, default=0)
     parser.add_argument("--flash-attn", choices=("off", "on", "auto"), default="off")

@@ -44,8 +44,11 @@ def main():
         writer.write_header_to_file(); writer.write_kv_data_to_file(); writer.write_tensors_to_file(); writer.close()
 
     original = GGUFReader(args.fixture / "tiny-qwen35-f32.gguf")
-    pieces = original.get_field("tokenizer.ggml.tokens").contents()
-    types = original.get_field("tokenizer.ggml.token_type").contents()
+    token_field = original.get_field("tokenizer.ggml.tokens")
+    type_field = original.get_field("tokenizer.ggml.token_type")
+    assert token_field is not None and type_field is not None, "tiny fixture lacks tokenizer metadata"
+    pieces = token_field.contents()
+    types = type_field.contents()
     # Reuse all weights and row scores. Only the two control-token spellings and whitespace-prefix policy change.
     pieces[1], pieces[2] = "<|im_start|>", "<|im_end|>"
     model_path, projector_path = args.work / "chat.gguf", args.work / "projector-s4.gguf"
@@ -218,10 +221,10 @@ def main():
     partial = ids.copy(); partial[end - 2:end - 2 + len(header)] = header
     run(partial, extra=chat_options, refused="no user header before the window endpoint")
     for extra, mode, message in ((["--qattn-turn-cap", 0], "quality+qattn", "--qattn-turn-cap must be positive"),
-                                 (["--qattn-window-mode", "bad"], "quality+qattn", "--qattn-window-mode must be last or turn"),
-                                 (["--header-rows", -1], "quality", "--header-rows must be nonnegative"),
-                                 (["--special-exact", "on"], "speed", "require a quality mode"),
-                                 (["--header-rows", 3], "speed", "require a quality mode"),
+                                 (["--qattn-window-mode", "bad"], "quality+qattn", "--ridgefill-qattn-window-mode must be last or turn"),
+                                 (["--header-rows", -1], "quality", "--ridgefill-header-rows must be nonnegative"),
+                                 (["--special-exact", "on"], "speed", "require quality"),
+                                 (["--header-rows", 3], "speed", "require quality"),
                                  (["--qattn-window-mode", "turn"], "quality", "turn requires quality+qattn")):
         run(crafted, mode, extra, refused=message)
     print("PASS named refusals: missing/future-only/partial/empty headers, invalid knobs and incompatible modes", flush=True)

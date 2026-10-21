@@ -97,7 +97,8 @@ int main(int argc, char ** argv) {
         params.ridgefill_digits = 1;
         check(select(tokens) == base);
         params.ridgefill_qattn_window_mode = "turn";
-        refused([&]() { select(tokens); }, "last-user-turn");
+        refused([&]() { select(tokens); }, "quality+qattn");
+        check(select(tokens, "quality+qattn") == base);
         check(select(tokens, "off").empty());
         params.ridgefill_qattn_window_mode = "last";
         printf("PASS: %d common class/digit/special/header selector checks\n", checks);

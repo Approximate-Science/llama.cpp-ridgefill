@@ -99,4 +99,4 @@ This gate compares default log-probabilities, logsumexp, mass and rows byte-for-
 
 The paired wrapper accepts the same new controls and `--mode off|speed|quality|quality+qattn` (default quality+qattn). It always pairs the selected mode against off; mode off is an identity control. Input remains the existing named-token-ID format. Lane T's frozen CHAT-TUNE/CHAT-HELDOUT schema is pending; no schema is guessed here.
 
-`--qattn-window-mode last|turn` (common alias `--ridgefill-qattn-window-mode`) defaults to last. The turn choice is exposed but refuses by name until the last-user-turn sweep implementation lands. No request silently substitutes the old window. The current NLL wrapper still freezes the last window before the scored targets.
+`--qattn-window-mode last|turn` and `--qattn-turn-cap N` accept the corresponding `--ridgefill-*` aliases in both the scorer and wrapper. Turn mode uses the last complete user header before the fixed N-K endpoint, excludes that header, and caps query rows independently of --qattn-window. It requires quality+qattn and refuses missing/empty turns by name. The engine and HTTP caller use the same sweep driver.

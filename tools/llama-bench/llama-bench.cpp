@@ -451,6 +451,7 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --ridgefill-digits <on|off>                  keep digit rows exact (default: projector)\n");
     printf("  --ridgefill-special-exact <on|off>          keep special rows exact in quality (default: off)\n");
     printf("  --ridgefill-header-rows <K>                 exact rows after each special token (default: 0)\n");
+    printf("  --ridgefill-qattn-turn-cap <N>                maximum turn window rows (default: 256; requires quality+qattn)\n");
     printf("  --ridgefill-qattn-window-mode <last|turn>    turn requires the server sweep\n");
     printf("  --ridgefill-alpha <n>                       correction scale in [0, 1] (default: projector)\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
@@ -535,7 +536,7 @@ static ggml_type ggml_type_from_name(const std::string & s) {
     return GGML_TYPE_COUNT;
 }
 
-static cmd_params parse_cmd_params(int argc, char ** argv) {
+static cmd_params parse_cmd_params(int argc, char ** argv, bool validate_only = false) {
     cmd_params        params;
     std::string       arg;
     bool              invalid_param = false;
@@ -564,6 +565,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         }
 
         try {
+            if (validate_only && (arg == "-dev" || arg == "--device" || arg == "-ot" || arg == "--override-tensor" || arg == "-rpc" || arg == "--rpc")) {
+                if (++i >= argc) { invalid_param = true; break; }
+                continue;
+            }
+            if (validate_only && arg == "--list-devices") { continue; }
             if (arg == "-h" || arg == "--help") {
                 print_usage(argc, argv);
                 exit(0);
@@ -1069,6 +1075,11 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 params.progress = true;
             } else if (arg == "--no-warmup") {
                 params.no_warmup = true;
+            } else if (arg == "--lora" || arg == "--control-vector" || arg == "--cache-reuse") {
+                if (++i >= argc) { invalid_param = true; break; }
+                if (arg == "--lora") { g_ridgefill.lora_adapters.push_back({argv[i], 1.0f, "", "", nullptr}); }
+                if (arg == "--control-vector") { g_ridgefill.control_vectors.push_back({1.0f, argv[i]}); }
+                if (arg == "--cache-reuse") { g_ridgefill.n_cache_reuse = std::stoi(argv[i]); }
             } else if (arg == "--ridgefill") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1077,6 +1088,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 g_ridgefill.ridgefill_path = argv[i];
             } else if (arg == "--ridgefill-tail" || arg == "--ridgefill-mode" || arg == "--ridgefill-share" ||
                        arg == "--ridgefill-special-exact" || arg == "--ridgefill-header-rows" || arg == "--ridgefill-qattn-window-mode" ||
+                       arg == "--qattn-window-mode" || arg == "--qattn-turn-cap" || arg == "--ridgefill-qattn-turn-cap" ||
                        arg == "--ridgefill-digits" || arg == "--ridgefill-alpha" || arg == "--ridgefill-qattn-share" || arg == "--ridgefill-qattn-window") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -1119,6 +1131,27 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
         print_usage(argc, argv);
         exit(1);
     }
+
+    try {
+        if (!g_ridgefill.ridgefill_path.empty()) {
+            common_params validation = g_ridgefill;
+            if (std::find(params.split_mode.begin(), params.split_mode.end(), LLAMA_SPLIT_MODE_ROW) != params.split_mode.end()) { validation.split_mode = LLAMA_SPLIT_MODE_ROW; }
+            validation.embedding = std::find(params.embeddings.begin(), params.embeddings.end(), true) != params.embeddings.end();
+            common_ridgefill_validate_options(validation);
+        }
+    } catch (const std::exception & error) {
+        fprintf(stderr, "%s\n", error.what());
+        exit(1);
+    }
+    if (!g_ridgefill.lora_adapters.empty() || !g_ridgefill.control_vectors.empty() || g_ridgefill.n_cache_reuse != 0) {
+        fprintf(stderr, "llama-bench does not support --lora, --control-vector or --cache-reuse\n");
+        exit(1);
+    }
+    if (g_ridgefill.ridgefill_mode == "quality+qattn") {
+        fprintf(stderr, "--ridgefill-mode quality+qattn requires the server's question-attention sweep\n");
+        exit(1);
+    }
+    if (validate_only) { return params; }
 
     if (!params.hf_repo.empty()) {
         for (size_t i = 0; i < params.hf_repo.size(); i++) {
@@ -2326,20 +2359,12 @@ int llama_bench(int argc, char ** argv) {
     fprintf(stderr, "warning: sanitizer enabled, performance may be affected\n");
 #endif
 
+    parse_cmd_params(argc, argv, true);
+
     // initialize backends
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
-    try {
-        if (!g_ridgefill.ridgefill_path.empty()) { common_ridgefill_validate_options(g_ridgefill); }
-    } catch (const std::exception & error) {
-        fprintf(stderr, "%s\n", error.what());
-        return 1;
-    }
-    if (g_ridgefill.ridgefill_mode == "quality+qattn") {
-        fprintf(stderr, "--ridgefill-mode quality+qattn requires the server's question-attention sweep\n");
-        return 1;
-    }
 
     auto * cpu_dev = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
     if (!cpu_dev) {

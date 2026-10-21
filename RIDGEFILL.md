@@ -134,6 +134,8 @@ Folder conversion needs no torch and defaults to Q8_0 maps. `--outtype f32|f16|b
 
 ### Options and evaluation
 
+Unsupported LoRA, control vectors, embeddings, nonzero --cache-reuse and --split-mode row combinations are rejected during argument validation before model or backend loading. Library-side guards remain active.
+
 With no projector, processing is stock. `--ridgefill FILE` defaults to speed mode; `--ridgefill-mode off` keeps the projector loaded and requests stock processing. Mode availability is listed above; unsupported combinations below refuse by name.
 
 | option | default | meaning |
@@ -146,15 +148,18 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
 | `--ridgefill-special-exact on\|off` | off | keep unknown/control/user-defined token rows exact in quality modes |
 | `--ridgefill-header-rows K` | 0 | keep the next K prefix rows after each special token exact, independently of special-exact |
-| `--ridgefill-qattn-window-mode last\|turn` | last | turn is reserved for last-user-turn selection and currently refuses pending sweep integration |
+| `--ridgefill-qattn-window-mode last\|turn` | last | last uses the fixed query window; turn uses rows after the last complete user header |
+| `--qattn-turn-cap N` (alias `--ridgefill-qattn-turn-cap`) | 256 | maximum query rows in turn mode; independent of --ridgefill-qattn-window |
 | `--ridgefill-alpha N` | projector (27B: 0) | state correction scale in [0,1]; quality currently requires 0 |
 | `--ridgefill-qattn-share N` | projector (27B: 0.2) | question-attention prefix share in [0,1]; server only |
-| `--ridgefill-qattn-window N` | 64 | positive query-window size; server only |
+| `--ridgefill-qattn-window N` | 64 | positive query-window size in last mode only; server only |
 | `--ridgefill-qattn-blind` | off | use queries immediately before the prefix end; server only |
 
 ```sh
 llama-server -m model.gguf -c 32768 -ngl 99 --ridgefill projector.gguf --ridgefill-mode speed --ridgefill-tail 4096
 ```
+
+In experimental turn mode (`--qattn-window-mode turn`, alias `--ridgefill-qattn-window-mode`), the driver parses the literal `<|im_start|>user\n` with special tokens enabled and no BOS. It finds the last complete header entirely before END, excludes the header, and captures `[max(turn_start, END-cap), END)`. END is the prompt end for HTTP and N-K for native NLL, which excludes scored targets from selection. Missing/empty user turns and turn plus blind selection refuse by name. Turn mode has no measured full-model chat quality verdict; release remains on hold. Defaults remain last/64 with special-exact off and header-rows 0.
 
 Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. For question-attention, use `--ridgefill-mode quality+qattn --ridgefill-qattn-share 0.2 --ridgefill-qattn-window 64 --ridgefill-alpha 0` on llama-server. Tier 3 is the recommended RidgeFill mode, subject to the raw-text tuning scope and chat-template limitation above.
 
@@ -165,9 +170,10 @@ Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill
 | `ridgefill_tail` | integer; 0 inherits the server tail, positive values must meet projector tail_min |
 | `ridgefill_special_exact` | boolean; inherits startup setting; quality modes only |
 | `ridgefill_header_rows` | nonnegative integer; inherits startup setting; quality modes only |
-| `ridgefill_qattn_window_mode` | last or turn; inherits startup setting; turn currently refuses by name |
+| `ridgefill_qattn_window_mode` | last or turn; inherits startup setting |
+| `ridgefill_qattn_turn_cap` | positive integer; inherits startup turn cap (256) |
 
-Class/digit/alpha settings and question share/window-size/blind are server startup settings. The chat-row and question-window-mode fields above can be overridden per request. `ridgefill_mode: "off"` selects stock. Unknown modes, wrong field types, negative tails and tails below tail_min return a named request error.
+Class/digit/alpha settings and question share/window-size/blind are server startup settings. The chat-row and question-window mode/cap fields above can be overridden per request. `ridgefill_mode: "off"` selects stock. Unknown modes, wrong field types, negative tails and tails below tail_min return a named request error.
 
 The RAM prompt cache carries the mode, exact-row set and fill marker. The unchanged fill boundary can reuse its exact cached tail. Changing mode or selected rows in a retained approximate region requires recomputation; a changed boundary restarts a recurrent/hybrid context when it cannot rewind safely. Ordinary cache_prompt reuse and --cache-ram remain available. KV shifting through nonzero --cache-reuse or request n_cache_reuse is refused by name. Slot save of filled rows is refused; an exact slot can be saved.
 
@@ -180,7 +186,7 @@ The following combinations and invalid inputs refuse by name; there is no fallba
 | `-sm row` | names `--split-mode row`; use layer split |
 | save a slot containing filled rows | names `save slot`; an exact slot can be saved |
 | speed with special-exact on or header-rows > 0 | names the chat flags; use a quality mode |
-| question-window-mode turn | names the pending last-user-turn sweep integration; last remains unchanged |
+| question-window-mode turn | requires quality+qattn; refuses blind selection and missing or empty user turns by name |
 | alpha != 0 in either quality mode | names the missing rho-scaled correction; use `--ridgefill-alpha 0` |
 | parallel quality with non-unified KV | names unified KV and `-kvu`; enable `--kv-unified` |
 | bench/perplexity `quality+qattn` | names the server question-attention sweep; use the server or ordinary quality |

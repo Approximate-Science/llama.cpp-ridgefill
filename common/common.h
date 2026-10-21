@@ -551,6 +551,7 @@ struct common_params {
     bool        ridgefill_special_exact = false;
     int32_t     ridgefill_header_rows = 0;
     std::string ridgefill_qattn_window_mode = "last";
+    int32_t ridgefill_qattn_turn_cap = 256;
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
     int32_t control_vector_layer_start = -1; // layer range for control vector

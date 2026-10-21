@@ -70,7 +70,8 @@ def source_files(root: Path) -> list[Path]:
               "tools/server/server-context.cpp", "tools/server/server-schema.cpp", "tools/server/server-task.cpp",
               "tools/server/server-task.h", "tools/llama-bench/llama-bench.cpp", "tools/perplexity/perplexity.cpp",
               "convert_ridgefill_to_gguf.py")]
-    files += [path for path in (root / "tests/ridgefill").glob("*") if path.suffix in (".py", ".cpp", ".sh")]
+    for directory in ("tests/ridgefill", "tools/ridgefill"):
+        files += [path for path in (root / directory).glob("*") if path.suffix in (".py", ".cpp", ".sh")]
     return sorted(set(path for path in files if path.is_file()))
 
 

@@ -1755,7 +1755,7 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
             throw std::invalid_argument("--ridgefill-mode must be off, speed, quality or quality+qattn");
         }
         params.ridgefill_mode = value;
-    } else if (option == "--ridgefill-qattn-window-mode") {
+    } else if (option == "--ridgefill-qattn-window-mode" || option == "--qattn-window-mode") {
         if (value != "last" && value != "turn") { throw std::invalid_argument(option + " must be last or turn"); }
         params.ridgefill_qattn_window_mode = value;
     } else if (option == "--ridgefill-header-rows") {
@@ -1782,7 +1782,7 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         } else {
             params.ridgefill_qattn_blind = value == "on";
         }
-    } else if (option == "--ridgefill-qattn-window" || option == "--ridgefill-tail") {
+    } else if (option == "--ridgefill-qattn-window" || option == "--ridgefill-tail" || option == "--ridgefill-qattn-turn-cap" || option == "--qattn-turn-cap") {
         size_t end = 0;
         int result;
         try {
@@ -1793,6 +1793,8 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         if (end != value.size() || result < 1) { throw std::invalid_argument(option + " must be a positive integer"); }
         if (option == "--ridgefill-tail") {
             params.ridgefill_tail = result;
+        } else if (option == "--ridgefill-qattn-turn-cap" || option == "--qattn-turn-cap") {
+            params.ridgefill_qattn_turn_cap = result;
         } else {
             params.ridgefill_qattn_window = result;
         }
@@ -1817,8 +1819,17 @@ void common_ridgefill_validate_options(const common_params & params, const std::
     if (selected_mode == "speed" && (params.ridgefill_special_exact || params.ridgefill_header_rows > 0)) {
         throw std::invalid_argument("RidgeFill: --ridgefill-special-exact and --ridgefill-header-rows require quality or quality+qattn, not mode speed");
     }
+    if (params.ridgefill_qattn_turn_cap <= 0) { throw std::invalid_argument("RidgeFill: --qattn-turn-cap must be positive"); }
     if (selected_mode != "off" && params.ridgefill_qattn_window_mode == "turn") {
-        throw std::invalid_argument("RidgeFill: --ridgefill-qattn-window-mode turn requires the last-user-turn sweep integration");
+        if (selected_mode != "quality+qattn") { throw std::invalid_argument("RidgeFill: --qattn-window-mode turn requires quality+qattn"); }
+        if (params.ridgefill_qattn_blind) { throw std::invalid_argument("RidgeFill: --qattn-window-mode turn does not support --ridgefill-qattn-blind"); }
+    }
+    if (!params.ridgefill_path.empty()) {
+        if (params.split_mode == LLAMA_SPLIT_MODE_ROW) { throw std::invalid_argument("RidgeFill does not support --split-mode row; use --split-mode layer"); }
+        if (!params.lora_adapters.empty()) { throw std::invalid_argument("RidgeFill does not support LoRA (--lora)"); }
+        if (!params.control_vectors.empty()) { throw std::invalid_argument("RidgeFill does not support control vectors (--control-vector)"); }
+        if (params.embedding) { throw std::invalid_argument("RidgeFill does not support embeddings (--embeddings)"); }
+        if (params.n_cache_reuse != 0) { throw std::invalid_argument("RidgeFill does not support --cache-reuse; use --cache-reuse 0"); }
     }
 }
 
@@ -1856,7 +1867,7 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
     selection.share = params.ridgefill_share;
     selection.digits = params.ridgefill_digits != 0;
     selection.special_exact = params.ridgefill_special_exact;
-    selection.header_rows = params.ridgefill_header_rows;
+    selection.header_rows = std::min(params.ridgefill_header_rows, n_prefix);
     const int32_t count = llama_ridgefill_select_rows_ext(rf, tokens, n_prefix, &selection, rows.data());
     if (count < 0 || count > n_prefix) { throw std::runtime_error("RidgeFill: llama_ridgefill_select_rows_ext refused mode " + selected_mode); }
     rows.resize(count);

@@ -105,7 +105,9 @@ def main():
         for flag, value in (("--ridgefill-special-exact", "on"), ("--ridgefill-header-rows", "2")):
             command([*common, "--ridgefill-mode", "speed", flag, value], tool + "-refuse-" + flag, "require quality")
         command([*common, "--ridgefill-mode", "quality", "--ridgefill-qattn-window-mode", "turn"],
-                tool + "-refuse-turn", "last-user-turn")
+                tool + "-refuse-turn", "quality+qattn")
+        command([*common, "--ridgefill-mode", "quality", "--qattn-turn-cap", "0"],
+                tool + "-refuse-turn-cap", "--ridgefill-qattn-turn-cap")
 
     server_args = [args.bin_dir / "llama-server", "-m", model, "--ridgefill", projector, "--ridgefill-mode", "quality",
                    "--ridgefill-special-exact", "on", "--ridgefill-header-rows", "2", "--ridgefill-alpha", "0",
@@ -152,7 +154,7 @@ def main():
                     (dict(ridgefill_header_rows=-1), "ridgefill_header_rows"),
                     (dict(ridgefill_special_exact="on"), "ridgefill_special_exact"),
                     (dict(ridgefill_qattn_window_mode="bad"), "ridgefill_qattn_window_mode"),
-                    (dict(ridgefill_mode="quality+qattn", ridgefill_qattn_window_mode="turn"), "last-user-turn")):
+                    (dict(ridgefill_mode="quality+qattn", ridgefill_qattn_window_mode="turn"), "no user header")):
                 body = completion_body(ids[:-1], "quality", 199)
                 body.update(fields)
                 try:
@@ -196,7 +198,7 @@ def main():
     native = [json.loads(line) for line in (args.out / "paired/quality.jsonl").read_text().splitlines()]
     check(all(row["parameters"]["special_exact"] and row["parameters"]["header_rows"] == 2 for row in native),
           "paired wrapper lost chat selector flags")
-    result = dict(result="PASS", checks=checks, scope="tiny CPU special/header tool plumbing; turn refuses until sweep integration")
+    result = dict(result="PASS", checks=checks, scope="tiny CPU special/header tool plumbing; missing turn marker refuses by name")
     (args.out / "results.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result), flush=True)
 

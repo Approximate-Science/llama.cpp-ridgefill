@@ -88,8 +88,25 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
     add((new field_bool("ridgefill_special_exact", params.ridgefill_special_exact))
         ->set_desc("RidgeFill quality: keep added/special token rows exact"));
     add((new field_num("ridgefill_header_rows", params.ridgefill_header_rows))
-        ->set_hard_limits(0, INT32_MAX)
-        ->set_desc("RidgeFill quality: exact rows after each added/special token"));
+        ->set_desc("RidgeFill quality: exact rows after each added/special token")
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto & value = data.at("ridgefill_header_rows");
+            const double count = value.is_number_integer() ? value.get<double>() : -1.0;
+            if (count < 0 || count > INT32_MAX) {
+                throw std::invalid_argument("ridgefill_header_rows must be an integer in [0, INT32_MAX]");
+            }
+            ctx.params.ridgefill_header_rows = int32_t(count);
+        }));
+    add((new field_num("ridgefill_qattn_turn_cap", params.ridgefill_qattn_turn_cap))
+        ->set_desc("RidgeFill turn question window: maximum query rows")
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto & value = data.at("ridgefill_qattn_turn_cap");
+            const double count = value.is_number_integer() ? value.get<double>() : -1.0;
+            if (count < 1 || count > INT32_MAX) {
+                throw std::invalid_argument("ridgefill_qattn_turn_cap must be an integer in [1, INT32_MAX]");
+            }
+            ctx.params.ridgefill_qattn_turn_cap = int32_t(count);
+        }));
     add((new field_str("ridgefill_qattn_window_mode"))
         ->set_desc("RidgeFill question window mode: last or turn")
         ->set_handler([](field_eval_context & ctx, const json & data) {
@@ -512,6 +529,7 @@ task_params eval_llama_cmpl_schema(
     params.ridgefill_special_exact = params_base.ridgefill_special_exact;
     params.ridgefill_header_rows = params_base.ridgefill_header_rows;
     params.ridgefill_qattn_window_mode = params_base.ridgefill_qattn_window_mode;
+    params.ridgefill_qattn_turn_cap = params_base.ridgefill_qattn_turn_cap;
     params.cache_prompt  = params_base.cache_prompt;
     params.antiprompt    = params_base.antiprompt;
     params.sse_ping_interval = params_base.sse_ping_interval;
@@ -548,6 +566,7 @@ task_params eval_llama_cmpl_schema(
         selection.ridgefill_special_exact = params.ridgefill_special_exact;
         selection.ridgefill_header_rows = params.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = params.ridgefill_qattn_window_mode;
+        selection.ridgefill_qattn_turn_cap = params.ridgefill_qattn_turn_cap;
         common_ridgefill_validate_options(selection, params.ridgefill ? params.ridgefill_mode : "off");
     }
     if (!params_base.ridgefill_path.empty() && params.n_cache_reuse != 0) {
