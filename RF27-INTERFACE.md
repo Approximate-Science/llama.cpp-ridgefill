@@ -335,3 +335,76 @@ Supersedes the H3 bullet of the 22:50 addition (the driver's rule, which lane T'
   the pre-tokenizer rule, not tested here (the tiny vocabulary has no such tokens).
 - llama-ridgefill-score: --qattn-window-mode / --qattn-turn-cap, --special-exact / --header-rows (select_rows_ext);
   the chat options are refused with mode speed, turn needs quality+qattn.
+
+## Addition 2026-10-21 (L-A, branch rf27-s1): S1 window selector and vtail — C API v2
+Reference semantics: kva-wt-q27 q27/rf27_quality.py header ("rescale vtail", "S1", "s1_gdn window"); approved split:
+L-A libllama, L-C driver/scorer orchestration, L-B CLI / request / reporting / tests. Status: this note first, code next.
+
+### Version
+```c
+#define LLAMA_RIDGEFILL_API_VERSION 2      // 1 = everything before rf27-s1 (implicit); 2 = S1_FILL, S1_PROBE, vtail
+LLAMA_API int32_t llama_ridgefill_api_version(void);   // callers check >= 2 at run time as well as at build time
+```
+
+### New sweep parts (enum llama_ridgefill_part, set with llama_ridgefill_seq_set_part as today)
+```c
+LLAMA_RIDGEFILL_PART_S1_FILL  = 3,
+LLAMA_RIDGEFILL_PART_S1_PROBE = 4,
+// llama_ridgefill_part_params gains (zero for the other parts; llama_ridgefill_part_default_params sets them to 0):
+llama_pos s1_begin;   // S1_PROBE: the window [s1_begin, s1_end)
+llama_pos s1_end;
+```
+- S1_FILL: a replay (like LATE) over rows [0, p_end) of a sequence whose LOWER pass is complete, in order, no
+  outputs, same h_buf. Late ATTENTION layers only: K/V of every row from the projector fill (bulk, as speed mode);
+  late GDN layers are not touched (s1_gdn "window"). Writes the existing cells, like LATE.
+- S1_PROBE: after a complete S1_FILL. Rows [s1_begin, s1_end) in order, no outputs, same h_buf. The window rows run the
+  late layers EXACTLY (stock layer path from their h_S): attention over the prefix cells [0, p_end) as filled by
+  S1_FILL plus the window rows themselves (causal); the cells of positions [p_end, s1_begin) (tail rows not run) are
+  masked out; late GDN layers start from a zero state at s1_begin (window rows only). No output head. The window rows'
+  late K/V / GDN states land in the sequence's cells and are overwritten / re-zeroed by the LATE pass that follows.
+- Mass: for every prefix position j < p_end, sum over the late attention layers (layer >= split), all query heads and
+  all window queries q of softmax_q(q . k / sqrt(d_head))[j], the softmax over the visible set (prefix cells + window
+  rows <= q). Accumulated per ubatch on the device in F32, across ubatches on the host in double:
+  ```c
+  // copies the S1 mass of positions [0, p_end) to out (room for n >= p_end); returns p_end, < 0 if the probe of seq is
+  // not complete (or seq has no S1 state). Valid until the next llama_ridgefill_seq_set / set_part(S1_FILL) of seq.
+  LLAMA_API int32_t llama_ridgefill_seq_get_s1_mass(struct llama_context * ctx, llama_seq_id seq_id, double * out, int32_t n);
+  ```
+- After S1_PROBE: set the exact rows (llama_ridgefill_seq_set_rows) and the LATE part as today; LATE replays [0, N)
+  from position 0 (late GDN states start from zero, prefix attention cells are rewritten).
+
+### Driver orchestration (L-C; the reference's rule)
+1. llama_ridgefill_seq_set(seq, P); LOWER over [0, N) (window capture for the qattn layers as today).
+2. n_base = |T3s rows| = select_rows_ext(class share, digits, special_exact) united with the qattn top round(0.2 P) of the
+   same request (the Tier-3 + special selection the request would make).
+3. set_part(S1_FILL); decode [0, P).   4. set_part(S1_PROBE, s1_begin = end - W, s1_end = end), end = the selector end
+   (the prompt end, non-blind); decode [end - W, end); llama_ridgefill_seq_get_s1_mass.
+5. rows = the top k = max(1, round_half_even(s1_factor x n_base)) (cap P; s1_factor default 1.0) prefix rows by mass, ties
+   by lower position; with special_exact, united with the added-token rows. class / digit / qattn rows are NOT kept.
+6. llama_ridgefill_seq_set_rows(rows); optional vtail (below); set_part(LATE); decode [0, N); FULL.
+Cost of S1 in this version: S1_FILL = the projector + K/V of the late attention layers for P rows (pass 2 recomputes
+them; reuse is a follow-up, report it as spent) + the W window rows through all late layers.
+
+### vtail (approved: scale from the first c tail rows)
+```c
+// for seq: on the first exact-tail ubatch of its LATE pass (the ubatch starting at p_end), every late attention layer
+// scales the cached V of the BULK prefix rows (prefix positions not in the exact rows) by one factor per KV head,
+// s_h = mean over tail rows [P, P + c_eff) of ||V_true(row, h)|| / ||V_fill(row, h)||, c_eff = min(rows, N - P);
+// V_true from the row's exact layer input, V_fill = v_proj(attn_norm(W_l h_S + c_l)) of the same row; applied
+// before that layer's tail attention. Exact rows keep their V. = kva rescale "vtail" with rescale_skip_last N - P - c_eff.
+LLAMA_API int32_t llama_ridgefill_seq_set_vtail(struct llama_context * ctx, llama_seq_id seq_id, bool enabled, int32_t rows); // rows default 512
+// the scales applied: [n_late_attn_layers][n_head_kv] row-major into out (room for n); returns the count, < 0 if none yet
+LLAMA_API int32_t llama_ridgefill_seq_get_vtail_scales(struct llama_context * ctx, llama_seq_id seq_id, float * out, int32_t n);
+```
+First-tail-ubatch requirement: the LATE ubatch that starts at p_end must hold >= c_eff rows (the driver sizes it:
+n_ubatch >= c_eff and a decode call of >= c_eff tail rows); otherwise llama_decode refuses it by name.
+
+### Refusals (named, llama_decode -1 or set_part / setter < 0)
+- S1_FILL: LOWER not complete; p_end == 0; rows not [0, p_end) in order; outputs requested.
+- S1_PROBE: S1_FILL not complete; s1_begin < p_end (window overlapping the prefix: blind selection or W > N - P);
+  s1_end > N (LOWER rows); empty window; rows not [s1_begin, s1_end) in order; outputs requested.
+- LATE after an incomplete S1_PROBE; FULL while an S1 part is incomplete (clear the sequence instead).
+- vtail: rows < 1; a single-pass (FULL part) tail ubatch of a sequence with vtail enabled ("vtail requires the
+  two-sweep flow"); the first tail ubatch holding < c_eff rows.
+- The existing part refusals apply to the S1 parts (qwen35 only, n_rs_seq > 0, LoRA, control vectors, embeddings, one
+  sweep sequence per batch).
