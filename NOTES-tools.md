@@ -310,3 +310,15 @@ ty: All checks passed!
 Each mode's G3 run completed paired NLL (2 documents, exactly last 512 targets), Qwen3.8 thinking-off greedy needles (2), TTFT, native prefill and tg128 with BCa via kva finals/stats.py. All 512 logprobs of every document/arm matched direct F32 logits. Off/off NLL arrays were identical. Quality was distinct from speed as a positive control. Quality's synthetic NLL delta was 0.0030389586463570595, 95% BCa [0.0027102669700980186, 0.0033676503226161003]; random-model needle deltas were degenerate and are not retrieval evidence. These are instrumentation controls, not 27B release measurements.
 
 Commands/evidence: `cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity -j4`; `check_tool_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --work out/quality-tool-live3 --port 18128`; `check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --kva /var/home/dylan/projects/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/g3-quality-tools2 --port 18123`. Logs: `out/quality-tools-{build,rebuild,typecheck}.log`, `out/quality-perplexity-final-build.log`, `out/quality-tool-live3.json` and its per-case directory, `out/g3-quality-tools2.json` and its mode directories, `out/quality-row-selector-tests.log`, `out/quality-argument-tests.log`, `out/quality-eval-unit-tests.log`. Q can now use the same G3 command with --mode quality and --alpha 0, including native bench metrics, against the integrated rebuild. Real-model cells remain NOT YET MEASURED pending Q's own results.
+
+Quality enablement is committed at `23da65965e93f361149f0f6fe18a90c062d38d29`. Resumed G5 on that exact commit:
+
+```sh
+python3 tests/ridgefill/run_g5.py --ref 23da65965 --backend cpu --fixture out/gate1-qwen35 --out out/g5-cpu-23da65965 --port 18130
+```
+
+```json
+{"gate":"G5","result":"PASS","backend":"cpu","revision":"23da65965e93f361149f0f6fe18a90c062d38d29","checks":10,"refusal_checks":15}
+```
+
+The archive source cannot discover the parent worktree. Its source grep covered 36 files and returned 1 with zero output; injected-assumption and portable-code controls passed. Built server/bench/perplexity with CPU -j4 and all three report build 11812, commit 23da65965. All 15 live refusal/persistence controls passed again against the archived binaries. Evidence: `out/g5-cpu-23da65965-run.log`, `out/g5-cpu-23da65965/{results.json,audit.json,portability-grep.log,build.log,refusals.log}` and its refusal per-case logs. Container isolation, GPU backends and multi-GPU layer split remain NOT RUN in this lane; no broader G5 claim is inferred from the scoped CPU pass.
