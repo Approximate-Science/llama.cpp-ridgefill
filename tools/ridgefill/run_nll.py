@@ -31,6 +31,8 @@ def run(args):
         if len(items) < 2:
             raise ValueError("BCa requires at least two documents; no measurement was made")
         spec = importlib.util.spec_from_file_location("ridgefill_nll_data", args.kva / "kva/data.py")
+        if spec is None or spec.loader is None:
+            raise ValueError("cannot import the oracle's kva/data.py")
         data = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(data)
         prepared = []
@@ -47,7 +49,8 @@ def run(args):
         input_path.write_text("".join(json.dumps(item) + "\n" for item in prepared))
         native = {}
         commands = []
-        for mode in ("off", "quality+qattn"):
+        modes = ("off",) if args.mode == "off" else ("off", args.mode)
+        for mode in modes:
             output = args.out / (mode + ".jsonl")
             command = [str(args.binary), "--model", str(args.model), "--projector", str(args.projector),
                        "--input", str(input_path), "--output", str(output), "--mode", mode,
@@ -70,11 +73,11 @@ def run(args):
                         len(row["logprobs"]) != args.scored or len(row["logsumexp"]) != args.scored or
                         not all(math.isfinite(x) for x in row["logprobs"] + row["logsumexp"])):
                     raise ValueError("native scorer returned invalid scoring rows")
-                if mode == "quality+qattn":
+                if mode != "off":
                     expected_window = [args.length - args.scored - args.qattn_window, args.length - args.scored]
                     if row["prefix"] != args.length - args.tail or not row["selector_excludes_targets"]:
                         raise ValueError("candidate skipped fill or read scored targets")
-                    if args.qattn_share > 0:
+                    if mode == "quality+qattn" and args.qattn_share > 0:
                         window = row["qattn_window"]
                         if args.qattn_window_mode == "last":
                             valid_window = window == expected_window
@@ -97,14 +100,14 @@ def run(args):
         for item in items:
             name = item["name"]
             arms, all_arms = {}, {}
-            for label, mode in (("reference", "off"), ("candidate", "quality+qattn")):
+            for label, mode in (("reference", "off"), ("candidate", args.mode)):
                 result = native[mode][name]
                 mask = masks[name]
                 values = [-lp for lp, novel in zip(result["logprobs"], mask) if novel]
                 arms[label] = dict(result, nll=sum(values) / len(values), nll_all=result["nll"],
                                    novel=mask, novel_scored=len(values), token_subset="novel")
                 all_arms[label] = dict(result, token_subset="all")
-            common = dict(kind="nll", name=name, domain=item.get("domain"), candidate_mode="quality+qattn")
+            common = dict(kind="nll", name=name, domain=item.get("domain"), candidate_mode=args.mode)
             records.append(dict(common, **arms))
             all_records.append(dict(common, **all_arms))
         summaries = []
@@ -117,7 +120,7 @@ def run(args):
             for record in [metadata, *records, *[dict(kind="summary", result=s) for s in summaries[:2]]]:
                 file.write(json.dumps(record, allow_nan=False) + "\n")
         result = dict(result="COMPLETE", scope="paired measurements; no quality or noninferiority verdict",
-                      mode="quality+qattn", build=next(iter(native["off"].values()))["build"], summaries=summaries)
+                      mode=args.mode, build=next(iter(native["off"].values()))["build"], summaries=summaries)
         (args.out / "summary.json").write_text(json.dumps(result, indent=2, allow_nan=False) + "\n")
         return result
     except Exception as error:
@@ -130,6 +133,10 @@ def main():
     for name in ("binary", "model", "projector", "docs", "out", "kva"):
         parser.add_argument("--" + name, type=lambda value: Path(value).resolve(), required=True)
     parser.add_argument("--build-label", default="native-single-prefill")
+    parser.add_argument("--mode", choices=("off", "speed", "quality", "quality+qattn"), default="quality+qattn")
+    parser.add_argument("--special-exact", "--ridgefill-special-exact", choices=("on", "off"), default="off")
+    parser.add_argument("--header-rows", "--ridgefill-header-rows", type=int, default=0)
+    parser.add_argument("--qattn-window-mode", "--ridgefill-qattn-window-mode", choices=("last", "turn"), default="last")
     parser.add_argument("--length", type=int, default=16384)
     parser.add_argument("--scored", type=int, default=512)
     parser.add_argument("--limit", type=int)
@@ -140,10 +147,7 @@ def main():
     parser.add_argument("--alpha", type=float, default=0)
     parser.add_argument("--qattn-share", type=float, default=0.2)
     parser.add_argument("--qattn-window", type=int, default=64)
-    parser.add_argument("--special-exact", choices=("on", "off"), default="off")
-    parser.add_argument("--header-rows", type=int, default=0)
-    parser.add_argument("--qattn-window-mode", choices=("last", "turn"), default="last")
-    parser.add_argument("--qattn-turn-cap", type=int, default=256)
+    parser.add_argument("--qattn-turn-cap", "--ridgefill-qattn-turn-cap", type=int, default=256)
     parser.add_argument("--gpu-layers", type=int, default=0)
     parser.add_argument("--threads", type=int, default=4)
     parser.add_argument("--batch", type=int, default=512)
@@ -154,6 +158,12 @@ def main():
     parser.add_argument("--flash-attn", choices=("off", "on", "auto"), default="auto")
     parser.add_argument("--timeout", type=float, default=7200)
     args = parser.parse_args()
+    if args.header_rows < 0:
+        parser.error("--header-rows must be nonnegative")
+    if args.mode == "speed" and (args.special_exact == "on" or args.header_rows > 0):
+        parser.error("--special-exact and --header-rows require quality modes")
+    if args.mode not in ("off", "quality+qattn") and args.qattn_window_mode == "turn":
+        parser.error("--qattn-window-mode turn requires quality+qattn")
     if not (0 < args.scored < args.tail < args.length and args.length >= args.min_prompt and
             args.qattn_window > 0 and (args.qattn_window_mode == "turn" or args.qattn_window <= args.length - args.scored) and
             args.qattn_turn_cap > 0 and args.header_rows >= 0 and (args.limit is None or args.limit >= 2)):

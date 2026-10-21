@@ -454,3 +454,89 @@ git diff --check: PASS
 ```
 
 Real measurements remain Q's; this lane performed transcription/source-consistency checks only. Remaining quality G4, HIP TTFT/G3, full held-out engine G3, GPU archive and two-card gates stay NOT RUN as recorded by Q. No new GPU measurements or broader release verdict is implied.
+
+## 2026-10-20: CHAT-PLAN H1/H2 tool plumbing on the extended selector
+
+Rebased onto rf27-integ d619c13d6 after the coordinator relayed rf27-engine 7611bac0b's 22:50 interface addition (selector implementation c6c485629). common_ridgefill_rows now initializes llama_ridgefill_select_params and calls llama_ridgefill_select_rows_ext with share, digits, special_exact and header_rows. Defaults remain special_exact=false/header_rows=0 and retain the earlier rows. No src/ file or L-C sweep/lifecycle code was edited. Existing perplexity and bench quality selection both use this common helper, so these options are applied rather than accepted and dropped.
+
+CLI names: --ridgefill-special-exact on|off, --ridgefill-header-rows K, and --ridgefill-qattn-window-mode last|turn. Per-request names: ridgefill_special_exact (bool), ridgefill_header_rows (nonnegative int), ridgefill_qattn_window_mode (string). All inherit startup defaults. The server passes effective request options into the common helper, while its existing exact-row cache compatibility logic handles changed selections. New startup options appear in /props. No unconditional response fields were added to the stock/no-projector output path. Speed refuses special-exact on or header_rows>0, including empty-prefix calls; off remains a stock control with these flags. Invalid types/counts/window names fail by name.
+
+For L-C: common_params and task_params both contain ridgefill_qattn_window_mode="last". The accepted future mode value is "turn", using the existing integer ridgefill_qattn_window as the cap. The last-user-turn algorithm has NOT landed in the driver, so common_ridgefill_validate_options refuses active turn mode by name (also before prompt length is considered). That guard must be removed only when the sweep consumes the effective request mode; the guarded sweep call and its lifecycle remain L-C's. No hidden substitution to last-window behavior is permitted. The last-marker absence/fallback rule remains for L-C/coordinator to settle consistently with the reference.
+
+The native scorer supports --special-exact/--header-rows/--qattn-window-mode and their --ridgefill-* aliases, forwards H1/H2 to the helper, and records options in its native metadata. run_nll.py forwards those knobs and now accepts --mode off|speed|quality|quality+qattn (default unchanged). Off is an identity control; other modes pair with off. Its existing token-ID input and novel-token estimator are unchanged. The wrapper input and needle-runner support for CHAT-TUNE/CHAT-HELDOUT remains pending lane T's frozen format, as instructed; no schema/assistant boundaries or retemplating policy was guessed.
+
+Built CPU llama-server, llama-bench, llama-perplexity and llama-ridgefill-score with -j4. The old local CMake cache initially lacked the newly added score target; explicitly reconfigured before the final build. A test compile initially misspelled the common library linker option; corrected -lllama-common. The first live test found that an invalid perplexity mode/options combination could lose its named error through early async logging. Added common option validation during shared CLI parsing and bench parsing, so these invalid combinations refuse before model I/O with synchronous error text. The final actual tool runs pass; failed logs remain out/chat-tools-live/ rather than being counted as passes.
+
+```text
+CPU four tools: BUILT
+Common argument/boundary tests: PASS 26
+Common class/digit/special/header selector tests: PASS 35
+Live chat tool gate: PASS 38
+  independent special/header unions and prefix clipping
+  split-4 Tier-3 exact rows = previous union plus structural rows, unchanged question mass
+  startup inheritance, per-request overrides and cached changes vs native raw logprobs (<1e-5)
+  explicit speed/off request controls under startup special/header settings
+  named invalid/speed/turn refusals; quality bench and perplexity complete
+  paired native quality wrapper propagates flags on a synthetic multi-turn conversation
+Existing native scorer oracle gate: PASS 24/24, all four modes/two K values/three chunk sizes
+  stock, zero-share, target-exclusion, endpoint and wrapper BCa controls also passed
+Additional paired wrapper speed and off modes: COMPLETE; off delta exactly zero
+Type checking: All checks passed!
+Portability audit: 45 sources, empty
+git diff --check: PASS
+```
+
+The synthetic fixture uses <s>/</s> as turn markers and byte-token role labels because its 300-token vocabulary has no Qwen chat markers. Its final scored span lies in the synthetic assistant turn. This is a plumbing/control fixture, not the frozen chat corpus, a successful last-user-turn test or a model-quality result. Special/header expected sets are calculated independently from the tiny vocabulary and row-score tables, and native/server logits are compared at matching prefix boundaries/cache precision. No tolerance was widened.
+
+Commands: cmake -S . -B out/tools-cpu-build (all GPU backends/UI/OpenSSL off), then cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity llama-ridgefill-score -j4; .venv-oracle/bin/python tests/ridgefill/check_chat_tools.py --bin-dir out/tools-cpu-build/bin --kva /var/home/dylan/projects/research/kva-wt-q27 --out out/chat-tools-live4; .venv-oracle/bin/python tools/ridgefill/check_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --fixture out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --stock-dump out/rf_dump-quality-tools --work out/chat-default-score-gate. Common C++ tests link the real shared common/llama libraries. Logs: out/chat-{argument,selector}-tests.log, out/chat-plumbing-{configure,rebuild,final-build,typecheck,portability}.log, out/chat-tools-live4.log and its per-case directory/results.json, out/chat-default-score-gate.log, out/chat-wrapper-{speed,off}.log. Build binaries are d619c13d6 plus this worktree's changes, not a claim that the unchanged integration binary had new flags.
+
+RIDGEFILL.md and the scorer/test READMEs document the flags, defaults, per-request behavior, named pending-turn refusal and release hold. No GPU, full-model chat inference, CHAT-TUNE/CHAT-HELDOUT scoring, publishing or push was attempted. Remaining work is L-C turn integration plus lane T's frozen schema/data relay for the paired chat/needle runner.
+
+## Chat-window integration and pre-load named refusals (2026-10-20)
+
+Rebased rf27-tools onto rf27-integ 257e6a5c1, including L-C 51d57b1fd and the corrected last-user-turn interface. The previous ce8332871 plumbing commit is c557830e1 after rebase. Resolved scorer/wrapper conflicts by retaining L-C's actual turn-window algorithm and cap, the common extended-selector helper, mode selection/off pairing and all CLI aliases. No src/ or sweep-driver/lifecycle code was edited.
+
+Common/server/bench now parse --qattn-window-mode last|turn and --qattn-turn-cap N (256 default), with --ridgefill-* aliases. HTTP ridgefill_qattn_window_mode and ridgefill_qattn_turn_cap inherit startup settings and override per request; the sweep receives those effective settings and the extended special/header base rows. The scorer/wrapper use the same extended helper and driver. Last/64, special-exact off and header-rows 0 remain defaults. Turn requires quality+qattn, refuses blind selection, and uses the final complete literal user-newline header before the chosen endpoint. No marker or no subsequent rows refuses by name. Bench/perplexity refuse turn/qattn by name because they do not run the sweep. Header counts are clipped to the actual prefix before selection.
+
+Moved the five incompatible combinations (LoRA, control vectors, embeddings, nonzero cache reuse and row split) into common argument validation, before model/download handling. With RidgeFill requested, existing backend-dependent argument handlers are deferred until that validation succeeds; the metadata-driven scan skips argument values. Ordinary non-RidgeFill backend parsing retains its order. Bench has a validation-only parse before backend initialization and also names unsupported adapter/cache options. Shared initialization and libllama retain their second-line checks. CLI/perplexity explicitly reject embeddings/cache options outside RidgeFill too, rather than accepting an ignored option. HTTP header rows and turn caps check integer type/range before int32 narrowing; fractional or overflowing values refuse by name.
+
+```text
+CPU llama-server / llama-bench / llama-perplexity / llama-ridgefill-score: BUILT (-j4)
+PASS: 32 RidgeFill argument/boundary checks
+PASS: 36 common class/digit/special/header selector checks
+Native chat oracle: PASS 24 comparisons; defaults byte-identical on raw/templated inputs, all four modes, F32/F16 KV and h_S
+  worst logprob/logsumexp error 1.5213828952198583e-07
+  worst relative question-mass error 2.394300415746324e-07
+  capped/uncapped/short turns, future/partial/missing/empty headers, zero-share and target-exclusion controls PASS
+  paired turn-window wrapper COMPLETE, two documents and real BCa
+Canonical HTTP sweep gate: PASS 17 comparisons (including repeat/cancellation/reuse and two slots)
+New HTTP turn gate: PASS 25 checks; six HTTP/native comparisons below 4.43e-7 absolute logprob error
+  inherited and overridden caps, special/header rows, last mode ignoring cap, cached changes, no/empty-marker and fractional/overflowing integer refusals, recovery
+Existing special/header tool gate: PASS 40 checks, including actual quality bench/perplexity and paired native quality wrapper
+G5 named-refusal gate: PASS 23 checks
+  15 startup cases across server/perplexity/bench, each 0.002-0.013 seconds with a five-second deadline
+  missing model/projector/adapter files and invalid device name never reached
+  normal non-RidgeFill LoRA loader and filled/exact slot-save positive/negative controls PASS
+GPU-smoke/audit parser tests: 8 tests OK (synthetic evidence only, no GPU execution)
+Type check (ty 0.0.84, oracle Python/import paths): All checks passed!
+Portability grep: 50 sources (including tools/ridgefill), empty
+Python bytecode compilation and git diff --check: PASS
+```
+
+Commands and evidence:
+
+```sh
+cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity llama-ridgefill-score -j4
+.venv-oracle/bin/python tools/ridgefill/check_chat_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --baseline-binary out/chat-baseline/score --fixture out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work out/chat-turn-score-gate2
+.venv-oracle/bin/python tests/ridgefill/check_turn_http.py --bin-dir out/tools-cpu-build/bin --fixture out/gate1-qwen35 --chat-fixture out/chat-turn-score-gate --work out/chat-turn-http2 --port 18126
+.venv-oracle/bin/python tests/ridgefill/check_chat_tools.py --bin-dir out/tools-cpu-build/bin --kva /var/home/dylan/projects/research/kva-wt-q27 --out out/chat-turn-tool-gate3
+.venv-oracle/bin/python tests/ridgefill/check_refusals.py --bin-dir out/tools-cpu-build/bin --fixture out/gate1-qwen35 --work out/chat-turn-refusals3 --port 18127
+.venv-oracle/bin/python tests/ridgefill/test_gpu_smoke.py -v
+UV_CACHE_DIR="$PWD/.cache/uv" UV_TOOL_DIR="$PWD/.cache/uv-tools" uvx --offline --from ty==0.0.84 ty check --python .venv-oracle/bin/python --extra-search-path /var/home/dylan/projects/research/kva-wt-q27 --extra-search-path tests/ridgefill --extra-search-path . tests/ridgefill/check_turn_http.py tests/ridgefill/check_refusals.py tests/ridgefill/check_chat_tools.py tools/ridgefill/run_nll.py tools/ridgefill/check_chat_score.py
+```
+
+The canonical HTTP script and native g1-sweep.cpp were copied read-only from L-C's build-sweep directory into out/http17, adapting only the root/build paths. Compiled that native harness against this worktree's server-ridgefill-sweep.cpp and libraries, then ran .venv-oracle/bin/python out/http17/check-http-sweep.py out/gate1-qwen35. The result is out/http17/http-sweep-results.json (17 records). The saved pre-change executable and shared libraries in out/chat-baseline are isolated with LD_LIBRARY_PATH, so rebuilding cannot change the baseline library ABI. The baseline is ce8332871; its unchanged defaults were already checked against the previous engine/oracle gate.
+
+Logs use out/chat-turn-{final-build3,argument-tests,selector-tests,score-gate2,http2,http17-final,tool-gate3,refusals3,gpu-parser-tests2,typecheck6,portability-full}.log and per-gate result directories. Initial failures are kept: a test compile omitted -Isrc; the first refusal run exposed perplexity's formerly unregistered embeddings/cache flags; the old special/header HTTP case expected the superseded pending-turn message; the first type check lacked its oracle environment/import paths, then identified missing tokenizer-field null checks in the borrowed chat gate. The first HTTP count-hardening compile used comparisons unavailable on common_json; changed to a checked numeric extraction before narrowing. Corrected these; none is counted as a pass. The workspace-local ty cache was initially empty, so downloaded the same pinned 0.0.84 version into .cache/uv, then reran offline with the real oracle environment. Rejected leaving device handlers eager or relying on missing-adapter errors: either would reproduce the late GPU failures.
+
+No GPU, full-model chat inference, CHAT-TUNE/CHAT-HELDOUT measurements, release/publish or push was attempted. The frozen lane T corpus/needle schema relay is still pending; this commit does not guess it or claim chat quality. These changes are experimental plumbing and CPU correctness evidence; the release remains on hold.

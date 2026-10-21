@@ -75,8 +75,8 @@ static options parse(int argc, char ** argv) {
         else if (key == "--tail") { o.tail = integer(value); }
         else if (key == "--min-prompt") { o.min_prompt = integer(value); }
         else if (key == "--qattn-window") { o.window = integer(value); }
-        else if (key == "--qattn-window-mode") { o.window_mode = value; }
-        else if (key == "--qattn-turn-cap") { o.turn_cap = integer(value); }
+        else if (key == "--qattn-window-mode" || key == "--ridgefill-qattn-window-mode") { o.window_mode = value; }
+        else if (key == "--qattn-turn-cap" || key == "--ridgefill-qattn-turn-cap") { o.turn_cap = integer(value); }
         else if (key == "--header-rows" || key == "--ridgefill-header-rows") { o.header_rows = integer(value); }
         else if (key == "--special-exact" || key == "--ridgefill-special-exact") {
             require(value == "on" || value == "off", "--special-exact must be on or off"); o.special_exact = value == "on";
@@ -113,11 +113,12 @@ static options parse(int argc, char ** argv) {
     require(o.scored > 0 && o.tail > 0 && o.min_prompt >= 0 && o.window > 0 && o.threads > 0 && o.batch > 0 && o.ubatch > 0 && o.ctx >= 0, "invalid count");
     require(o.mode == "off" || o.tail > o.scored, "tail must exceed scored so the first prediction row is exact");
     require(o.flash == "off" || o.flash == "on" || o.flash == "auto", "invalid flash-attn mode");
-    require(o.header_rows >= 0, "--header-rows must be nonnegative");
-    require(o.mode != "speed" || (!o.special_exact && o.header_rows == 0), "--special-exact and --header-rows require a quality mode");
-    require(o.window_mode == "last" || o.window_mode == "turn", "--qattn-window-mode must be last or turn");
-    require(o.turn_cap > 0, "--qattn-turn-cap must be positive");
-    require(o.window_mode != "turn" || o.mode == "off" || o.mode == "quality+qattn", "--qattn-window-mode turn requires quality+qattn");
+    common_params selection;
+    selection.ridgefill_special_exact = o.special_exact;
+    selection.ridgefill_header_rows = o.header_rows;
+    selection.ridgefill_qattn_window_mode = o.window_mode;
+    selection.ridgefill_qattn_turn_cap = o.turn_cap;
+    common_ridgefill_validate_options(selection, o.mode);
     tensor_type(o.cache); tensor_type(o.hidden);
     return o;
 }
@@ -176,16 +177,13 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     const int32_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_ridgefill_seq_set(ctx, 0, prefix);
-    std::vector<llama_pos> rows;
-    if (prefix > 0 && (o.mode == "quality" || o.mode == "quality+qattn")) {
-        auto selection = llama_ridgefill_select_default_params(rf);
-        selection.share = o.share; selection.digits = o.digits;
-        selection.special_exact = o.special_exact; selection.header_rows = std::min(o.header_rows, prefix);
-        rows.resize(prefix);
-        const int32_t count = llama_ridgefill_select_rows_ext(rf, doc.ids.data(), prefix, &selection, rows.data());
-        require(count >= 0 && count <= prefix, "llama_ridgefill_select_rows_ext refused the exact row selection");
-        rows.resize(count);
-    }
+    common_params selection;
+    selection.ridgefill_mode = o.mode; selection.ridgefill_share = o.share;
+    selection.ridgefill_digits = o.digits; selection.ridgefill_alpha = o.alpha;
+    selection.ridgefill_special_exact = o.special_exact; selection.ridgefill_header_rows = o.header_rows;
+    selection.ridgefill_qattn_window_mode = o.window_mode;
+    selection.ridgefill_qattn_turn_cap = o.turn_cap;
+    auto rows = common_ridgefill_rows(selection, rf, doc.ids.data(), prefix, o.mode);
     require(llama_ridgefill_seq_set_rows(ctx, 0, rows.data(), rows.size()) == 0, "exact row setup failed");
     std::vector<double> logprobs, logsumexp;
     std::vector<int32_t> positions;
@@ -270,6 +268,8 @@ int main(int argc, char ** argv) {
         if (argc == 2 && std::string(argv[1]) == "--help") {
             std::cout << "llama-ridgefill-score --model MODEL --projector GGUF --input JSON/JSONL --output JSONL [--mode off|speed|quality|quality+qattn]\n"
                 "Defaults: --scored 512 --tail 4096 --min-prompt 8192 --share 0.5 --digits on --qattn-share 0.2 --qattn-window 64 --alpha 0\n"
+                "Chat: --special-exact on|off --header-rows K --qattn-window-mode last|turn (defaults: off, 0, last)\n"
+                "Aliases: --ridgefill-special-exact, --ridgefill-header-rows, --ridgefill-qattn-window-mode. turn requires sweep integration.\n"
                 "--qattn-window-end END uses [END-window,END), with an exclusive zero-based endpoint.\n"
                 "Default: document (N, server semantics). For NLL use known (N-K), or an explicit row index.\n"
                 "--qattn-end is an alias. NLL with endpoint N reads scored targets; the G3 wrapper uses N-K.\n"

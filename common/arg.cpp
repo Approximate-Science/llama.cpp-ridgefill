@@ -784,6 +784,27 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
         }
     }
 
+    bool defer_backends = !params.ridgefill_path.empty();
+    for (int i = 1; i < argc; ++i) {
+        std::string arg = argv[i];
+        if (arg.rfind("--", 0) == 0) { std::replace(arg.begin(), arg.end(), '_', '-'); }
+        const auto found = arg_to_options.find(arg);
+        if (found == arg_to_options.end()) { continue; }
+        const auto & opt = *found->second.first;
+        if (std::string(opt.args.front()) == "--ridgefill") { defer_backends = true; }
+        if (!opt.handler_void && !opt.handler_bool) { i += opt.handler_str_str ? 2 : 1; }
+    }
+    std::vector<std::function<void()>> backend_options;
+    auto handle_string = [&](const common_arg & opt, const std::string & value) {
+        const std::string name = opt.args.front();
+        if (defer_backends && (name == "-dev" || name == "-mmdev" || name == "--rpc" || name == "-ot" ||
+                name == "--spec-draft-device" || name == "--spec-draft-override-tensor")) {
+            backend_options.push_back([&, opt, value]() { opt.handler_string(params, value); });
+        } else {
+            opt.handler_string(params, value);
+        }
+    };
+
     // handle environment variables
     for (auto & opt : ctx_arg.options) {
         std::string value;
@@ -799,7 +820,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                     opt.handler_bool(params, parse_bool_value(value));
                 }
                 if (opt.handler_string) {
-                    opt.handler_string(params, value);
+                    handle_string(opt, value);
                     continue;
                 }
             } catch (std::exception & e) {
@@ -860,7 +881,7 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
                     continue;
                 }
                 if (opt.handler_string) {
-                    opt.handler_string(params, val);
+                    handle_string(opt, val);
                     continue;
                 }
 
@@ -882,6 +903,14 @@ static bool common_params_parse_ex(int argc, char ** argv, common_params_context
 
     // parse all CLI args now, so that -hf is available below for remote preset resolution
     parse_cli_args();
+    if (!params.ridgefill_path.empty()) { common_ridgefill_validate_options(params); }
+    if ((ctx_arg.ex == LLAMA_EXAMPLE_CLI || ctx_arg.ex == LLAMA_EXAMPLE_PERPLEXITY) && params.embedding) {
+        throw std::invalid_argument("--embeddings is not supported by this tool");
+    }
+    if ((ctx_arg.ex == LLAMA_EXAMPLE_CLI || ctx_arg.ex == LLAMA_EXAMPLE_PERPLEXITY) && params.n_cache_reuse != 0) {
+        throw std::invalid_argument("--cache-reuse is not supported by this tool");
+    }
+    for (const auto & option : backend_options) { option(); }
 
     postprocess_cpu_params(params.cpuparams,       nullptr);
     postprocess_cpu_params(params.cpuparams_batch, &params.cpuparams);
@@ -3028,6 +3057,22 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-digits", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
+        {"--ridgefill-special-exact"}, "on|off", "RidgeFill: keep added/special token rows exact in quality modes (default: off)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-special-exact", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-header-rows"}, "K", "RidgeFill: keep K rows after each special token exact in quality modes (default: 0)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-header-rows", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-qattn-window-mode", "--qattn-window-mode"}, "last|turn", "RidgeFill: question window rule (default: last; turn uses the last complete user header)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-qattn-window-mode", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-qattn-turn-cap", "--qattn-turn-cap"}, "N", "RidgeFill: maximum question rows from the last user turn (default: 256)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-qattn-turn-cap", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
         {"--ridgefill-alpha"}, "N", "RidgeFill: correction scale in [0, 1] (default: projector)",
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-alpha", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
@@ -3573,7 +3618,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params) {
             params.embedding = true;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG}).set_env("LLAMA_ARG_EMBEDDINGS"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_DEBUG, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_EMBEDDINGS"));
     add_opt(common_arg(
         {"--rerank", "--reranking"},
         string_format("enable reranking endpoint on server (default: %s)", "disabled"),
@@ -3681,7 +3726,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, int value) {
             params.n_cache_reuse = value;
         }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}).set_env("LLAMA_ARG_CACHE_REUSE"));
+    ).set_examples({LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_PERPLEXITY}).set_env("LLAMA_ARG_CACHE_REUSE"));
     add_opt(common_arg(
         {"--metrics"},
         string_format("enable prometheus compatible metrics endpoint (default: %s)", params.endpoint_metrics ? "enabled" : "disabled"),
