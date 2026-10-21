@@ -281,3 +281,11 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   10/10 with four busy-loop processes running beside the server (the run that stalled before was under load).
 - Quick gates: canonical G1 speed 27/27, quality 27/27; G0 72/0; L-C native Tier-3 G1 12/12 + 3/3; dispatch 44/44;
   select_rows 23/23.
+
+## 20:55 rf27-integ: rf27-tools dd48f86ff merged (GPU smoke scripts without hardware pins)
+- Clean merge; tests/ridgefill and docs only (no C++). My extended grep (own patterns, planted 2/2 and upstream 0/0
+  controls first) over the 74 changed code files of the committed tree (archive): the R9700 / gfx1201 / ROCm 7.10
+  hits are gone (now --device-name-pattern / --hip-targets / --sdk-min-version, defaults: any GPU, CMake-detected
+  targets, SDK minimum only); the remaining 4 hits are the known benign ones (.gitignore AGENTS.local.md,
+  run_g5.py's pattern list and planted controls, g0_dense.sh clearing *_VISIBLE_DEVICES). Agrees with L-B's empty
+  result over the same 72+ files (its patterns do not flag those 4). L-B's test_gpu_smoke.py unit tests run here.
