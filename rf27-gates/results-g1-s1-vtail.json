@@ -1,0 +1,402 @@
+{
+  "summary": {
+    "gate": "G1-s1-vtail",
+    "reference": "/var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail",
+    "checks": 49,
+    "passed": 49,
+    "result": "PASS"
+  },
+  "checks": [
+    {
+      "check": "reference-sha256sums",
+      "result": "PASS",
+      "files": 13,
+      "mismatched": []
+    },
+    {
+      "check": "input-tiny-qwen35-f32.gguf",
+      "result": "PASS"
+    },
+    {
+      "check": "input-tokens:fixture",
+      "result": "PASS"
+    },
+    {
+      "check": "input-tokens:selchat",
+      "result": "PASS"
+    },
+    {
+      "check": "fixture-T3s-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 6.175965836519026e-07,
+      "worst": "final.7.k",
+      "logits_rel": 5.274345653560886e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "fixture-T3s-vtail-k0-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 6.175965836519026e-07,
+      "worst": "final.7.k",
+      "logits_rel": 3.5362188555154717e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "fixture-T3s-vtail-k0-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9096440076828003,
+        1.1265805959701538
+      ],
+      "reference": [
+        0.9096440076828003,
+        1.1265804767608643
+      ]
+    },
+    {
+      "check": "fixture-T3s-vtail-k72-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 6.175965836519026e-07,
+      "worst": "final.7.k",
+      "logits_rel": 3.9774778315404546e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "fixture-T3s-vtail-k72-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9164558053016663,
+        1.126496434211731
+      ],
+      "reference": [
+        0.9164557456970215,
+        1.126496434211731
+      ]
+    },
+    {
+      "check": "fixture-S1gw-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 4.705687501882494e-07,
+      "worst": "final.7.k",
+      "logits_rel": 4.385040597298939e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "fixture-S1gw-s1-mass",
+      "result": "PASS",
+      "max_rel": 1.206999875075513e-07,
+      "n": 500
+    },
+    {
+      "check": "fixture-S1gw-s1-rows",
+      "result": "PASS",
+      "n_engine": 217,
+      "n_reference": 217,
+      "cut_gap": 0.00015909969806671143,
+      "diff": []
+    },
+    {
+      "check": "fixture-S1gw-vtail-k0-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 4.705687501882494e-07,
+      "worst": "final.7.k",
+      "logits_rel": 4.413529381963599e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "fixture-S1gw-vtail-k0-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9096802473068237,
+        1.1265504360198975
+      ],
+      "reference": [
+        0.909680187702179,
+        1.1265504360198975
+      ]
+    },
+    {
+      "check": "fixture-S1gw-vtail-k0-s1-mass",
+      "result": "PASS",
+      "max_rel": 1.206999875075513e-07,
+      "n": 500
+    },
+    {
+      "check": "fixture-S1gw-vtail-k0-s1-rows",
+      "result": "PASS",
+      "n_engine": 217,
+      "n_reference": 217,
+      "cut_gap": 0.00015909969806671143,
+      "diff": []
+    },
+    {
+      "check": "fixture-S1gw-vtail-k72-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 4.705687501882494e-07,
+      "worst": "final.7.k",
+      "logits_rel": 3.5298873513056606e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "fixture-S1gw-vtail-k72-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9165123701095581,
+        1.1264493465423584
+      ],
+      "reference": [
+        0.9165123701095581,
+        1.1264493465423584
+      ]
+    },
+    {
+      "check": "fixture-S1gw-vtail-k72-s1-mass",
+      "result": "PASS",
+      "max_rel": 1.206999875075513e-07,
+      "n": 500
+    },
+    {
+      "check": "fixture-S1gw-vtail-k72-s1-rows",
+      "result": "PASS",
+      "n_engine": 217,
+      "n_reference": 217,
+      "cut_gap": 0.00015909969806671143,
+      "diff": []
+    },
+    {
+      "check": "selchat-T3s-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 5.541315886148368e-07,
+      "worst": "final.7.k",
+      "logits_rel": 3.950978282318829e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "selchat-T3s-vtail-k0-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 5.541315886148368e-07,
+      "worst": "final.7.k",
+      "logits_rel": 5.298571750245173e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "selchat-T3s-vtail-k0-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9082789421081543,
+        1.1253504753112793
+      ],
+      "reference": [
+        0.9082788825035095,
+        1.1253504753112793
+      ]
+    },
+    {
+      "check": "selchat-T3s-vtail-k72-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 5.541315886148368e-07,
+      "worst": "final.7.k",
+      "logits_rel": 3.642194883468619e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "selchat-T3s-vtail-k72-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9137692451477051,
+        1.1254353523254395
+      ],
+      "reference": [
+        0.9137692451477051,
+        1.12543523311615
+      ]
+    },
+    {
+      "check": "selchat-S1gw-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 5.525498067981971e-07,
+      "worst": "final.6.rec",
+      "logits_rel": 3.5076052995464124e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "selchat-S1gw-s1-mass",
+      "result": "PASS",
+      "max_rel": 1.2063132160901435e-07,
+      "n": 500
+    },
+    {
+      "check": "selchat-S1gw-s1-rows",
+      "result": "PASS",
+      "n_engine": 222,
+      "n_reference": 222,
+      "cut_gap": 7.28219747543335e-05,
+      "diff": []
+    },
+    {
+      "check": "selchat-S1gw-vtail-k0-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 5.525498067981971e-07,
+      "worst": "final.6.rec",
+      "logits_rel": 3.971350395204354e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "selchat-S1gw-vtail-k0-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9082887172698975,
+        1.1253505945205688
+      ],
+      "reference": [
+        0.9082887172698975,
+        1.1253505945205688
+      ]
+    },
+    {
+      "check": "selchat-S1gw-vtail-k0-s1-mass",
+      "result": "PASS",
+      "max_rel": 1.2063132160901435e-07,
+      "n": 500
+    },
+    {
+      "check": "selchat-S1gw-vtail-k0-s1-rows",
+      "result": "PASS",
+      "n_engine": 222,
+      "n_reference": 222,
+      "cut_gap": 7.28219747543335e-05,
+      "diff": []
+    },
+    {
+      "check": "selchat-S1gw-vtail-k72-state-logits",
+      "result": "PASS",
+      "arrays": 25,
+      "max_rel": 5.525498067981971e-07,
+      "worst": "final.6.rec",
+      "logits_rel": 3.9705085441710253e-07,
+      "missing": [],
+      "shape": []
+    },
+    {
+      "check": "selchat-S1gw-vtail-k72-vtail-scales",
+      "result": "PASS",
+      "engine": [
+        0.9137844443321228,
+        1.1254355907440186
+      ],
+      "reference": [
+        0.9137844443321228,
+        1.1254355907440186
+      ]
+    },
+    {
+      "check": "selchat-S1gw-vtail-k72-s1-mass",
+      "result": "PASS",
+      "max_rel": 1.2063132160901435e-07,
+      "n": 500
+    },
+    {
+      "check": "selchat-S1gw-vtail-k72-s1-rows",
+      "result": "PASS",
+      "n_engine": 222,
+      "n_reference": 222,
+      "cut_gap": 7.28219747543335e-05,
+      "diff": []
+    },
+    {
+      "check": "selchat-S1gw-ubatch32",
+      "result": "PASS",
+      "max_rel": 5.525498067981971e-07,
+      "mass_rel": 1.2063132160901435e-07,
+      "rows_equal": true
+    },
+    {
+      "check": "fixture-T3s-vtail-k72-ubatch128",
+      "result": "PASS",
+      "max_rel": 6.175965836519026e-07,
+      "scales_rel": 5.291152547420103e-08
+    },
+    {
+      "check": "control-fixture-vtail-changes-late-v-and-logits",
+      "result": "PASS",
+      "v_rel": 0.07057952135801315,
+      "logits_rel": 0.03104180283844471
+    },
+    {
+      "check": "control-fixture-c-changes-scales",
+      "result": "PASS"
+    },
+    {
+      "check": "control-fixture-s1-rows-differ-from-t3s",
+      "result": "PASS",
+      "shared": 88
+    },
+    {
+      "check": "control-selchat-vtail-changes-late-v-and-logits",
+      "result": "PASS",
+      "v_rel": 0.07299484312534332,
+      "logits_rel": 0.030807267874479294
+    },
+    {
+      "check": "control-selchat-c-changes-scales",
+      "result": "PASS"
+    },
+    {
+      "check": "control-selchat-s1-rows-differ-from-t3s",
+      "result": "PASS",
+      "shared": 95
+    },
+    {
+      "check": "refuses-s1-blind-window-in-prefix",
+      "result": "PASS",
+      "rc": 3,
+      "needle": "blind selection"
+    },
+    {
+      "check": "refuses-s1-window-longer-than-tail",
+      "result": "PASS",
+      "rc": 3,
+      "needle": "blind selection"
+    },
+    {
+      "check": "refuses-late-after-s1-fill-without-probe",
+      "result": "PASS",
+      "rc": 3,
+      "needle": "LATE follows a LOWER pass"
+    },
+    {
+      "check": "refuses-vtail-first-tail-ubatch-short",
+      "result": "PASS",
+      "rc": 2,
+      "needle": "vtail needs the first tail ubatch"
+    },
+    {
+      "check": "refuses-vtail-single-pass",
+      "result": "PASS",
+      "rc": 2,
+      "needle": "vtail requires the two-sweep flow"
+    }
+  ]
+}

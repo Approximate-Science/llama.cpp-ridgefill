@@ -2,6 +2,17 @@
 
 `llama-ridgefill-score` reads token IDs and runs one whole-document prefill per document. It does not tokenize, sample, or send HTTP requests. `off`, `speed`, and `quality` use normal decode batches; `quality+qattn` uses the same LOWER / question mass / selected-row LATE prefix / exact LATE tail driver as the server. The model and context stay loaded across documents, with memory cleared between them.
 
+Run the examples from the repository root. Set these input paths to your local files as needed:
+
+```sh
+MODEL=/path/to/model.gguf
+PROJ=/path/to/projector.gguf
+DOCS=/path/to/nll.jsonl
+KVA=/path/to/kva-wt-q27
+FIXTURE=/path/to/tools-checkout/out/gate1-qwen35
+S1_REF=/path/to/s1-vtail-references
+```
+
 Build in the configured CPU, HIP, Vulkan, or CUDA build directory:
 
 ```sh
@@ -47,10 +58,10 @@ From the merged checkout, with its configured GPU build named `build` and its GP
 ```sh
 python3 tools/ridgefill/run_nll.py \
   --binary build/bin/llama-ridgefill-score \
-  --model /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf \
-  --projector /var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf \
-  --docs /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/evaldata/nll.jsonl \
-  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --model "$MODEL" \
+  --projector "$PROJ" \
+  --docs "$DOCS" \
+  --kva "$KVA" \
   --out out/g3-native-nll \
   --length 16384 --scored 512 --tail 4096 --limit 8 \
   --gpu-layers 99 --threads 4 --batch 512 --ubatch 512 \
@@ -63,8 +74,8 @@ For a single native arm on an already prepared token file:
 
 ```sh
 build/bin/llama-ridgefill-score \
-  --model /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf \
-  --projector /var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf \
+  --model "$MODEL" \
+  --projector "$PROJ" \
   --input tokens.jsonl --output scores.jsonl --mode quality+qattn \
   --scored 512 --tail 4096 --qattn-window-end known --gpu-layers 99
 ```
@@ -79,8 +90,8 @@ c++ -std=c++17 -O2 -I include -I src -I ggml/include \
   -lllama -lggml -lggml-base -o build/score-stock-dump
 python3 tools/ridgefill/check_score.py \
   --binary build/bin/llama-ridgefill-score \
-  --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 \
-  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --fixture "$FIXTURE" \
+  --kva "$KVA" \
   --stock-dump build/score-stock-dump --work build/score-gate
 ```
 
@@ -92,8 +103,8 @@ The chat gate needs a pre-chat scorer binary built at d619c13d6 (save it before 
 python3 tools/ridgefill/check_chat_score.py \
   --binary build/bin/llama-ridgefill-score \
   --baseline-binary build/bin/llama-ridgefill-score-before-chat \
-  --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 \
-  --kva /var/home/dylan/projects/research/kva-wt-q27 \
+  --fixture "$FIXTURE" \
+  --kva "$KVA" \
   --work build/score-chat-gate
 ```
 
@@ -110,3 +121,30 @@ The paired wrapper accepts the same new controls and `--mode off|speed|quality|q
 Class `--share` accepts [0,1]. Zero disables the class source only. For qattn-only use `--mode quality+qattn --share 0 --digits off`; add `--special-exact on` for qattn+special. Special-only uses `--mode quality --share 0 --digits off --special-exact on`. With no other source and alpha 0, quality selects no exact prefix rows and matches speed mode byte-for-byte on the tiny CPU fixture. Projector metadata may also set `share_default` to zero.
 
 The scorer and paired wrapper parse the binding `--ridgefill-s1-window`, `--ridgefill-s1-factor`, `--ridgefill-vtail` and `--ridgefill-vtail-rows` options (short aliases without `ridgefill-` are also accepted). Defaults are 0, 1.0, off and 512. Enabled S1/vtail requires RF27 API v2 and two-sweep orchestration; builds without it refuse by name. The reporting contract charges the S1 late-window pass, the attention fill that pass 2 recomputes, and vtail's extra projector/V-projection work. These experimental controls do not lift the release hold or establish a new quality verdict.
+## S1 and vtail orchestration (requires libllama C API v2)
+
+The standalone scorer accepts `--ridgefill-s1-window W` (0), `--ridgefill-s1-factor F` (1.0), `--ridgefill-vtail on|off` (off), and `--ridgefill-vtail-rows C` (512). A positive window alone enables S1; use 256 for the registered window. Use `--ridgefill-s1-window 256 --ridgefill-vtail on --special-exact on` with quality+qattn for the S1+special/vtail arm. Short aliases remain accepted; legacy `--s1 on` sets W=256 when W is zero, and `--s1 off` sets W=0. S1 and vtail are independently selectable for controls. `--ridgefill-api-version` prints the linked engine API version. A build with pre-v2 headers or a linked API version below 2 refuses either feature by name; it does not substitute Tier 3.
+
+The driver runs LOWER, computes the Tier-3 base count, runs S1_FILL over [0,P), runs S1_PROBE over [END-W,END), selects max(1,round-half-even(F*n_base)) prefix rows by mass (capped at P, ties by position), and unites them with special rows when enabled. Class/digit/qattn rows are not retained. It then sets rows, enables optional vtail, replays LATE over the prefix and tail, disables vtail, and restores FULL. S1 currently requires a positive qattn share and header_rows=0 in the scorer; these match the registered base arm. The driver accepts the caller's base rows and uses `projector` plus `special_exact` for the final special-row union.
+
+For S1/vtail the standalone scorer defaults END to N-K unless explicitly overridden. Serving keeps the driver's prompt-end default. S1 requires its full W-row window to lie in the exact tail. Vtail calibration uses the first min(C,N-P) tail rows, and the scorer refuses calibration that reaches scored NLL targets. It raises the context batch/ubatch capacity as needed and makes the first LATE tail decode large enough. A server caller must provide sufficient context capacity; calibration that would consume its deferred final token is refused. No calibration range is silently shortened.
+
+Outputs include the base count, S1 window and mass (with diagnostics), vtail scales, and separate analytic costs for S1_FILL, S1_PROBE and vtail. S1_FILL charges P rows of late-attention projector plus K/V work even though LATE recomputes them; `prefix_kv_reused` is false. S1_PROBE charges W rows through every late layer, including dense QK/PV products over the actual padded KV-cell count at each probe ubatch; masked cells still cost work. `probe_kv_pairs` records the sum of query rows times cache cells. Vtail charges one projector and two additional V projections on the calibration rows. Its cache read/write bytes and elementwise scale count are reported separately from MACs, using the actual V-cache type and cell count. The extra MACs are added to the existing cold-prefill estimate. Final row-source reporting uses `s1`, with class/digit/header/qattn counts zero and special rows counted separately. The paired wrapper and HTTP parser use the binding ridgefill-prefixed settings. Their report validator accepts the final S1 source key and requires completed probe costs. The common helper prices the extra work once; the scorer also retains top-level mass/scales/traffic diagnostics.
+
+The gate verifies lane T's frozen reference hashes, default equality against a pre-S1 scorer built from an isolated source archive with its matching shared libraries, the driver's own base counts and final rows, mass, logits, vtail scales, and total MACs including recomputed prefix K/V. It also compares L-A's native harness, tests reused contexts, and checks the N-K endpoint against the reference with changed future targets. Run it with the reference's Python environment (NumPy, CPU PyTorch, safetensors and transformers). Build the native harness with `-DRF27_API`:
+
+```sh
+c++ -std=c++17 -O2 -DRF27_API -Iinclude -Isrc -Iggml/include \
+  rf27-gates/rf_dump_rs.cpp -Lbuild/bin -Wl,-rpath,'$ORIGIN/bin' \
+  -lllama -lggml -lggml-base -lggml-cpu -o build/rf-dump-s1
+python3 tools/ridgefill/check_s1_score.py \
+  --binary build/bin/llama-ridgefill-score \
+  --baseline-binary build/bin/llama-ridgefill-score-before-s1 \
+  --native-dump build/rf-dump-s1 \
+  --fixture "$FIXTURE" \
+  --reference "$S1_REF" \
+  --kva "$KVA" \
+  --work build/score-s1-gate
+```
+
+Without C API v2 the gate checks defaults and named refusals, reports the feature and cost checks as SKIPPED, and exits 77. This is not a passing S1 gate. The release remains on hold.

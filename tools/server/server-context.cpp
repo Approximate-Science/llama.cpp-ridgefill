@@ -3499,10 +3499,21 @@ private:
         selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
         selection.ridgefill_qattn_turn_cap = tparams.ridgefill_qattn_turn_cap;
+        common_ridgefill_sweep_report completed;
+        const bool extra_work = slot.ridgefill_sweep && (slot.ridgefill_sweep_params.s1 || slot.ridgefill_sweep_params.vtail);
+        if (extra_work) {
+            const auto & cost = slot.ridgefill_sweep->get_cost();
+            if (slot.ridgefill_sweep_params.s1) {
+                completed.s1_begin = slot.ridgefill_sweep->window_end() - slot.ridgefill_sweep_params.s1_window;
+                completed.s1_end = slot.ridgefill_sweep->window_end();
+                completed.s1_probe_kv_pairs = cost.s1_probe_kv_pairs;
+            }
+            completed.vtail_rows = cost.vtail_rows;
+        }
         slot.stats.ridgefill = common_ridgefill_get_report(model_tgt, llama_init->ridgefill(), selection,
                 slot.task->tokens.get_tokens().data(), slot.task->n_tokens(), prefix, rows,
                 tparams.ridgefill ? tparams.ridgefill_mode : "off", window_begin, window_end,
-                slot.prompt.ridgefill_fill_start, std::min(prefix, slot.prompt.n_filled));
+                slot.prompt.ridgefill_fill_start, std::min(prefix, slot.prompt.n_filled), extra_work ? &completed : nullptr);
     }
 
     bool ridgefill_sweep_prompt(server_slot & slot) {
@@ -3531,8 +3542,9 @@ private:
         }
 
         slot.prompt.ridgefill_rows = slot.ridgefill_sweep->get_rows();
+        const bool question_mass = slot.ridgefill_sweep_params.qattn_share > 0;
         ridgefill_report_prompt(slot, slot.ridgefill_sweep_params.n_prefix, slot.prompt.ridgefill_rows,
-                slot.ridgefill_sweep->window_begin(), slot.ridgefill_sweep->window_end());
+                question_mass ? slot.ridgefill_sweep->window_begin() : -1, question_mass ? slot.ridgefill_sweep->window_end() : -1);
         while (slot.prompt.n_tokens() < slot.task->n_tokens() - 1) {
             slot.prompt.tokens.push_back(slot.task->tokens[slot.prompt.n_tokens()]);
         }
@@ -4114,7 +4126,35 @@ private:
                             // a prompt that needs outputs before its tail cannot be filled
                             const int32_t p_fill = tparams.ridgefill && !slot.need_embd() && !input_tokens.has_mtmd ?
                                 common_ridgefill_p_end(params_base, slot.task->n_tokens(), tparams.ridgefill_tail, mode) : 0;
-                            const bool use_sweep = p_fill > 0 && mode == "quality+qattn" && params_base.ridgefill_qattn_share > 0;
+                            const bool extra_sweep = mode != "off" && (tparams.ridgefill_s1_window > 0 || tparams.ridgefill_vtail);
+                            if (extra_sweep) {
+                                try {
+                                    char architecture[32] = {};
+                                    if (llama_model_meta_val_str(model_tgt, "general.architecture", architecture, sizeof(architecture)) <= 0 || std::string(architecture) != "qwen35") {
+                                        throw std::invalid_argument("RidgeFill: S1/vtail two-sweep prefill supports qwen35 only");
+                                    }
+                                    common_params selection = params_base;
+                                    selection.ridgefill_mode = mode;
+                                    selection.ridgefill_s1_window = tparams.ridgefill_s1_window;
+                                    selection.ridgefill_s1_factor = tparams.ridgefill_s1_factor;
+                                    selection.ridgefill_vtail = tparams.ridgefill_vtail;
+                                    selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
+                                    selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
+                                    selection.n_batch = llama_n_batch(ctx_tgt);
+                                    if (slot.need_embd() || input_tokens.has_mtmd) {
+                                        throw std::invalid_argument("RidgeFill: S1/vtail does not support embeddings or multimodal prompts");
+                                    }
+                                    common_ridgefill_validate_sweep(selection, slot.task->n_tokens(), p_fill, slot.task->n_tokens(), llama_n_ubatch(ctx_tgt));
+                                    if (tparams.ridgefill_vtail && tparams.ridgefill_vtail_rows >= slot.task->n_tokens() - p_fill) {
+                                        throw std::invalid_argument("RidgeFill vtail: calibration would consume the deferred final token; reduce ridgefill_vtail_rows");
+                                    }
+                                } catch (const std::exception & error) {
+                                    send_error(slot, error.what(), ERROR_TYPE_INVALID_REQUEST);
+                                    slot.release();
+                                    return;
+                                }
+                            }
+                            const bool use_sweep = p_fill > 0 && mode == "quality+qattn" && (params_base.ridgefill_qattn_share > 0 || extra_sweep);
                             if (use_sweep && (slot.task->type != SERVER_TASK_TYPE_COMPLETION ||
                                     slot.task->is_parent() || slot.task->is_child() || slot.can_speculate() || !slot.lora.empty())) {
                                 send_error(slot, "RidgeFill quality+qattn requires an independent text completion without speculative decoding or LoRA", ERROR_TYPE_INVALID_REQUEST);
@@ -4152,6 +4192,13 @@ private:
                                 sweep_params.n_prefix = p_fill;
                                 sweep_params.n_batch = n_batch;
                                 sweep_params.split = llama_ridgefill_split(rf);
+                                sweep_params.s1 = tparams.ridgefill_s1_window > 0;
+                                sweep_params.s1_window = tparams.ridgefill_s1_window;
+                                sweep_params.s1_factor = tparams.ridgefill_s1_factor;
+                                sweep_params.projector = rf;
+                                sweep_params.special_exact = tparams.ridgefill_special_exact;
+                                sweep_params.vtail = tparams.ridgefill_vtail;
+                                sweep_params.vtail_rows = tparams.ridgefill_vtail_rows;
                                 sweep_params.qattn_share = params_base.ridgefill_qattn_share;
                                 sweep_params.qattn_window = params_base.ridgefill_qattn_window;
                                 sweep_params.qattn_window_mode = tparams.ridgefill_qattn_window_mode;
@@ -4160,8 +4207,9 @@ private:
                                 sweep_params.defer_last_token = true;
                                 slot.ridgefill_sweep = std::make_unique<server_ridgefill_sweep>();
                             }
+                            const int32_t vtail_rows = mode != "off" && tparams.ridgefill_vtail ? std::min(tparams.ridgefill_vtail_rows, slot.task->n_tokens() - p_fill) : 0;
                             const int32_t cached_fill = std::min({slot.prompt.n_filled, p_fill, n_past});
-                            if (cached_fill > 0 && (slot.prompt.ridgefill_mode != mode ||
+                            if (cached_fill > 0 && (slot.prompt.ridgefill_mode != mode || slot.prompt.ridgefill_vtail_rows != vtail_rows ||
                                     !std::equal(slot.prompt.ridgefill_rows.begin(), std::lower_bound(slot.prompt.ridgefill_rows.begin(), slot.prompt.ridgefill_rows.end(), cached_fill),
                                                 rows.begin(), std::lower_bound(rows.begin(), rows.end(), cached_fill)))) {
                                 n_past = 0;
@@ -4182,6 +4230,7 @@ private:
                             slot.prompt.n_filled = p_fill > n_past ? p_fill : retained_end;
                             slot.stats.n_prompt_filled = std::max(0, p_fill - n_past);
                             slot.prompt.ridgefill_mode = mode;
+                            slot.prompt.ridgefill_vtail_rows = vtail_rows;
                             slot.prompt.ridgefill_rows = rows;
                             if (!use_sweep) { ridgefill_report_prompt(slot, p_fill, rows); }
 

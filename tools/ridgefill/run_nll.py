@@ -90,8 +90,15 @@ def run(args):
                             valid_window = isinstance(window, list) and len(window) == 2 and max(0, end - args.qattn_turn_cap) <= window[0] < window[1] == end
                         if not valid_window:
                             raise ValueError("candidate window differs from the reference protocol")
-                    expected_options = dict(special_exact=args.special_exact == "on", header_rows=args.header_rows,
+                    expected_options: dict[str, object] = dict(special_exact=args.special_exact == "on", header_rows=args.header_rows,
                                             qattn_window_mode=args.qattn_window_mode, qattn_turn_cap=args.qattn_turn_cap)
+                    if args.s1_window != 0 or args.s1_factor != 1 or args.vtail != "off" or args.vtail_rows != 512:
+                        expected_options.update(s1_window=args.s1_window, s1_factor=args.s1_factor,
+                                                vtail=args.vtail == "on", vtail_rows=args.vtail_rows)
+                    if args.s1_window > 0 and row["ridgefill"].get("s1", {}).get("window") != [args.length-args.scored-args.s1_window, args.length-args.scored]:
+                        raise ValueError("candidate ignored S1 or used a target-reading probe window")
+                    if args.vtail == "on" and row["ridgefill"].get("vtail", {}).get("rows") != min(args.vtail_rows, args.tail):
+                        raise ValueError("candidate ignored or shortened vtail calibration")
                     if any(row["parameters"].get(key) != value for key, value in expected_options.items()):
                         raise ValueError("candidate ignored chat selector options")
         metadata = dict(kind="metadata", metric="nll", build_label=args.build_label, commands=commands,

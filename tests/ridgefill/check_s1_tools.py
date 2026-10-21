@@ -75,6 +75,51 @@ def run(args):
                 call([args.bin_dir / tool, "-m", "missing-model", "--ridgefill", "missing-projector",
                       "--ridgefill-mode", "quality+qattn", feature, value, *extra], tool + "-" + feature + "-" + message.replace(" ", "-"), message)
 
+    architecture_controls = "SKIPPED: --dense-model not supplied"
+    if args.dense_model is not None:
+        dense_source = args.out / "dense-tokens.jsonl"
+        dense_source.write_text(json.dumps(dict(name="arch", ids=[0] * 700)) + "\n")
+        call([args.bin_dir / "llama-server", "-m", args.dense_model, "--ridgefill", "must-not-open-projector",
+              "--ridgefill-mode", "quality+qattn", "--ridgefill-s1-window", 64, "-ngl", 0, "--no-warmup", "--offline"],
+             "server-refuses-dense-architecture", "qwen35 only")
+        call([args.bin_dir / "llama-ridgefill-score", "--model", args.dense_model, "--projector", "must-not-open-projector",
+              "--input", dense_source, "--output", args.out / "dense-output.jsonl", "--mode", "quality+qattn",
+              "--scored", 64, "--tail", 200, "--min-prompt", 1, "--ridgefill-s1-window", 64],
+             "scorer-refuses-dense-architecture", "qwen35 only")
+        if args.dense_projector is not None:
+            command = [args.bin_dir / "llama-server", "-m", args.dense_model, "--ridgefill", args.dense_projector,
+                       "--ridgefill-tail", 200, "--ridgefill-min-prompt", 1, "--ridgefill-qattn-share", 0.2,
+                       "-c", 1024, "-np", 1, "-ngl", 0, "--offline", "--no-warmup", "--port", args.port]
+            client = Client(f"http://127.0.0.1:{args.port}", timeout=60)
+            with (args.out / "dense-server.log").open("w") as log:
+                server = subprocess.Popen(list(map(str, command)), stdout=log, stderr=subprocess.STDOUT)
+                try:
+                    deadline = time.monotonic() + 60
+                    while True:
+                        assert server.poll() is None, "dense control server exited"
+                        try:
+                            client.request("/health")
+                            break
+                        except (urllib.error.URLError, EvalError):
+                            assert time.monotonic() < deadline, "dense server startup timeout"
+                            time.sleep(0.05)
+                    body = completion_body([0] * 700, "quality+qattn", 200)
+                    body["ridgefill_s1_window"] = 64
+                    try:
+                        client.request("/completion", body)
+                    except EvalError as error:
+                        check("qwen35 only" in str(error), "HTTP-refuses-dense-architecture")
+                    else:
+                        raise AssertionError("HTTP accepted unsupported architecture")
+                finally:
+                    server.terminate()
+                    server.wait(timeout=10)
+            architecture_controls = "PASS 3/3"
+        else:
+            architecture_controls = "PASS 2/2; SKIPPED HTTP architecture (--dense-projector not supplied)"
+    else:
+        print(architecture_controls, flush=True)
+
     command = [args.bin_dir / "llama-server", "-m", model, "--ridgefill", projector,
                "--ridgefill-mode", "quality+qattn", "--ridgefill-alpha", 0,
                "--ridgefill-tail", 200, "--ridgefill-min-prompt", 1,
@@ -130,7 +175,7 @@ def run(args):
             server.terminate()
             server.wait(timeout=10)
     summary = dict(result="PASS", scope="disabled defaults and named refusals; no enabled S1/vtail inference claim",
-                   checks=len(checks), records=checks)
+                   checks=len(checks), architecture_controls=architecture_controls, records=checks)
     (args.out / "results.json").write_text(json.dumps(summary, indent=2) + "\n")
     print(json.dumps(summary), flush=True)
 
@@ -139,5 +184,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     for name in ("bin-dir", "baseline-binary", "fixture", "chat-fixture", "out"):
         parser.add_argument("--" + name, type=lambda value: Path(value).resolve(), required=True)
+    parser.add_argument("--dense-model", type=lambda value: Path(value).resolve())
+    parser.add_argument("--dense-projector", type=lambda value: Path(value).resolve())
     parser.add_argument("--port", type=int, default=18136)
     run(parser.parse_args())

@@ -1413,6 +1413,11 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             return;
         }
 
+        if (params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail) && model->arch != LLM_ARCH_QWEN35) {
+            COM_ERR("%s", "RidgeFill: S1/vtail two-sweep prefill supports qwen35 only\n");
+            pimpl->context.reset();
+            return;
+        }
         pimpl->ridgefill.reset(llama_ridgefill_init(model, params.ridgefill_path.c_str()));
         if (!pimpl->ridgefill) {
             COM_ERR("failed to load RidgeFill projector '%s'\n", params.ridgefill_path.c_str());

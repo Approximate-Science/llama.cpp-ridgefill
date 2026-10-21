@@ -797,6 +797,8 @@ enum llm_ridgefill_part : int32_t {
     LLM_RIDGEFILL_PART_FULL  = 0, // single pass: layers [0, split), then fill or stock late layers
     LLM_RIDGEFILL_PART_LOWER = 1, // sweep 1: layers [0, split) only; h_S of every row is a graph output
     LLM_RIDGEFILL_PART_LATE  = 2, // sweeps 2-3: no embedding, no lower layers; h_S is a graph input
+    LLM_RIDGEFILL_PART_S1_FILL  = 3, // S1 pass 1: late attention layers' K/V of prefix rows from the fill (GDN untouched)
+    LLM_RIDGEFILL_PART_S1_PROBE = 4, // S1 window: late layers exact for window rows, attention mass over the prefix
 };
 
 struct llm_graph_params_ridgefill {
@@ -816,10 +818,17 @@ struct llm_graph_params_ridgefill {
     uint64_t                           part_gen   = 0;
     int32_t                            n_win      = 0;
 
+    bool    s1_attn_only = false; // S1_FILL: the fill writes the late attention layers only
+    bool    s1_probe     = false; // S1_PROBE: explicit-softmax attention over the prefix + window, mass output
+    int32_t vtail_rows   = 0;     // > 0: the first tail ubatch of a LATE replay; scale the bulk prefix V (vtail)
+    const std::vector<llama_pos> * rows_vtail = nullptr; // vtail: the sequence's exact rows (they keep their V)
+
     bool operator==(const llm_graph_params_ridgefill & o) const {
         return rf == o.rf && fill == o.fill && part == o.part && n_rows == o.n_rows && correct == o.correct &&
                alpha == o.alpha && p_end == o.p_end && rows_seq == o.rows_seq &&
-               part_state == o.part_state && part_gen == o.part_gen && n_win == o.n_win;
+               part_state == o.part_state && part_gen == o.part_gen && n_win == o.n_win &&
+               s1_attn_only == o.s1_attn_only && s1_probe == o.s1_probe && vtail_rows == o.vtail_rows &&
+               rows_vtail == o.rows_vtail;
     }
 };
 
@@ -1003,6 +1012,9 @@ public:
     ggml_tensor * t_embd        = nullptr;
     ggml_tensor * t_embd_pooled = nullptr;
     ggml_tensor * t_h_nextn     = nullptr; // [n_embd, n_outputs] hidden state before final output norm
+
+    ggml_tensor * t_rf_mass     = nullptr; // RidgeFill S1_PROBE: F32 [n_kv] attention mass per KV cell
+    ggml_tensor * t_rf_vtail    = nullptr; // RidgeFill vtail: F32 [n_head_kv, n_late_attn] the scales applied
 
     std::vector<ggml_tensor *> t_layer_inp;
 

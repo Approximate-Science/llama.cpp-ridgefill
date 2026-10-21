@@ -1114,6 +1114,19 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot(const llama_ubatch & ubatch,
     return res;
 }
 
+void llama_kv_cache::get_cell_pos(const slot_info & sinfo, llama_seq_id seq_id, uint32_t n_kv, std::vector<llama_pos> & out) const {
+    out.assign(n_kv, -1);
+    if (sinfo.empty() || sinfo.n_stream() != 1) {
+        return;
+    }
+    const auto & cells = v_cells[sinfo.strm[0]];
+    for (uint32_t i = 0; i < n_kv && i < cells.size(); ++i) {
+        if (!cells.is_empty(i) && cells.seq_has(i, seq_id)) {
+            out[i] = cells.pos_get(i);
+        }
+    }
+}
+
 llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & ubatch) const {
     slot_info res = {
         /*.s0   =*/ 0,
@@ -2936,6 +2949,10 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
     assert(status == LLAMA_MEMORY_STATUS_SUCCESS);
 
     return ubatches[i_cur];
+}
+
+void llama_kv_cache_context::get_cell_pos(llama_seq_id seq_id, std::vector<llama_pos> & out) const {
+    kv->get_cell_pos(sinfos[i_cur], seq_id, n_kv, out);
 }
 
 uint32_t llama_kv_cache_context::get_n_kv() const {

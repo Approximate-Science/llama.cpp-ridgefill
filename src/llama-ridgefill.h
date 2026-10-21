@@ -63,7 +63,13 @@ struct llama_ridgefill_part_state {
     // LATE replays exactly the rows LOWER processed
     llama_pos lower_end = 0;
     llama_pos late_end  = 0;
+
+    // S1_PROBE: the window [s1_begin, s1_end); S1_FILL / S1_PROBE / LATE replay rows with the late_end cursor
+    llama_pos s1_begin = 0;
+    llama_pos s1_end   = 0;
 };
+
+class llama_kv_cache_context;
 
 // graph input of a LOWER / LATE ubatch (one sequence)
 class llm_graph_input_ridgefill_part : public llm_graph_input_i {
@@ -79,8 +85,30 @@ public:
     ggml_tensor * win_sel  = nullptr; // I32 [n_win]: LOWER, the ubatch rows inside the capture window
     ggml_tensor * win_rows = nullptr; // I32 [n_win]: their rows in the window buffers
 
+    // S1_PROBE: F32 [n_kv]: 0, or -inf for the cells of positions [p_end, s1_begin) (tail rows the probe does not run)
+    ggml_tensor * s1_bias  = nullptr;
+    // vtail: F32 [n_kv] 1 for the cells of the bulk prefix rows (positions < p_end, not exact), else 0; and 1 - that
+    ggml_tensor * vt_bulk  = nullptr;
+    ggml_tensor * vt_keep  = nullptr;
+
+    const llama_kv_cache_context * kv = nullptr; // the ubatch's attention cache (cell positions for the masks)
+    llama_seq_id seq = -1;
+
     const llm_graph_params_ridgefill params;
 };
+
+// S1_PROBE, one late attention layer of the window rows (as qwen35's build_layer_attn, with an explicit softmax over
+// the visible cells: the KQ mask plus s1_bias); adds the layer's attention mass per cell (summed over heads and the
+// ubatch's queries) to *mass ([n_kv], created on the first call). Returns the layer's attention output (after wo).
+ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model & model, const llm_graph_input_ridgefill_part * inp,
+        ggml_tensor * cur, ggml_tensor * inp_pos, llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** mass);
+
+// vtail on the first tail ubatch of a LATE replay, one late attention layer: s_h = mean over the ubatch's first
+// vtail_rows rows of ||V_true|| / ||V_fill|| per KV head (V_true from cur = attn_norm of the rows' exact input, V_fill
+// from the projector on their h_S); the cached V of the bulk prefix cells times s_h. Inserted before the layer's own
+// attention. Appends s ([n_head_kv]) to *scales ([n_head_kv, n_late_attn]).
+void build_ridgefill_vtail(llm_graph_context & g, const llama_model & model, const llm_graph_input_ridgefill_part * inp,
+        ggml_tensor * cur, ggml_tensor * h_S, llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** scales);
 
 // LOWER: write h_S (the input of layer split) of every ubatch row to h_buf; LOWER, il < split: the window rows of
 // the input of layer il to its window buffer (no-op for layers without one)

@@ -141,6 +141,9 @@ struct llama_context {
     int32_t ridgefill_set_alpha(float alpha);
     int32_t ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n);
     int32_t ridgefill_seq_set_part(llama_seq_id seq_id, const llama_ridgefill_part_params * params);
+    int32_t ridgefill_seq_get_s1_mass(llama_seq_id seq_id, double * out, int32_t n) const;
+    int32_t ridgefill_seq_set_vtail(llama_seq_id seq_id, bool enabled, int32_t rows);
+    int32_t ridgefill_seq_get_vtail_scales(llama_seq_id seq_id, float * out, int32_t n) const;
 
     // process a single ubatch with a specific graph type
     // if memory_context is provided, it will be applied first to the context's memory
@@ -333,6 +336,18 @@ private:
     float ridgefill_alpha = 0.0f; // recurrent-state correction scale, default from the projector
 
     std::array<llama_ridgefill_part_state, LLAMA_MAX_SEQ> ridgefill_part; // the two-sweep prefill state per sequence
+
+    // S1: the window's attention mass per prefix position (complete when the probe has run every window row)
+    std::array<std::vector<double>, LLAMA_MAX_SEQ> ridgefill_s1_mass;
+    std::array<bool, LLAMA_MAX_SEQ>                ridgefill_s1_mass_ok = {};
+
+    // vtail per sequence: on / rows c; the scales applied on the first tail ubatch ([n_late_attn][n_head_kv])
+    struct ridgefill_vtail_state {
+        bool               on   = false;
+        int32_t            rows = 512;
+        std::vector<float> scales;
+    };
+    std::array<ridgefill_vtail_state, LLAMA_MAX_SEQ> ridgefill_vtail;
     uint64_t ridgefill_part_gen = 0;
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably

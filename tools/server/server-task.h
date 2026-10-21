@@ -654,6 +654,7 @@ struct server_prompt {
     int32_t ridgefill_fill_start = 0;
     std::string ridgefill_mode;
     std::vector<llama_pos> ridgefill_rows;
+    int32_t ridgefill_vtail_rows = 0;
 
     void clear() {
         tokens.clear();
@@ -662,6 +663,7 @@ struct server_prompt {
         ridgefill_fill_start = 0;
         ridgefill_mode.clear();
         ridgefill_rows.clear();
+        ridgefill_vtail_rows = 0;
     }
 
     int n_tokens() const {
@@ -676,6 +678,7 @@ struct server_prompt {
             ridgefill_fill_start,
             ridgefill_mode,
             ridgefill_rows,
+            ridgefill_vtail_rows,
         };
     }
 };

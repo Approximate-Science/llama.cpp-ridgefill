@@ -149,9 +149,13 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     // RidgeFill two-sweep prefill: a LATE ubatch starts at the split from h_S rows of the sweep buffer
     auto * rf_part  = build_inp_ridgefill_part();
-    const int il_0  = rf_part && ridgefill_params.part == LLM_RIDGEFILL_PART_LATE ? ridgefill->split : 0;
+    const int il_0  = rf_part && ridgefill_params.part != LLM_RIDGEFILL_PART_LOWER ? ridgefill->split : 0;
 
     inpL = il_0 > 0 ? build_ridgefill_h_input(*this, rf_part) : build_inp_embd(model.tok_embd);
+
+    ggml_tensor * rf_h_S   = il_0 > 0 ? inpL : nullptr; // LATE / S1 parts: h_S of the ubatch rows (vtail's fill)
+    ggml_tensor * rf_mass  = nullptr;                    // S1_PROBE: the attention mass per KV cell
+    ggml_tensor * rf_scale = nullptr;                    // vtail: the scales applied
 
     cb(inpL, "model.input_embed", -1);
 
@@ -199,7 +203,14 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
             cur = build_layer_attn_linear(inp->get_recr(), cur, il);
         } else {
             // Full attention layer
-            cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
+            if (rf_part && ridgefill_params.s1_probe) {
+                cur = build_ridgefill_s1_attn(*this, model, rf_part, cur, inp_pos, inp->get_attn(), il, &rf_mass);
+            } else {
+                if (rf_part && ridgefill_params.vtail_rows > 0) {
+                    build_ridgefill_vtail(*this, model, rf_part, cur, rf_h_S, inp->get_attn(), il, &rf_scale);
+                }
+                cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il);
+            }
         }
 
         if (il == n_layer - 1 && crop_before_nextn(inp_out_ids)) {
@@ -231,6 +242,22 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
         // Input for next layer
         inpL = cur;
+    }
+
+    if (rf_scale) {
+        res->t_rf_vtail = rf_scale;
+        ggml_set_output(rf_scale);
+        ggml_build_forward_expand(gf, rf_scale);
+    }
+    if (rf_mass) {
+        // S1_PROBE: the window rows have no output head; their mass is the result
+        res->t_rf_mass = rf_mass;
+        ggml_set_output(rf_mass);
+        ggml_build_forward_expand(gf, rf_mass);
+        if (inp_out_ids) {
+            ggml_build_forward_expand(gf, inp_out_ids);
+        }
+        return;
     }
     cur = inpL;
 

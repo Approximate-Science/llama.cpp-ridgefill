@@ -5,6 +5,11 @@
 // --sweep (the two-sweep prefill: LOWER over all rows into an h_S buffer, then a LATE replay over all rows; writes
 // <output>.h.f32), --win-layers L,.. --win-n W (LOWER also captures those layers' inputs at the last W positions;
 // <output>.win<L>.f32), --layer-inp L,.. (no sweep, one batch: upstream's layer-input extraction of every row, <output>.inp<L>.f32).
+// API v2: --s1-window W --s1-k K [--s1-special 0|1] (sweep + S1: S1_FILL [0, P), S1_PROBE [N - W, N), rows = top K by
+// the S1 mass (ties: lower position) united with the special rows; <output>.mass_s1.f64, <output>.rows.i32),
+// --vtail C (vtail on the LATE pass, rows C; <output>.vtail.f32), --sweep-boundary (the LATE batches stop at P and the
+// state there is dumped to <output>.prefix.kv, all cells), --s1-begin B (the probe window starts at B instead: refusal
+// tests), --s1-late-early (LATE right after S1_FILL: refused).
 // CPU gate harness. Dump prefix and final sequence state plus tail logits; never score a filled row.
 #include "llama.h"
 #include "llama-ext.h"
@@ -78,6 +83,8 @@ static int run(int argc, char ** argv) {
     int tail = 200, keep = 200, n_batch = 700, n_ubatch = 512;
     float alpha = 0;
     bool filled_logit = false;
+    int s1_window = 0, s1_k = 0, s1_special = 0, vtail = 0, s1_begin_arg = -1;
+    bool sweep_boundary = false, s1_late_early = false;
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() {
@@ -116,6 +123,13 @@ static int run(int argc, char ** argv) {
         else if (arg == "--win-layers") { win_arg = next(); }
         else if (arg == "--win-n")     { win_n = std::stoi(next()); }
         else if (arg == "--layer-inp") { inp_arg = next(); }
+        else if (arg == "--s1-window") { s1_window = std::stoi(next()); }
+        else if (arg == "--s1-k")      { s1_k = std::stoi(next()); }
+        else if (arg == "--s1-special") { s1_special = std::stoi(next()); }
+        else if (arg == "--s1-begin")  { s1_begin_arg = std::stoi(next()); }
+        else if (arg == "--s1-late-early") { s1_late_early = true; }
+        else if (arg == "--vtail")     { vtail = std::stoi(next()); }
+        else if (arg == "--sweep-boundary") { sweep_boundary = true; }
         else { throw std::invalid_argument("unknown argument " + arg); }
     }
     if (model_path.empty() || tokens_path.empty() || output.empty() || n_batch < 1 || n_ubatch < 1 || tail < 1 || keep < 1 || !(alpha >= 0 && alpha <= 1)) {
@@ -211,6 +225,9 @@ static int run(int argc, char ** argv) {
 #endif
         }
     }
+#ifdef RF27_API
+    if (vtail > 0 && !sweep && rf && llama_ridgefill_seq_set_vtail(ctx.get(), 0, true, vtail) != 0) { return 3; } // single pass: refused at decode
+#endif
     const std::vector<int> win_layers = int_list(win_arg);
     const std::vector<int> inp_layers = int_list(inp_arg);
     for (int l : inp_layers) {
@@ -273,12 +290,67 @@ static int run(int argc, char ** argv) {
         filled_logit = false;
         if (lower_twice && llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
         if (full_midsweep && llama_ridgefill_seq_set_part(ctx.get(), 0, nullptr) != 0) { return 3; }
+#ifdef RF27_API
+        if (llama_ridgefill_api_version() != LLAMA_RIDGEFILL_API_VERSION) { throw std::runtime_error("RidgeFill API version mismatch"); }
+        if (s1_window > 0) {
+            // S1: the speed fill of the late attention layers over [0, P), then the window through the late layers
+            auto replay = [&](int b, int e) {
+                llama_batch sb = llama_batch_init(n_batch, 0, 1);
+                for (int start = b; start < e; start += n_batch) {
+                    const int count = std::min(n_batch, e - start);
+                    sb.n_tokens = count;
+                    for (int i = 0; i < count; ++i) {
+                        sb.token[i] = tokens[start + i]; sb.pos[i] = start + i; sb.n_seq_id[i] = 1; sb.seq_id[i][0] = 0; sb.logits[i] = 0;
+                    }
+                    if (llama_decode(ctx.get(), sb) != 0) { llama_batch_free(sb); return false; }
+                }
+                llama_batch_free(sb);
+                return true;
+            };
+            pp = llama_ridgefill_part_default_params();
+            pp.part = LLAMA_RIDGEFILL_PART_S1_FILL;
+            pp.h_buf = h_buf;
+            if (llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
+            if (!replay(0, prefix)) { fprintf(stderr, "S1_FILL decode refused\n"); return 2; }
+            if (!s1_late_early) {
+                pp = llama_ridgefill_part_default_params();
+                pp.part = LLAMA_RIDGEFILL_PART_S1_PROBE;
+                pp.h_buf = h_buf;
+                pp.s1_begin = s1_begin_arg >= 0 ? s1_begin_arg : n - s1_window;
+                pp.s1_end = std::min(n, pp.s1_begin + s1_window);
+                if (llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
+                if (!replay(pp.s1_begin, pp.s1_end)) { fprintf(stderr, "S1_PROBE decode refused\n"); return 2; }
+                std::vector<double> mass(prefix);
+                if (llama_ridgefill_seq_get_s1_mass(ctx.get(), 0, mass.data(), prefix) != prefix) { throw std::runtime_error("no S1 mass"); }
+                write_bytes(output + ".mass_s1.f64", mass.data(), mass.size() * sizeof(double));
+                std::vector<int> order(prefix);
+                for (int i = 0; i < prefix; ++i) { order[i] = i; }
+                std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return mass[a] > mass[b]; });
+                std::vector<llama_pos> rows(order.begin(), order.begin() + std::min(std::max(s1_k, 1), prefix));
+                if (s1_special) {
+                    std::vector<llama_pos> sp(prefix);
+                    llama_ridgefill_select_params sel = llama_ridgefill_select_default_params(rf.get());
+                    sel.share = 0.0f; sel.digits = false; sel.special_exact = true; sel.header_rows = 0;
+                    const int32_t k = llama_ridgefill_select_rows_ext(rf.get(), tokens.data(), prefix, &sel, sp.data());
+                    if (k < 0) { return 3; }
+                    rows.insert(rows.end(), sp.begin(), sp.begin() + k);
+                }
+                std::sort(rows.begin(), rows.end());
+                rows.erase(std::unique(rows.begin(), rows.end()), rows.end());
+                write_bytes(output + ".rows.i32", rows.data(), rows.size() * sizeof(llama_pos));
+                if (llama_ridgefill_seq_set_rows(ctx.get(), 0, rows.data(), rows.size()) != 0) {
+                    throw std::invalid_argument("llama_ridgefill_seq_set_rows refused the S1 rows");
+                }
+            }
+        }
+        if (vtail > 0 && llama_ridgefill_seq_set_vtail(ctx.get(), 0, true, vtail) != 0) { return 3; }
+#endif
         // sweep 2+3: LATE replay over all rows (fill below p_end, exact tail + logits above)
         pp = llama_ridgefill_part_default_params();
         pp.part = LLAMA_RIDGEFILL_PART_LATE;
         pp.h_buf = h_buf;
         if (llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
-        cross = true;
+        cross = !sweep_boundary;
     }
     llama_batch batch = llama_batch_init(n_batch * n_seq, 0, 1);
     std::vector<std::vector<float>> logits(n_seq);
@@ -315,7 +387,7 @@ static int run(int argc, char ** argv) {
                 }
             }
         }
-        if (sweep && start == 0) {
+        if (sweep && start == 0 && !sweep_boundary) {
             dump_state(ctx.get(), output + ".late1.kv"); // the state after the first LATE (replay) batch
         }
         start += count;
@@ -327,6 +399,14 @@ static int run(int argc, char ** argv) {
     }
     llama_batch_free(batch);
     if (sweep) {
+#ifdef RF27_API
+        if (vtail > 0) {
+            std::vector<float> sc(4096);
+            const int32_t k = llama_ridgefill_seq_get_vtail_scales(ctx.get(), 0, sc.data(), (int32_t) sc.size());
+            if (k <= 0) { throw std::runtime_error("vtail on, but no scales were applied"); }
+            write_bytes(output + ".vtail.f32", sc.data(), (size_t) k * sizeof(float));
+        }
+#endif
         llama_ridgefill_seq_set_part(ctx.get(), 0, nullptr);
         write_tensor(output + ".h.f32", h_buf, n);
         for (size_t k = 0; k < win_layers.size(); ++k) {

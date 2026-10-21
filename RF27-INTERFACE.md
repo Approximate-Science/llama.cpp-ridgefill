@@ -393,6 +393,7 @@ them; reuse is a follow-up, report it as spent) + the W window rows through all 
 // V_true from the row's exact layer input, V_fill = v_proj(attn_norm(W_l h_S + c_l)) of the same row; applied
 // before that layer's tail attention. Exact rows keep their V. = kva rescale "vtail" with rescale_skip_last N - P - c_eff.
 LLAMA_API int32_t llama_ridgefill_seq_set_vtail(struct llama_context * ctx, llama_seq_id seq_id, bool enabled, int32_t rows); // rows default 512
+// per prompt: llama_ridgefill_seq_set resets it to off (and clears the S1 mass); set it after seq_set, before LATE
 // the scales applied: [n_late_attn_layers][n_head_kv] row-major into out (room for n); returns the count, < 0 if none yet
 LLAMA_API int32_t llama_ridgefill_seq_get_vtail_scales(struct llama_context * ctx, llama_seq_id seq_id, float * out, int32_t n);
 ```
