@@ -77,6 +77,7 @@ struct task_params {
     bool    ridgefill      = true; // fill the prompt with RidgeFill, if the server has a projector
     int32_t ridgefill_tail = 0;    // exact tail, 0 = server default
     std::string ridgefill_mode = "speed";
+    float ridgefill_share = -1;
     bool ridgefill_special_exact = false;
     int32_t ridgefill_header_rows = 0;
     std::string ridgefill_qattn_window_mode = "last";

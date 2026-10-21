@@ -52,8 +52,10 @@ int main() {
     common_ridgefill_set_option(params, "--ridgefill-qattn-window-mode", "last");
     common_ridgefill_set_option(params, "--ridgefill-header-rows", "0");
     check(params.ridgefill_header_rows == 0);
+    common_ridgefill_set_option(params, "--ridgefill-share", "0");
+    check(params.ridgefill_share == 0);
     for (const auto & bad : {std::pair<std::string, std::string>{"--ridgefill-mode", "unknown"},
-            {"--ridgefill-alpha", "nan"}, {"--ridgefill-alpha", "1.1"}, {"--ridgefill-share", "0"},
+            {"--ridgefill-alpha", "nan"}, {"--ridgefill-alpha", "1.1"}, {"--ridgefill-share", "-0.1"},
             {"--ridgefill-share", "0.5garbage"}, {"--ridgefill-qattn-share", "-1"},
             {"--qattn-turn-cap", "0"}, {"--ridgefill-qattn-turn-cap", "2garbage"}, {"--ridgefill-qattn-turn-cap", "9999999999999"},
             {"--ridgefill-qattn-window", "0"}, {"--ridgefill-qattn-window", "32garbage"},

@@ -85,6 +85,16 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             ctx.params.ridgefill_mode = mode;
         }));
 
+    add((new field_num("ridgefill_share", params.ridgefill_share))
+        ->set_desc("RidgeFill: class row share in [0, 1]")
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto & value = data.at("ridgefill_share");
+            const double share = value.is_number() ? value.get<double>() : -1.0;
+            if (!(share >= 0 && share <= 1)) {
+                throw std::invalid_argument("ridgefill_share must be finite and in [0, 1]");
+            }
+            ctx.params.ridgefill_share = float(share);
+        }));
     add((new field_bool("ridgefill_special_exact", params.ridgefill_special_exact))
         ->set_desc("RidgeFill quality: keep added/special token rows exact"));
     add((new field_num("ridgefill_header_rows", params.ridgefill_header_rows))
@@ -526,6 +536,7 @@ task_params eval_llama_cmpl_schema(
     params.n_cache_reuse = params_base.n_cache_reuse;
     params.ridgefill_tail = params_base.ridgefill_tail;
     params.ridgefill_mode = params_base.ridgefill_mode;
+    params.ridgefill_share = params_base.ridgefill_share;
     params.ridgefill_special_exact = params_base.ridgefill_special_exact;
     params.ridgefill_header_rows = params_base.ridgefill_header_rows;
     params.ridgefill_qattn_window_mode = params_base.ridgefill_qattn_window_mode;
@@ -563,6 +574,7 @@ task_params eval_llama_cmpl_schema(
 
     if (!params_base.ridgefill_path.empty()) {
         common_params selection = params_base;
+        selection.ridgefill_share = params.ridgefill_share;
         selection.ridgefill_special_exact = params.ridgefill_special_exact;
         selection.ridgefill_header_rows = params.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = params.ridgefill_qattn_window_mode;

@@ -107,7 +107,7 @@ def main():
     lower_cache = {}
     checks, worst, worst_mass = 0, 0.0, 0.0
 
-    def reference(values, special, headers, window_mode, cap, endpoint, share=0.2):
+    def reference(values, special, headers, window_mode, cap, endpoint, share=0.2, class_share=0.5, keep_digits=True):
         key = tuple(values.tolist())
         tokens = torch.from_numpy(values)
         if key not in lower_cache:
@@ -121,7 +121,9 @@ def main():
         eligible = scores[tokens[:prefix]].clone()
         count = int(torch.isfinite(eligible).sum())
         eligible[~torch.isfinite(eligible)] = -torch.inf
-        rows = set(top_rows(eligible, prefix, round(0.5 * count))) | set(digits(values, prefix, digit_ids))
+        rows = set(top_rows(eligible, prefix, round(class_share * count)))
+        if keep_digits:
+            rows.update(digits(values, prefix, digit_ids))
         for i, token in enumerate(values[:prefix]):
             if token in special_ids:
                 if special:
@@ -194,6 +196,36 @@ def main():
         assert run(crafted)["exact_rows"] != run(crafted, extra=["--special-exact", "on", "--header-rows", 3])["exact_rows"]
         print("PASS controls: future user headers/targets excluded; turn ignores last-window size; zero share == chat quality; chat rows change selection", flush=True)
 
+    zero_checks = 0
+    with torch.no_grad():
+        for label, mode, digit, special, headers, qshare in (
+                ("empty", "quality", False, False, 0, 0),
+                ("qattn-only", "quality+qattn", False, False, 0, 0.2),
+                ("special-only", "quality", False, True, 0, 0),
+                ("digits-only", "quality", True, False, 0, 0),
+                ("qattn+special", "quality+qattn", False, True, 0, 0.2),
+                ("header-only", "quality", False, False, 3, 0)):
+            want_rows, mass, _, lp, lse = reference(crafted, special, headers, "last", 256, end,
+                                                   share=qshare, class_share=0, keep_digits=digit)
+            assert bool(want_rows) == (label != "empty")
+            for chunk in (50, 128, 512):
+                extra = ["--share", 0, "--digits", "on" if digit else "off", "--special-exact",
+                         "on" if special else "off", "--header-rows", headers, "--qattn-share", qshare]
+                got = run(crafted, mode, extra, chunk=chunk)
+                assert got["exact_rows"] == want_rows, (label, got["exact_rows"], want_rows)
+                assert np.max(np.abs(got["logprobs"] - lp)) < 1e-4
+                assert np.max(np.abs(got["logsumexp"] - lse)) < 1e-4
+                assert got["ridgefill"]["n_exact_prefix_by_source"]["class"] == 0
+                if mass is not None:
+                    assert np.max(np.abs(got["question_mass"] - mass.numpy())) / mass.abs().max().item() < 1e-4
+                if label == "empty":
+                    speed = run(crafted, "speed", ["--share", 0, "--digits", "off"], chunk=chunk)
+                    for field in ("logprobs", "logsumexp"):
+                        assert np.asarray(got[field], dtype="<f8").tobytes() == np.asarray(speed[field], dtype="<f8").tobytes()
+                zero_checks += 1
+            print(f"PASS class-share=0 {label}: oracle rows, logits and accounting across 3 chunks", flush=True)
+    copy_gguf(projector_path, args.work / "projector-s4-zero.gguf", {"adapter.ridgefill.share_default": 0.0})
+
     docs = args.work / "paired-docs.jsonl"
     docs.write_text("".join(json.dumps(dict(name=name, ids=values.tolist())) + "\n" for name, values in (("long", crafted), ("short", short))))
     paired = args.work / "paired"
@@ -228,7 +260,7 @@ def main():
                                  (["--qattn-window-mode", "turn"], "quality", "turn requires quality+qattn")):
         run(crafted, mode, extra, refused=message)
     print("PASS named refusals: missing/future-only/partial/empty headers, invalid knobs and incompatible modes", flush=True)
-    result = dict(result="PASS", oracle_checks=checks, worst_logprob_lse=float(worst), worst_mass_relative=float(worst_mass),
+    result = dict(result="PASS", oracle_checks=checks, zero_share_checks=zero_checks, worst_logprob_lse=float(worst), worst_mass_relative=float(worst_mass),
                   defaults="byte-identical to pre-chat binary", scope="tiny CPU correctness; no chat quality verdict")
     (args.work / "summary.json").write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps(result), flush=True)

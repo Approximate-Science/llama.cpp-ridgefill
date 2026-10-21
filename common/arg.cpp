@@ -3049,7 +3049,7 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-mode", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
-        {"--ridgefill-share"}, "N", "RidgeFill: class row share in (0, 1] (default: projector)",
+        {"--ridgefill-share"}, "N", "RidgeFill: class row share in [0, 1] (default: projector)",
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-share", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(

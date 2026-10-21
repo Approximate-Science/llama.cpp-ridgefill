@@ -49,6 +49,11 @@ int main(int argc, char ** argv) {
         check(select({269}).empty());
         params.ridgefill_digits = 1;
         check(select({269}) == std::vector<llama_pos>({0}));
+        params.ridgefill_share = 0;
+        check(select(tokens) == std::vector<llama_pos>({2, 6}));
+        params.ridgefill_digits = 0;
+        check(select(tokens).empty());
+        params.ridgefill_digits = 1;
         params.ridgefill_share = 0.5f;
         for (float share : {0.0f, 0.2f, 1.0f}) {
             params.ridgefill_qattn_share = share;
