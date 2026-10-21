@@ -1755,6 +1755,16 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
             throw std::invalid_argument("--ridgefill-mode must be off, speed, quality or quality+qattn");
         }
         params.ridgefill_mode = value;
+    } else if (option == "--ridgefill-qattn-window-mode") {
+        if (value != "last" && value != "turn") { throw std::invalid_argument(option + " must be last or turn"); }
+        params.ridgefill_qattn_window_mode = value;
+    } else if (option == "--ridgefill-header-rows") {
+        size_t end = 0;
+        int result;
+        try { result = std::stoi(value, &end); }
+        catch (const std::exception &) { throw std::invalid_argument(option + " must be a nonnegative integer"); }
+        if (end != value.size() || result < 0) { throw std::invalid_argument(option + " must be a nonnegative integer"); }
+        params.ridgefill_header_rows = result;
     } else if (option == "--ridgefill-alpha") {
         params.ridgefill_alpha = number();
     } else if (option == "--ridgefill-share") {
@@ -1763,10 +1773,12 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         params.ridgefill_share = share;
     } else if (option == "--ridgefill-qattn-share") {
         params.ridgefill_qattn_share = number();
-    } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind") {
+    } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind" || option == "--ridgefill-special-exact") {
         if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
         if (option == "--ridgefill-digits") {
             params.ridgefill_digits = value == "on";
+        } else if (option == "--ridgefill-special-exact") {
+            params.ridgefill_special_exact = value == "on";
         } else {
             params.ridgefill_qattn_blind = value == "on";
         }
@@ -1795,6 +1807,21 @@ static void common_ridgefill_check_quality_alpha(const common_params & params, c
     }
 }
 
+void common_ridgefill_validate_options(const common_params & params, const std::string & mode) {
+    const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
+    if (!common_ridgefill_mode_valid(selected_mode)) { throw std::invalid_argument("RidgeFill: invalid mode " + selected_mode); }
+    if (params.ridgefill_header_rows < 0) { throw std::invalid_argument("RidgeFill: --ridgefill-header-rows must be nonnegative"); }
+    if (params.ridgefill_qattn_window_mode != "last" && params.ridgefill_qattn_window_mode != "turn") {
+        throw std::invalid_argument("RidgeFill: --ridgefill-qattn-window-mode must be last or turn");
+    }
+    if (selected_mode == "speed" && (params.ridgefill_special_exact || params.ridgefill_header_rows > 0)) {
+        throw std::invalid_argument("RidgeFill: --ridgefill-special-exact and --ridgefill-header-rows require quality or quality+qattn, not mode speed");
+    }
+    if (selected_mode != "off" && params.ridgefill_qattn_window_mode == "turn") {
+        throw std::invalid_argument("RidgeFill: --ridgefill-qattn-window-mode turn requires the last-user-turn sweep integration");
+    }
+}
+
 void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf) {
     if (!common_ridgefill_mode_valid(params.ridgefill_mode)) {
         throw std::invalid_argument("invalid --ridgefill-mode " + params.ridgefill_mode);
@@ -1808,12 +1835,13 @@ void common_ridgefill_resolve(common_params & params, const llama_ridgefill * rf
         throw std::invalid_argument("--ridgefill-tail is below this projector's tail_min");
     }
     common_ridgefill_check_quality_alpha(params, params.ridgefill_mode);
+    common_ridgefill_validate_options(params);
 }
 
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const llama_ridgefill * rf,
         const llama_token * tokens, int32_t n_prefix, const std::string & mode) {
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
-    if (!common_ridgefill_mode_valid(selected_mode)) { throw std::invalid_argument("RidgeFill: invalid mode " + selected_mode); }
+    common_ridgefill_validate_options(params, selected_mode);
     if (selected_mode == "off" || selected_mode == "speed" || n_prefix == 0) { return {}; }
     common_ridgefill_check_quality_alpha(params, selected_mode);
     if (!rf || !tokens || n_prefix < 0) { throw std::invalid_argument("RidgeFill: class/digit selection requires a projector, tokens and nonnegative prefix length"); }
@@ -1824,12 +1852,17 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
         throw std::invalid_argument("RidgeFill: --ridgefill-digits must be resolved to on or off");
     }
     std::vector<llama_pos> rows(n_prefix);
-    const int32_t count = llama_ridgefill_select_rows(rf, tokens, n_prefix, params.ridgefill_share, params.ridgefill_digits != 0, rows.data());
-    if (count < 0 || count > n_prefix) { throw std::runtime_error("RidgeFill: llama_ridgefill_select_rows refused mode " + selected_mode); }
+    auto selection = llama_ridgefill_select_default_params(rf);
+    selection.share = params.ridgefill_share;
+    selection.digits = params.ridgefill_digits != 0;
+    selection.special_exact = params.ridgefill_special_exact;
+    selection.header_rows = params.ridgefill_header_rows;
+    const int32_t count = llama_ridgefill_select_rows_ext(rf, tokens, n_prefix, &selection, rows.data());
+    if (count < 0 || count > n_prefix) { throw std::runtime_error("RidgeFill: llama_ridgefill_select_rows_ext refused mode " + selected_mode); }
     rows.resize(count);
     for (size_t i = 0; i < rows.size(); ++i) {
         if (rows[i] < 0 || rows[i] >= n_prefix || (i > 0 && rows[i] <= rows[i - 1])) {
-            throw std::runtime_error("RidgeFill: llama_ridgefill_select_rows returned invalid prefix positions");
+            throw std::runtime_error("RidgeFill: llama_ridgefill_select_rows_ext returned invalid prefix positions");
         }
     }
     return rows;

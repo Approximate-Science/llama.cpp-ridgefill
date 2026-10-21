@@ -4103,7 +4103,11 @@ private:
                             std::vector<llama_pos> rows;
                             if (p_fill > 0 && mode != "speed") {
                                 try {
-                                    rows = common_ridgefill_rows(params_base, rf, input_tokens.get_tokens().data(), p_fill, mode);
+                                    common_params selection = params_base;
+                                    selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
+                                    selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
+                                    selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
+                                    rows = common_ridgefill_rows(selection, rf, input_tokens.get_tokens().data(), p_fill, mode);
                                 } catch (const std::exception & error) {
                                     send_error(slot, error.what(), ERROR_TYPE_INVALID_REQUEST);
                                     slot.release();
@@ -5547,6 +5551,8 @@ static json get_res_props(const server_context_meta & meta, const common_params 
             { "share", params.ridgefill_share }, { "digits", params.ridgefill_digits }, { "alpha", params.ridgefill_alpha },
             { "qattn_share", params.ridgefill_qattn_share }, { "qattn_window", params.ridgefill_qattn_window },
             { "qattn_blind", params.ridgefill_qattn_blind },
+            { "special_exact", params.ridgefill_special_exact }, { "header_rows", params.ridgefill_header_rows },
+            { "qattn_window_mode", params.ridgefill_qattn_window_mode },
         };
     }
     if (params.use_jinja) {

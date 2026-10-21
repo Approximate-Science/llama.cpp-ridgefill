@@ -20,6 +20,8 @@ RidgeFill is by Dylan Johnston and tcclaviger. Method, reference implementation 
 
 ## Qwen3.8-27B (`qwen35`)
 
+**Release on hold:** chat-template quality must meet the CHAT-TUNE/CHAT-HELDOUT bars before release. The new chat-row controls are experimental; defaults remain unchanged.
+
 The Qwen3.8-27B port implements speed, class/digit quality and server question-attention quality prefill. The format-2 projector converter and tiny Qwen3.5 fixtures are available. On engine `3ac42957d`, the canonical tiny CPU G1 passed 27 checks each for speed (alpha 0/1) and quality with explicit exact rows (alpha 0), across three chunk sizes. The gates compare logits, KV caches, convolution state and recurrent state with the oracle and require positive/negative controls. Quality alpha 1 is refused by name until the rho-scaled correction is implemented. Real-model measurements and their limitations are below; the later Llama/Qwen3 tables are earlier measurements on different models.
 
 The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 512, and minimum prompt 8192. Defaults come from the projector: alpha 0, class share 0.5, digits on, question-attention share 0.2. A format-2 GGUF checks every model fingerprint field and the vocabulary token hash; the tokenizer JSON hash and source file hashes are retained as provenance. A different quantization of the same base model is allowed.
@@ -103,7 +105,7 @@ NLL values and deltas are nats per novel token. Paired BCa intervals use all 24 
 
 Tier 3's interval is degenerate and is not a general noninferiority guarantee. HIP G3 NLL/needles are NOT RUN.
 
-**Recommended RidgeFill mode: Tier 3 (`quality+qattn`), alpha 0**, with the defaults above. It is the only measured mode meeting the tuning NLL bar, and its 48 tuning needles all succeed. This recommendation does not establish held-out confirmation. In separate held-out reference runs, the four chat-template documents show mean Tier 3 degradation of **+0.291 nats per novel token**; the registered held-out confirmation was REFUTED. That is a reference result, not an engine measurement, and chat-template quality is a material limitation despite the tuning needles succeeding. The cause and a general fix have not been established.
+**Recommended experimental baseline: Tier 3 (`quality+qattn`), alpha 0**, with the defaults above. It is the only measured mode meeting the tuning NLL bar, and its 48 tuning needles all succeed. This recommendation does not establish held-out confirmation. In separate held-out reference runs, the four chat-template documents show mean Tier 3 degradation of **+0.291 nats per novel token**; the registered held-out confirmation was REFUTED. That is a reference result, not an engine measurement, and chat-template quality is a material limitation despite the tuning needles succeeding. The cause and a general fix have not been established.
 
 Full-model engine/reference agreement also remains limited: G2-as-written is INCONCLUSIVE because the wrong-map control is not separable, the registered G2-shift amendment is FAIL, and Tier 3 row unions differ from the reference. The tuning NLL bar does not resolve these checks or establish an overall release verdict.
 
@@ -142,6 +144,9 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-mode MODE` | speed with a projector | off, speed, quality, quality+qattn; availability above |
 | `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in (0,1] |
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
+| `--ridgefill-special-exact on\|off` | off | keep unknown/control/user-defined token rows exact in quality modes |
+| `--ridgefill-header-rows K` | 0 | keep the next K prefix rows after each special token exact, independently of special-exact |
+| `--ridgefill-qattn-window-mode last\|turn` | last | turn is reserved for last-user-turn selection and currently refuses pending sweep integration |
 | `--ridgefill-alpha N` | projector (27B: 0) | state correction scale in [0,1]; quality currently requires 0 |
 | `--ridgefill-qattn-share N` | projector (27B: 0.2) | question-attention prefix share in [0,1]; server only |
 | `--ridgefill-qattn-window N` | 64 | positive query-window size; server only |
@@ -158,8 +163,11 @@ Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill
 | `ridgefill` | boolean; false selects stock processing regardless of mode |
 | `ridgefill_mode` | off, speed, quality or quality+qattn; inherits server mode when omitted |
 | `ridgefill_tail` | integer; 0 inherits the server tail, positive values must meet projector tail_min |
+| `ridgefill_special_exact` | boolean; inherits startup setting; quality modes only |
+| `ridgefill_header_rows` | nonnegative integer; inherits startup setting; quality modes only |
+| `ridgefill_qattn_window_mode` | last or turn; inherits startup setting; turn currently refuses by name |
 
-Class/digit/alpha/question knobs are server startup settings, not per-request overrides. `ridgefill_mode: "off"` selects stock. Unknown modes, wrong field types, negative tails and tails below tail_min return a named request error.
+Class/digit/alpha settings and question share/window-size/blind are server startup settings. The chat-row and question-window-mode fields above can be overridden per request. `ridgefill_mode: "off"` selects stock. Unknown modes, wrong field types, negative tails and tails below tail_min return a named request error.
 
 The RAM prompt cache carries the mode, exact-row set and fill marker. The unchanged fill boundary can reuse its exact cached tail. Changing mode or selected rows in a retained approximate region requires recomputation; a changed boundary restarts a recurrent/hybrid context when it cannot rewind safely. Ordinary cache_prompt reuse and --cache-ram remain available. KV shifting through nonzero --cache-reuse or request n_cache_reuse is refused by name. Slot save of filled rows is refused; an exact slot can be saved.
 
@@ -171,6 +179,8 @@ The following combinations and invalid inputs refuse by name; there is no fallba
 | nonzero `--cache-reuse` or request `n_cache_reuse` | names the cache-shift setting; set it to 0; ordinary `cache_prompt` and RAM prompt cache remain available |
 | `-sm row` | names `--split-mode row`; use layer split |
 | save a slot containing filled rows | names `save slot`; an exact slot can be saved |
+| speed with special-exact on or header-rows > 0 | names the chat flags; use a quality mode |
+| question-window-mode turn | names the pending last-user-turn sweep integration; last remains unchanged |
 | alpha != 0 in either quality mode | names the missing rho-scaled correction; use `--ridgefill-alpha 0` |
 | parallel quality with non-unified KV | names unified KV and `-kvu`; enable `--kv-unified` |
 | bench/perplexity `quality+qattn` | names the server question-attention sweep; use the server or ordinary quality |

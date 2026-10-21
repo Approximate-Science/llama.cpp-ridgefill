@@ -548,6 +548,9 @@ struct common_params {
     float       ridgefill_qattn_share = -1;
     int32_t     ridgefill_qattn_window = 64;
     bool        ridgefill_qattn_blind = false;
+    bool        ridgefill_special_exact = false;
+    int32_t     ridgefill_header_rows = 0;
+    std::string ridgefill_qattn_window_mode = "last";
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
     int32_t control_vector_layer_start = -1; // layer range for control vector
@@ -1036,7 +1039,8 @@ int32_t common_ridgefill_p_end(const common_params & params, int32_t n_prompt, i
 bool common_ridgefill_mode_valid(const std::string & mode);
 void common_ridgefill_set_option(common_params & params, const std::string & option, const std::string & value);
 void common_ridgefill_resolve(common_params & params, const struct llama_ridgefill * rf);
-// Class/digit base rows for quality modes; the sweep caller adds question-attention rows.
+void common_ridgefill_validate_options(const common_params & params, const std::string & mode = "");
+// Class/digit/special/header base rows for quality modes; the sweep caller adds question-attention rows.
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const struct llama_ridgefill * rf,
         const llama_token * tokens, int32_t n_prefix, const std::string & mode = "");
 

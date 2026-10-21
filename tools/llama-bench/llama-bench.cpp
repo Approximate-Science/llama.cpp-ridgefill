@@ -449,6 +449,9 @@ static void print_usage(int /* argc */, char ** argv) {
     printf("  --ridgefill-mode <mode>                     off, speed or quality (default: speed)\n");
     printf("  --ridgefill-share <n>                       class row share in (0, 1] (default: projector)\n");
     printf("  --ridgefill-digits <on|off>                  keep digit rows exact (default: projector)\n");
+    printf("  --ridgefill-special-exact <on|off>          keep special rows exact in quality (default: off)\n");
+    printf("  --ridgefill-header-rows <K>                 exact rows after each special token (default: 0)\n");
+    printf("  --ridgefill-qattn-window-mode <last|turn>    turn requires the server sweep\n");
     printf("  --ridgefill-alpha <n>                       correction scale in [0, 1] (default: projector)\n");
     printf("  -fitt, --fit-target <MiB>                   fit model to device memory with this margin per device in MiB (default: off)\n");
     printf("  -fitc, --fit-ctx <n>                        minimum ctx size for --fit-target (default: 0)\n");
@@ -1073,6 +1076,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv) {
                 }
                 g_ridgefill.ridgefill_path = argv[i];
             } else if (arg == "--ridgefill-tail" || arg == "--ridgefill-mode" || arg == "--ridgefill-share" ||
+                       arg == "--ridgefill-special-exact" || arg == "--ridgefill-header-rows" || arg == "--ridgefill-qattn-window-mode" ||
                        arg == "--ridgefill-digits" || arg == "--ridgefill-alpha" || arg == "--ridgefill-qattn-share" || arg == "--ridgefill-qattn-window") {
                 if (++i >= argc) {
                     invalid_param = true;
@@ -2326,6 +2330,12 @@ int llama_bench(int argc, char ** argv) {
     ggml_backend_load_all();
 
     cmd_params params = parse_cmd_params(argc, argv);
+    try {
+        if (!g_ridgefill.ridgefill_path.empty()) { common_ridgefill_validate_options(g_ridgefill); }
+    } catch (const std::exception & error) {
+        fprintf(stderr, "%s\n", error.what());
+        return 1;
+    }
     if (g_ridgefill.ridgefill_mode == "quality+qattn") {
         fprintf(stderr, "--ridgefill-mode quality+qattn requires the server's question-attention sweep\n");
         return 1;

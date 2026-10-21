@@ -92,3 +92,11 @@ python3 tools/ridgefill/check_chat_score.py \
 ```
 
 This gate compares default log-probabilities, logsumexp, mass and rows byte-for-byte on raw and templated inputs; compares chat selection, mass and `finish()` logits across three chunk sizes; covers capped, uncapped and short turns; checks future/partial/missing/empty headers and zero-share equality; and runs the paired wrapper with per-document turn bounds and BCa.
+
+## Experimental chat-row flags
+
+`--special-exact on|off` (default off) keeps added/special token positions exact; `--header-rows K` (default 0) adds up to K following prefix rows after each such token, independently of special-exact. Unknown, control and user-defined tokens are special; unused padding is excluded. The scorer also accepts the common CLI aliases `--ridgefill-special-exact` and `--ridgefill-header-rows`. Both quality modes apply these through the engine's extended selector; speed with either option active refuses by name. Off remains a stock control. Native records include these choices in parameters.
+
+The paired wrapper accepts the same new controls and `--mode off|speed|quality|quality+qattn` (default quality+qattn). It always pairs the selected mode against off; mode off is an identity control. Input remains the existing named-token-ID format. Lane T's frozen CHAT-TUNE/CHAT-HELDOUT schema is pending; no schema is guessed here.
+
+`--qattn-window-mode last|turn` (common alias `--ridgefill-qattn-window-mode`) defaults to last. The turn choice is exposed but refuses by name until the last-user-turn sweep implementation lands. No request silently substitutes the old window. The current NLL wrapper still freezes the last window before the scored targets.

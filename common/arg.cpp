@@ -1309,6 +1309,7 @@ bool common_params_parse(int argc, char ** argv, common_params & params, llama_e
             common_params_print_completion(ctx_arg);
             exit(0);
         }
+        if (!params.ridgefill_path.empty()) { common_ridgefill_validate_options(params); }
         params.lr.init();
     } catch (const std::invalid_argument & ex) {
         fprintf(stderr, "%s\n", ex.what());
@@ -3026,6 +3027,18 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
     add_opt(common_arg(
         {"--ridgefill-digits"}, "on|off", "RidgeFill: keep digit rows exact (default: projector)",
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-digits", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-special-exact"}, "on|off", "RidgeFill: keep added/special token rows exact in quality modes (default: off)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-special-exact", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-header-rows"}, "K", "RidgeFill: keep K rows after each special token exact in quality modes (default: 0)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-header-rows", value); }
+    ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
+    add_opt(common_arg(
+        {"--ridgefill-qattn-window-mode"}, "last|turn", "RidgeFill: question window rule (default: last; turn requires sweep integration)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-qattn-window-mode", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
         {"--ridgefill-alpha"}, "N", "RidgeFill: correction scale in [0, 1] (default: projector)",

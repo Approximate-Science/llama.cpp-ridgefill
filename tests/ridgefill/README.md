@@ -157,3 +157,13 @@ CPU validation of evidence/refusal parsing uses synthetic GPU records and explic
 python3 tests/ridgefill/test_gpu_smoke.py -v
 bash -n tests/ridgefill/run_g5_gpu.sh tests/ridgefill/run_g5_two_card.sh
 ```
+
+## Experimental chat-row plumbing
+
+The extended common selector forwards special-exact (default off) and header-rows (default 0) to libllama; the defaults retain the previous rows. Common CLI, bench, perplexity, scorer and server request fields apply these choices in quality modes. Speed refuses active chat-row options. Per-request changes recompute incompatible retained rows; request off remains stock. Window mode last/turn is parsed consistently; turn currently refuses the pending last-user-turn sweep integration.
+
+```sh
+.venv-oracle/bin/python tests/ridgefill/check_chat_tools.py --bin-dir build/bin --fixture out/gate1-qwen35 --kva /path/to/kva --out out/chat-tools
+```
+
+This CPU gate uses a synthetic multi-turn conversation in the existing tiny vocabulary, not lane T's frozen data. It checks independent special/header row unions, prefix clipping, unchanged question mass with the correct additional exact-row union on split 4, server startup inheritance and per-request overrides, cache changes against native target logprobs, named invalid/unsupported options, actual quality bench/perplexity measurements, and paired scorer flag propagation. It does not claim full-model chat quality or implement the last-user-turn selector. The existing four-mode scorer oracle gate checks the unchanged defaults.
