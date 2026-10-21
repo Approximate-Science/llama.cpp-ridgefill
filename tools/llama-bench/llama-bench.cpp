@@ -22,6 +22,7 @@
 #include "arg.h"
 #include "build-info.h"
 #include "common.h"
+#include "json.h"
 #include "download.h"
 #include "fit.h"
 #include "ggml.h"
@@ -2230,7 +2231,13 @@ struct ctx_state {
     std::vector<uint8_t> buf; // the llama_context state buffer
 };
 
-static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, int p_fill = 0, const llama_ridgefill * rf = nullptr) {
+struct ridgefill_prompt_rows {
+    std::vector<llama_token> tokens;
+    std::vector<llama_pos> rows;
+};
+
+static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_threads, int p_fill = 0,
+        const llama_ridgefill * rf = nullptr, ridgefill_prompt_rows * report_rows = nullptr) {
     llama_set_n_threads(ctx, n_threads, n_threads);
 
     const llama_model * model   = llama_get_model(ctx);
@@ -2239,6 +2246,7 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
 
     std::vector<llama_token> tokens(n_batch);
     std::vector<llama_token> quality_tokens;
+    std::vector<llama_pos> rows;
     if (rf && p_fill > 0) {
         llama_ridgefill_seq_set(ctx, 0, p_fill);
         if (g_ridgefill.ridgefill_mode == "quality") {
@@ -2246,7 +2254,6 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
             for (int i = 0; i < n_prompt; ++i) {
                 quality_tokens[i] = i == 0 && llama_vocab_get_add_bos(vocab) ? llama_vocab_bos(vocab) : std::rand() % n_vocab;
             }
-            std::vector<llama_pos> rows;
             try {
                 rows = common_ridgefill_rows(g_ridgefill, rf, quality_tokens.data(), p_fill);
             } catch (const std::exception & error) {
@@ -2284,6 +2291,10 @@ static bool test_prompt(llama_context * ctx, int n_prompt, int n_batch, int n_th
     }
 
     llama_synchronize(ctx);
+    if (report_rows) {
+        report_rows->tokens = std::move(quality_tokens);
+        report_rows->rows = std::move(rows);
+    }
     return true;
 }
 
@@ -2547,7 +2558,13 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: warmup prompt run\n", params_idx, params_count);
                 }
                 //test_prompt(ctx, std::min(t.n_batch, std::min(t.n_prompt, 32)), 0, t.n_batch, t.n_threads);
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill, rf);
+                ridgefill_prompt_rows report_rows;
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill, rf, &report_rows);
+                if (rf && res) {
+                    const auto report = common_ridgefill_get_report(lmodel, rf, g_ridgefill, report_rows.tokens.data(),
+                            t.n_prompt, p_fill, report_rows.rows, g_ridgefill.ridgefill_mode);
+                    fprintf(stderr, "RidgeFill: warmup report %s\n", report.to_json().dump().c_str());
+                }
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt warmup\n", __func__);
                     llama_free(ctx);
@@ -2609,6 +2626,7 @@ int llama_bench(int argc, char ** argv) {
                 }
             }
 
+            ridgefill_prompt_rows report_rows;
             uint64_t t_start = get_time_ns();
 
             if (t.n_prompt > 0) {
@@ -2616,7 +2634,7 @@ int llama_bench(int argc, char ** argv) {
                     fprintf(stderr, "llama-bench: benchmark %d/%zu: prompt run %d/%d\n", params_idx, params_count,
                             i + 1, params.reps);
                 }
-                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill, rf);
+                bool res = test_prompt(ctx, t.n_prompt, t.n_batch, t.n_threads, p_fill, rf, &report_rows);
                 if (!res) {
                     fprintf(stderr, "%s: error: failed to run prompt\n", __func__);
                     llama_free(ctx);
@@ -2640,6 +2658,11 @@ int llama_bench(int argc, char ** argv) {
 
             uint64_t t_ns = get_time_ns() - t_start;
             t.samples_ns.push_back(t_ns);
+            if (rf) {
+                const auto report = common_ridgefill_get_report(lmodel, rf, g_ridgefill, report_rows.tokens.data(),
+                        t.n_prompt, p_fill, report_rows.rows, g_ridgefill.ridgefill_mode);
+                fprintf(stderr, "RidgeFill: report %s\n", report.to_json().dump().c_str());
+            }
         }
 
         if (rf && p_fill > 0) {

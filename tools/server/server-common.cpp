@@ -155,6 +155,8 @@ json server_slot_stats::to_json() const {
         base["prompt_filled_n"] = n_prompt_filled;
     }
 
+    if (ridgefill.enabled) { base["ridgefill"] = ridgefill.to_json(); }
+
     if (n_draft_tokens > 0) {
         base["draft_n"]          = n_draft_tokens;
         base["draft_n_accepted"] = n_draft_accepted;

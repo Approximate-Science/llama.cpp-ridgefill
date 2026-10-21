@@ -1045,6 +1045,25 @@ void common_ridgefill_validate_options(const common_params & params, const std::
 std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const struct llama_ridgefill * rf,
         const llama_token * tokens, int32_t n_prefix, const std::string & mode = "");
 
+class common_json;
+
+struct common_ridgefill_report {
+    bool enabled = false;
+    int32_t n_prompt = 0;
+    int32_t n_prefix = 0;
+    int32_t n_exact_prefix = 0;
+    int32_t n_cached_exact_prefix = 0;
+    std::array<int32_t, 5> exact_by_source = {}; // class, digit, special, header, qattn; disjoint in this order
+    double macs_exact = 0;
+    double macs_ridgefill = 0;
+
+    common_json to_json() const;
+};
+
+common_ridgefill_report common_ridgefill_get_report(const llama_model * model, const llama_ridgefill * rf,
+        const common_params & params, const llama_token * tokens, int32_t n_prompt, int32_t n_prefix,
+        const std::vector<llama_pos> & rows, const std::string & mode, int32_t window_begin = -1, int32_t window_end = -1, int32_t filled_begin = 0, int32_t filled_end = -1);
+
 // model endpoint from env
 std::string common_get_model_endpoint();
 

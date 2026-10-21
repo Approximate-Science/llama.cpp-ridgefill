@@ -17,8 +17,14 @@ class FakeClient(evaluation.Client):
         if path == "/completion":
             target = body["logit_bias"][0][0]
             normalizer = math.log(sum(math.exp(-i / 10) for i in range(17)))
+            n = len(body["prompt"])
+            prefix = n - body["ridgefill_tail"] if body["ridgefill"] else 0
+            report = dict(n_prompt=n, n_prefix=prefix, n_filled=prefix, n_exact_prefix=0, n_cached_exact_prefix=0, n_exact_tail=n-prefix,
+                          n_exact_prefix_by_source=dict.fromkeys(("class", "digit", "special", "header", "qattn"), 0),
+                          tokens_skipped=prefix/n, macs_exact=100.0, macs_ridgefill=80.0 if prefix else 100.0,
+                          mac_share_skipped=0.2 if prefix else 0.0)
             return dict(completion_probabilities=[dict(id=target, logprob=-target / 10 - normalizer)],
-                        timings=dict(prompt_filled_n=100 if not body["cache_prompt"] and body["ridgefill"] else 0))
+                        timings=dict(prompt_filled_n=100 if not body["cache_prompt"] and body["ridgefill"] else 0, ridgefill=report))
         if path == "/detokenize":
             return dict(content="haystack and question")
         if path == "/apply-template":
@@ -45,6 +51,43 @@ class EvaluationTests(unittest.TestCase):
             self.assertFalse(body["post_sampling_probs"])
         self.assertFalse(client.calls[0][1]["cache_prompt"])
         self.assertTrue(client.calls[-1][1]["cache_prompt"])
+
+    def test_reporting_is_required_and_checked(self):
+        with self.assertRaisesRegex(evaluation.EvalError, "missing RidgeFill reporting"):
+            evaluation.validate_ridgefill_report(None, 700, "quality")
+        stock = evaluation.response_ridgefill_report(dict(timings={}), 700, "off")
+        self.assertEqual(stock["mac_share_skipped"], 0)
+        self.assertIsNone(stock["macs_exact"])
+        client = FakeClient()
+        body = evaluation.completion_body([1] * 700, "speed", 600)
+        body["logit_bias"] = [[1, 1000000.0]]
+        row = client.request("/completion", body)
+        report = row["timings"]["ridgefill"]
+        self.assertEqual(evaluation.validate_ridgefill_report(report, 700, "speed")["n_filled"], 100)
+        for key, value in (("tokens_skipped", 0), ("n_exact_prefix", 1), ("mac_share_skipped", 0.9)):
+            bad = dict(report, **{key: value})
+            with self.assertRaises(evaluation.EvalError):
+                evaluation.validate_ridgefill_report(bad, 700, "speed")
+
+    def test_aggregate_reporting_weights_actual_row_counts(self):
+        a = evaluation.response_ridgefill_report(dict(timings={}), 200, "off")
+        b = evaluation.response_ridgefill_report(dict(timings={}), 100, "off")
+        total = evaluation.reporting_summary([dict(reference=dict(ridgefill=a)), dict(reference=dict(ridgefill=b))], "reference")
+        assert total is not None
+        self.assertEqual(total["n_prompt"], 300)
+        self.assertEqual(total["requests"], 2)
+        self.assertEqual(total["tokens_skipped"], 0)
+        self.assertIsNone(total["macs_exact"])
+        first = dict(a, n_prefix=50, n_filled=50, n_exact_tail=150, tokens_skipped=0.25,
+                     macs_exact=100.0, macs_ridgefill=80.0, mac_share_skipped=0.2)
+        second = dict(b, n_prefix=100, n_filled=100, n_exact_tail=0, tokens_skipped=1.0,
+                      macs_exact=200.0, macs_ridgefill=180.0, mac_share_skipped=0.1)
+        weighted = evaluation.reporting_summary([dict(candidate=dict(ridgefill=first)), dict(candidate=dict(ridgefill=second))], "candidate")
+        assert weighted is not None
+        self.assertEqual(weighted["tokens_skipped"], 0.5)
+        self.assertAlmostEqual(weighted["mac_share_skipped"], 40 / 300)
+        with self.assertRaisesRegex(evaluation.EvalError, "missing RidgeFill"):
+            evaluation.reporting_summary([dict(reference=dict(ridgefill=a)), dict(reference={})], "reference")
 
     def test_negative_off_uses_no_fill(self):
         result = evaluation.score_nll(FakeClient(), [i % 17 for i in range(700)], "off", 600, 1, 1)

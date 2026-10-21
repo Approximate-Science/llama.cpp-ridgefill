@@ -13,7 +13,7 @@ import sys
 sys.dont_write_bytecode = True
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "tests/ridgefill"))
-from eval_client import paired_summary, read_items
+from eval_client import paired_summary, read_items, validate_ridgefill_report
 
 
 def sha256(path):
@@ -68,6 +68,7 @@ def run(args):
                 raise ValueError("native scorer returned missing/duplicate/unpaired documents")
             native[mode] = {row["name"]: row for row in rows}
             for row in rows:
+                validate_ridgefill_report(row.get("ridgefill"), args.length, mode)
                 if (row["scored"] != args.scored or row["n"] != args.length or row["prefills"] != 1 or
                         row["target_positions"] != list(range(args.length - args.scored, args.length)) or
                         len(row["logprobs"]) != args.scored or len(row["logsumexp"]) != args.scored or

@@ -176,3 +176,12 @@ The native ChatML gate in tools/ridgefill/check_chat_score.py first creates chat
 ```
 
 G5 startup checks now give each unsupported combination five seconds, use nonexistent model/projector/adapter paths and an invalid device name, and require the RidgeFill refusal before either model or device loading. Server, perplexity and bench each reject LoRA, control vectors, embeddings, nonzero cache reuse and row splitting. Flags are tested before and after --ridgefill. The no-projector LoRA loader and live filled/exact slot-save controls remain active.
+
+
+## Skipped-work reporting gate
+
+```sh
+.venv-oracle/bin/python tests/ridgefill/check_reporting.py --bin-dir build/bin --fixture out/gate1-qwen35 --chat-fixture out/score-chat-gate --dump out/rf_dump_rs --kva /path/to/kva --out out/reporting
+```
+
+The chat fixture comes from tools/ridgefill/check_chat_score.py. Build rf27-gates/rf_dump_rs.cpp with -DRF27_API against the same engine to provide --dump. The gate compares source breakdowns with actual select_rows_ext row sets, analytic budgets with the read-only kva/compute.py functions across off/speed/quality/chat/qattn and two turn caps, and the all-exact prefix control that still pays selector cost. It compares native/server and cached reports, checks fully/partially exact caches, completion/chat usage including streams, two bench repetitions and an actually scored perplexity chunk. The G3 live gate verifies that all per-request records and statistical summaries retain the reports. No GPU or full-model quality claim follows from these CPU controls.

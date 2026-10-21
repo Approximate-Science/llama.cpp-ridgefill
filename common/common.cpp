@@ -6,6 +6,8 @@
 #include "common.h"
 
 #include "../src/llama-ext.h"
+#include "../src/llama-model.h"
+#include "json.h"
 
 #include "fit.h"
 #include "log.h"
@@ -1877,6 +1879,152 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
         }
     }
     return rows;
+}
+
+common_json common_ridgefill_report::to_json() const {
+    const int32_t filled = n_prefix - n_exact_prefix;
+    return common_json {
+        {"n_prompt", n_prompt}, {"n_prefix", n_prefix}, {"n_filled", filled},
+        {"n_exact_prefix", n_exact_prefix}, {"n_cached_exact_prefix", n_cached_exact_prefix}, {"n_exact_tail", n_prompt - n_prefix},
+        {"n_exact_prefix_by_source", {{"class", exact_by_source[0]}, {"digit", exact_by_source[1]},
+            {"special", exact_by_source[2]}, {"header", exact_by_source[3]}, {"qattn", exact_by_source[4]}}},
+        {"tokens_skipped", n_prompt > 0 ? double(filled) / n_prompt : 0.0},
+        {"macs_exact", macs_exact}, {"macs_ridgefill", macs_ridgefill},
+        {"mac_share_skipped", macs_exact > 0 ? 1.0 - macs_ridgefill / macs_exact : 0.0},
+        {"scope", "prompt coverage including cached rows; analytic cold prefill"},
+        {"mac_model", "kva/compute.py: efficient bypass, actual exact-row positions, actual query window, one lm_head"},
+    };
+}
+
+common_ridgefill_report common_ridgefill_get_report(const llama_model * model, const llama_ridgefill * rf,
+        const common_params & params, const llama_token * tokens, int32_t n_prompt, int32_t n_prefix,
+        const std::vector<llama_pos> & selected_rows, const std::string & mode, int32_t window_begin, int32_t window_end,
+        int32_t filled_begin, int32_t filled_end) {
+    auto require = [](bool ok, const char * message) {
+        if (!ok) { throw std::runtime_error(std::string("RidgeFill reporting: ") + message); }
+    };
+    require(model && n_prompt >= 0 && n_prefix >= 0 && n_prefix <= n_prompt, "invalid prompt bounds");
+    require(common_ridgefill_mode_valid(mode), "invalid mode");
+    common_ridgefill_validate_options(params, mode);
+    require(mode != "off" || n_prefix == 0, "off mode cannot fill prefix rows");
+    require(selected_rows.size() <= size_t(n_prefix), "too many exact prefix rows");
+    for (size_t i = 0; i < selected_rows.size(); ++i) {
+        require(selected_rows[i] >= 0 && selected_rows[i] < n_prefix && (i == 0 || selected_rows[i] > selected_rows[i - 1]),
+                "invalid exact prefix rows");
+    }
+    if (filled_end < 0) { filled_end = n_prefix; }
+    require(filled_begin >= 0 && filled_begin <= filled_end && filled_end <= n_prefix, "invalid cached fill bounds");
+    std::vector<llama_pos> rows = selected_rows;
+    if (filled_begin > 0 || filled_end < n_prefix) {
+        rows.clear();
+        size_t next = 0;
+        for (int32_t i = 0; i < n_prefix; ++i) {
+            const bool selected = next < selected_rows.size() && selected_rows[next] == i;
+            if (i < filled_begin || i >= filled_end || selected) { rows.push_back(i); }
+            if (selected) { ++next; }
+        }
+    }
+    common_ridgefill_report report;
+    report.enabled = true;
+    report.n_prompt = n_prompt;
+    report.n_prefix = n_prefix;
+    report.n_exact_prefix = rows.size();
+    double exact_keys = 0;
+    for (auto row : rows) { exact_keys += double(row) + 1; }
+    if (n_prefix > 0 && (mode == "quality" || mode == "quality+qattn")) {
+        require(rf && tokens, "quality breakdown needs the projector and prompt tokens");
+        std::vector<llama_pos> classes(n_prefix);
+        const int32_t count = llama_ridgefill_select_rows(rf, tokens, n_prefix, params.ridgefill_share, false, classes.data());
+        require(count >= 0 && count <= n_prefix, "class selector refused the breakdown");
+        std::vector<uint8_t> source(n_prefix, 0);
+        for (int32_t i = 0; i < count; ++i) {
+            require(classes[i] >= 0 && classes[i] < n_prefix, "class selector returned an invalid position");
+            source[classes[i]] = 1;
+        }
+        const auto * vocab = llama_model_get_vocab(model);
+        const int excluded = LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_UNUSED;
+        for (int32_t i = 0; i < n_prefix; ++i) {
+            if (!source[i] && params.ridgefill_digits && !(llama_vocab_get_attr(vocab, tokens[i]) & excluded) &&
+                    std::strpbrk(llama_vocab_get_text(vocab, tokens[i]), "0123456789")) { source[i] = 2; }
+        }
+        if (params.ridgefill_special_exact) {
+            for (int32_t i = 0; i < n_prefix; ++i) {
+                if (!source[i] && llama_ridgefill_token_is_special(rf, tokens[i])) { source[i] = 3; }
+            }
+        }
+        int32_t header_end = 0;
+        for (int32_t i = 0; i < n_prefix; ++i) {
+            if (!source[i] && i < header_end) { source[i] = 4; }
+            if (llama_ridgefill_token_is_special(rf, tokens[i])) {
+                header_end = i + 1 + std::min(params.ridgefill_header_rows, n_prefix - i - 1);
+            }
+        }
+        size_t next = 0;
+        for (int32_t i = 0; i < n_prefix; ++i) {
+            const bool selected = next < rows.size() && rows[next] == i;
+            require(!source[i] || selected, "base selector rows differ from the reported exact rows");
+            if (selected) {
+                if (source[i]) {
+                    ++report.exact_by_source[source[i] - 1];
+                } else if (mode == "quality+qattn" && window_begin >= 0 && std::binary_search(selected_rows.begin(), selected_rows.end(), i)) {
+                    ++report.exact_by_source[4];
+                } else {
+                    require(i < filled_begin || i >= filled_end, "unattributed exact prefix row");
+                    ++report.n_cached_exact_prefix;
+                }
+                ++next;
+            }
+        }
+    } else {
+        require(selected_rows.empty(), "speed/off cannot select exact prefix rows");
+        report.n_cached_exact_prefix = rows.size();
+    }
+    if (n_prompt == 0) { return report; }
+    require(model->arch == LLM_ARCH_LLAMA || model->arch == LLM_ARCH_QWEN3 || model->arch == LLM_ARCH_QWEN35,
+            "analytic MACs support llama, qwen3 and qwen35 only");
+    const auto & hp = model->hparams;
+    const uint32_t layers = hp.n_layer();
+    const uint32_t split = rf ? llama_ridgefill_split(rf) : layers;
+    require(split <= layers, "invalid split for analytic MACs");
+    const double hidden = hp.n_embd;
+    const double n = n_prompt, p = n_prefix, r = rows.size(), filled = p - r;
+    const double head = hidden * llama_vocab_n_tokens(llama_model_get_vocab(model));
+    report.macs_exact = report.macs_ridgefill = head;
+    require((window_begin == -1 && window_end == -1) ||
+            (window_begin >= 0 && window_end > window_begin && window_end <= n_prompt), "invalid analytic query window");
+    for (uint32_t il = 0; il < layers; ++il) {
+        const double mlp = 3 * hidden * hp.n_ff(il);
+        double linear, fill, context = 0, tail_context = 0, row_context = 0;
+        if (hp.is_recr(il)) {
+            require(hp.ssm_dt_rank > 0 && hp.ssm_d_inner % hp.ssm_dt_rank == 0, "invalid GDN value heads");
+            const double nk = hp.ssm_n_group, nv = hp.ssm_dt_rank, dk = hp.ssm_d_state;
+            const double dv = hp.ssm_d_inner / hp.ssm_dt_rank;
+            const double conv = 2 * nk * dk + nv * dv;
+            const double inproj = hidden * conv + 2 * hidden * nv + conv * hp.ssm_d_conv;
+            linear = inproj + 2 * hidden * nv * dv + 4 * nv * dk * dv;
+            fill = inproj + 3 * nv * dk * dv;
+        } else {
+            require(hp.n_embd_head_k(il) == hp.n_embd_head_v(il), "analytic attention requires equal key/value head widths");
+            const double hq = hp.n_head(il), hkv = hp.n_head_kv(il), dim = hp.n_embd_head_k(il);
+            const double query = hidden * hq * dim * (model->arch == LLM_ARCH_QWEN35 ? 2 : 1);
+            fill = 2 * hidden * hkv * dim;
+            linear = query + fill + hidden * hq * dim;
+            context = hq * dim * n * (n + 1);
+            tail_context = hq * dim * (n - p) * (p + n + 1);
+            row_context = 2 * hq * dim * exact_keys;
+            if (window_begin >= 0 && il < split && (il == 3 || il == 7 || il == 11 || il == 15)) {
+                const double window = window_end - window_begin;
+                report.macs_ridgefill += window * query + hq * dim * window * (double(window_begin) + window_end + 1) / 2;
+            }
+        }
+        const double exact = n * (linear + mlp) + context;
+        report.macs_exact += exact;
+        report.macs_ridgefill += il < split ? exact :
+            (n - p) * (linear + mlp) + tail_context + filled * (fill + hidden * hidden) + r * (linear + mlp) + row_context;
+    }
+    require(std::isfinite(report.macs_exact) && std::isfinite(report.macs_ridgefill) && report.macs_exact > 0,
+            "nonfinite analytic MAC count");
+    return report;
 }
 
 void common_set_adapter_lora(struct llama_context * ctx, std::vector<common_adapter_lora_info> & lora) {

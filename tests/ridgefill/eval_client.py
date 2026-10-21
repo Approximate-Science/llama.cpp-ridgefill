@@ -107,6 +107,53 @@ def check_fill(response: dict, *, expected: bool, mode: str) -> int:
     return filled
 
 
+def validate_ridgefill_report(report: dict | None, n_prompt: int, mode: str) -> dict:
+    if not isinstance(report, dict):
+        raise EvalError("missing RidgeFill reporting; use a matching server/scorer build")
+    counts = ("n_prompt", "n_prefix", "n_filled", "n_exact_prefix", "n_cached_exact_prefix", "n_exact_tail")
+    if any(type(report.get(key)) is not int or report[key] < 0 for key in counts):
+        raise EvalError("RidgeFill report has missing or invalid row counts")
+    if (report["n_prompt"] != n_prompt or report["n_filled"] + report["n_exact_prefix"] != report["n_prefix"] or
+            report["n_prefix"] + report["n_exact_tail"] != n_prompt):
+        raise EvalError("RidgeFill report row counts do not cover the prompt")
+    sources = report.get("n_exact_prefix_by_source", {})
+    if (not isinstance(sources, dict) or set(sources) != {"class", "digit", "special", "header", "qattn"} or
+            any(type(value) is not int or value < 0 for value in sources.values()) or
+            sum(sources.values()) + report["n_cached_exact_prefix"] != report["n_exact_prefix"]):
+        raise EvalError("RidgeFill report exact-row breakdown does not match its total")
+    for name in ("tokens_skipped", "mac_share_skipped"):
+        if type(report.get(name)) not in (int, float) or not math.isfinite(report[name]):
+            raise EvalError("RidgeFill report has missing or nonfinite fractions/MACs")
+    expected = report["n_filled"] / n_prompt if n_prompt else 0.0
+    if abs(report["tokens_skipped"] - expected) > 1e-12:
+        raise EvalError("RidgeFill report token fraction does not match counts")
+    if (mode == "off" and report["n_prefix"] == 0 and report.get("macs_exact") is None and
+            report.get("macs_ridgefill") is None and report["mac_share_skipped"] == 0):
+        return report
+    for name in ("macs_exact", "macs_ridgefill"):
+        if type(report.get(name)) not in (int, float) or not math.isfinite(report[name]):
+            raise EvalError("RidgeFill report has missing or nonfinite MAC counts")
+    macs = report["macs_exact"]
+    if macs < 0 or report["macs_ridgefill"] < 0 or (n_prompt > 0 and macs == 0):
+        raise EvalError("RidgeFill report has invalid analytic MAC counts")
+    mac_share = 1 - report["macs_ridgefill"] / macs if macs else 0.0
+    if abs(report["tokens_skipped"] - expected) > 1e-12 or abs(report["mac_share_skipped"] - mac_share) > 1e-12:
+        raise EvalError("RidgeFill report fractions do not match counts/MACs")
+    if mode == "off" and (report["n_prefix"] or abs(report["mac_share_skipped"]) > 1e-12):
+        raise EvalError("RidgeFill off control reports skipped work")
+    return report
+
+
+def response_ridgefill_report(response: dict, n_prompt: int, mode: str) -> dict:
+    report = response.get("timings", {}).get("ridgefill")
+    if report is None and mode == "off":
+        report = dict(n_prompt=n_prompt, n_prefix=0, n_filled=0, n_exact_prefix=0, n_cached_exact_prefix=0, n_exact_tail=n_prompt,
+                      n_exact_prefix_by_source=dict.fromkeys(("class", "digit", "special", "header", "qattn"), 0),
+                      tokens_skipped=0.0, mac_share_skipped=0.0, macs_exact=None, macs_ridgefill=None,
+                      scope="client stock exact control; server has no RidgeFill report; MAC totals unavailable")
+    return validate_ridgefill_report(report, n_prompt, mode)
+
+
 def target_logprob(response: dict, target: int) -> float:
     rows = response.get("completion_probabilities", [])
     if len(rows) != 1 or rows[0].get("id") != target:
@@ -126,7 +173,7 @@ def score_nll(client: Client, ids: list[int], mode: str, tail: int, min_prompt: 
     eligible = mode != "off" and prefix > 0 and n >= min_prompt
     if eligible and (tail - scored < tail_min or n - scored < min_prompt):
         raise EvalError("NLL teacher forcing requires tail-512 >= tail_min and N-512 >= min-prompt")
-    values, filled_total = [], 0
+    values, filled_total, reports = [], 0, []
     start = time.perf_counter()
     for position in range(n - scored, n):
         # Keep P fixed while the known exact tail grows one teacher-forced token at a time.
@@ -138,10 +185,11 @@ def score_nll(client: Client, ids: list[int], mode: str, tail: int, min_prompt: 
         response = client.request("/completion", body)
         filled_total += check_fill(response, expected=eligible and not values, mode=mode)
         values.append(target_logprob(response, ids[position]))
+        reports.append(response_ridgefill_report(response, position, mode))
     if len(values) != scored:
         raise EvalError("NLL did not score exactly 512 targets")
     return dict(nll=-float(np.mean(values)), scored=scored, logprobs=values, prefix=prefix if eligible else 0,
-                filled=filled_total, wall_s=time.perf_counter() - start)
+                filled=filled_total, ridgefill_requests=reports, wall_s=time.perf_counter() - start)
 
 
 def needle_prompt(client: Client, item: dict) -> str:
@@ -178,6 +226,31 @@ def load_stats(kva: Path):
     return module
 
 
+def reporting_summary(records: list[dict], arm: str) -> dict | None:
+    reports = [report for row in records for report in
+               (row[arm].get("ridgefill_requests") or [row[arm].get("ridgefill")])]
+    if all(report is None for report in reports):
+        return None
+    if any(not isinstance(report, dict) for report in reports):
+        raise EvalError("paired measurements contain missing RidgeFill reports")
+    totals = {key: sum(report[key] for report in reports)
+              for key in ("n_prompt", "n_prefix", "n_filled", "n_exact_prefix", "n_cached_exact_prefix", "n_exact_tail")}
+    totals["n_exact_prefix_by_source"] = {key: sum(report["n_exact_prefix_by_source"][key] for report in reports)
+                                          for key in ("class", "digit", "special", "header", "qattn")}
+    totals["tokens_skipped"] = totals["n_filled"] / totals["n_prompt"] if totals["n_prompt"] else 0.0
+    available = all(report.get("macs_exact") is not None and report.get("macs_ridgefill") is not None for report in reports)
+    totals["macs_exact"] = sum(report["macs_exact"] for report in reports) if available else None
+    totals["macs_ridgefill"] = sum(report["macs_ridgefill"] for report in reports) if available else None
+    if available:
+        totals["mac_share_skipped"] = 1 - totals["macs_ridgefill"] / totals["macs_exact"] if totals["macs_exact"] else 0.0
+    else:
+        if any(report["mac_share_skipped"] != 0 for report in reports):
+            raise EvalError("cannot aggregate unknown MAC totals for approximate requests")
+        totals["mac_share_skipped"] = 0.0
+    totals.update(units=len(records), requests=len(reports), scope="aggregate prompt coverage including cached rows; analytic cold prefill")
+    return totals
+
+
 def paired_summary(records: list[dict], kind: str, kva: Path) -> dict:
     if not records:
         raise EvalError("SKIPPED: no paired measurements")
@@ -189,9 +262,15 @@ def paired_summary(records: list[dict], kind: str, kva: Path) -> dict:
         raise EvalError("duplicate pairing units")
     _, exact, approximate = stats.paired(reference, candidate, what=kind)
     interval = stats.bca(approximate - exact)
-    return dict(kind=kind, units=len(exact), reference_mean=float(exact.mean()), candidate_mean=float(approximate.mean()),
+    result = dict(kind=kind, units=len(exact), reference_mean=float(exact.mean()), candidate_mean=float(approximate.mean()),
                 delta=interval.estimate, ci95=[interval.lo, interval.hi], degenerate=interval.degenerate,
                 resamples=interval.n_resamples, seed=interval.seed, estimand="document mean" if kind == "nll" else "paired unit mean")
+    reporting = {arm: reporting_summary(records, arm) for arm in ("reference", "candidate")}
+    if any(value is not None for value in reporting.values()):
+        if any(value is None for value in reporting.values()):
+            raise EvalError("paired measurements lack one arm's RidgeFill reporting")
+        result["ridgefill"] = reporting
+    return result
 
 
 def write_record(file, record: dict) -> None:
@@ -224,7 +303,8 @@ def evaluate(args, client: Client, file) -> list[dict]:
                 results[arm] = dict(accuracy=100.0 * needle_correct(response["content"], str(item["value"])), answer=response["content"],
                                     prompt_tokens=len(ids), prompt_sha256=hashlib.sha256(prompt.encode()).hexdigest(),
                                     thinking=False, greedy=True, removed_answer_tokens=item["answer_len"],
-                                    filled=filled, timings=response["timings"], wall_s=time.perf_counter() - start)
+                                    filled=filled, ridgefill=response_ridgefill_report(response, len(ids), mode),
+                                    timings=response["timings"], wall_s=time.perf_counter() - start)
         record = dict(kind=args.command, name=item["name"], domain=item.get("domain"), candidate_mode=args.mode, **results)
         records.append(record)
         write_record(file, record)
@@ -244,7 +324,8 @@ def measure_ttft(args, client: Client, file) -> list[dict]:
             for arm, mode in arms[::1 if repeat % 2 == 0 else -1]:
                 response, first, wall = client.ttft(completion_body(ids, mode, args.tail, predict=args.predict))
                 filled = check_fill(response, expected=mode != "off" and length >= args.min_prompt and length > args.tail, mode=mode)
-                results[arm] = dict(ttft_s=first, wall_s=wall, timings=response["timings"], filled=filled)
+                results[arm] = dict(ttft_s=first, wall_s=wall, timings=response["timings"], filled=filled,
+                                    ridgefill=response_ridgefill_report(response, length, mode))
             record = dict(kind="ttft", name=f"n{length}-r{repeat}", length=length, candidate_mode=args.mode, **results)
             records.append(record)
             write_record(file, record)
@@ -267,7 +348,12 @@ def measure_bench(args, file) -> list[dict]:
                     raise EvalError("llama-bench returned an unexpected test set")
                 if not math.isfinite(rows[0]["avg_ts"]) or rows[0]["avg_ts"] <= 0:
                     raise EvalError("llama-bench returned no positive finite throughput")
-                results[arm] = dict(tokens_per_second=rows[0]["avg_ts"], native=rows[0], command=command)
+                reports = [json.loads(line.removeprefix("RidgeFill: report ")) for line in completed.stderr.splitlines()
+                           if line.startswith("RidgeFill: report ")]
+                if len(reports) != 1:
+                    raise EvalError("llama-bench did not report one measured prefill's skipped work")
+                report = validate_ridgefill_report(reports[0], length, mode)
+                results[arm] = dict(tokens_per_second=rows[0]["avg_ts"], native=rows[0], command=command, ridgefill=report)
             record = dict(kind="bench", name=f"n{length}-g{args.predict}-r{repeat}", length=length, candidate_mode=args.mode, **results)
             records.append(record)
             write_record(file, record)

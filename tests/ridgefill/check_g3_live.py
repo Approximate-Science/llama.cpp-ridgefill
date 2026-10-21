@@ -8,7 +8,7 @@ from pathlib import Path
 
 import numpy as np
 
-from eval_client import needle_correct
+from eval_client import needle_correct, validate_ridgefill_report
 
 
 def class_digit_rows(root: Path, fixture: Path, ids: list[int], prefix: int) -> list[int]:
@@ -100,6 +100,8 @@ def main():
             subprocess.run(command, stdout=log, stderr=subprocess.STDOUT, check=True, timeout=600)
         summary = json.loads((output / "summary.json").read_text())
         check(summary["result"] == "COMPLETE" and len(summary["summaries"]) == 5, "the command did not measure every stage")
+        check(all("ridgefill" in metric and metric["ridgefill"]["reference"]["tokens_skipped"] == 0
+                  for metric in summary["summaries"]), "a quality/performance summary lost its skipped-work denominators")
         for row in summary["summaries"]:
             check(row["status"] == "MEASURED" and row["resamples"] == 5000, "missing measurement or BCa integration")
         summaries[mode] = summary["summaries"]
@@ -111,6 +113,9 @@ def main():
                 error = float(np.max(np.abs(observed - expected[i, arm_mode])))
                 max_error = max(max_error, error)
                 check(row[arm]["scored"] == 512 and error < 1e-5, "last-512 NLL differs from direct logits")
+                reports = row[arm]["ridgefill_requests"]
+                check(len(reports) == 512 and all(validate_ridgefill_report(report, position, arm_mode)
+                      for position, report in zip(range(188, 700), reports)), "NLL output lost per-request skipped-work reporting")
             if mode == "off":
                 check(row["reference"]["logprobs"] == row["candidate"]["logprobs"], "off/off control differs")
             else:
@@ -123,6 +128,15 @@ def main():
                   "needle did not remove answer suffix or disable thinking")
             if mode != "off":
                 check(row["candidate"]["filled"] > 0, "needle candidate did not fill")
+            for arm, arm_mode in (("reference", "off"), ("candidate", mode)):
+                check(bool(validate_ridgefill_report(row[arm]["ridgefill"], row[arm]["prompt_tokens"], arm_mode)),
+                      "needle output lost skipped-work reporting")
+        for metric, kind in (("ttft", "ttft"), ("bench_prefill", "bench"), ("bench_decode", "bench")):
+            measurements = [row for row in map(json.loads, (output / (metric + ".jsonl")).read_text().splitlines()) if row["kind"] == kind]
+            check(len(measurements) == 3 and all(validate_ridgefill_report(row[arm]["ridgefill"],
+                  row[arm]["native"]["n_prompt"] if kind == "bench" else row["length"], arm_mode)
+                  for row in measurements for arm, arm_mode in (("reference", "off"), ("candidate", mode))),
+                  metric + " output lost skipped-work reporting")
         if mode == "speed":
             nll = next(row for row in summary["summaries"] if row["metric"] == "nll")
             check(abs(nll["delta"]) > 1e-5, "speed positive control did not move NLL")

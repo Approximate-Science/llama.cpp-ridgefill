@@ -311,22 +311,44 @@ std::vector<unsigned char> completion_token_output::str_to_bytes(const std::stri
 //
 json server_task_result_cmpl_final::to_json() {
     GGML_ASSERT(is_updated && "update() must be called before to_json()");
-    switch (res_type) {
-        case TASK_RESPONSE_TYPE_NONE:
-            return to_json_non_oaicompat();
-        case TASK_RESPONSE_TYPE_OAI_CMPL:
-            return to_json_oaicompat();
-        case TASK_RESPONSE_TYPE_OAI_CHAT:
-            return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat();
-        case TASK_RESPONSE_TYPE_OAI_RESP:
-            return stream ? to_json_oaicompat_resp_stream() : to_json_oaicompat_resp();
-        case TASK_RESPONSE_TYPE_OAI_ASR:
-            return to_json_oaicompat_asr();
-        case TASK_RESPONSE_TYPE_ANTHROPIC:
-            return stream ? to_json_anthropic_stream() : to_json_anthropic();
-        default:
-            GGML_ASSERT(false && "Invalid task_response_type");
+    json result = [&]() -> json {
+        switch (res_type) {
+            case TASK_RESPONSE_TYPE_NONE:
+                return to_json_non_oaicompat();
+            case TASK_RESPONSE_TYPE_OAI_CMPL:
+                return to_json_oaicompat();
+            case TASK_RESPONSE_TYPE_OAI_CHAT:
+                return stream ? to_json_oaicompat_chat_stream() : to_json_oaicompat_chat();
+            case TASK_RESPONSE_TYPE_OAI_RESP:
+                return stream ? to_json_oaicompat_resp_stream() : to_json_oaicompat_resp();
+            case TASK_RESPONSE_TYPE_OAI_ASR:
+                return to_json_oaicompat_asr();
+            case TASK_RESPONSE_TYPE_ANTHROPIC:
+                return stream ? to_json_anthropic_stream() : to_json_anthropic();
+            default:
+                GGML_ABORT("Invalid task_response_type");
+        }
+    }();
+    if (stats.ridgefill.enabled) {
+        auto add_usage = [&](json & response) {
+            if (response.contains("usage") && response.at("usage").is_object()) { response.at("usage")["ridgefill"] = stats.ridgefill.to_json(); }
+            if (response.contains("response") && response.at("response").contains("usage") && response.at("response").at("usage").is_object()) {
+                response.at("response").at("usage")["ridgefill"] = stats.ridgefill.to_json();
+            }
+            if (response.contains("message") && response.at("message").contains("usage") && response.at("message").at("usage").is_object()) {
+                response.at("message").at("usage")["ridgefill"] = stats.ridgefill.to_json();
+            }
+        };
+        if (result.is_array()) {
+            for (auto & event : result) {
+                add_usage(event);
+                if (event.contains("data")) { add_usage(event.at("data")); }
+            }
+        } else {
+            add_usage(result);
+        }
     }
+    return result;
 }
 
 json server_task_result_cmpl_final::to_json_non_oaicompat() {
@@ -1805,6 +1827,7 @@ server_prompt_cache_state * server_prompt_cache::alloc(const server_prompt & pro
             /*.tokens      =*/ prompt.tokens.clone(),
             /*.checkpoints =*/ prompt.checkpoints,
             /*.n_filled    =*/ prompt.n_filled,
+            /*.ridgefill_fill_start =*/ prompt.ridgefill_fill_start,
             /*.ridgefill_mode =*/ prompt.ridgefill_mode,
             /*.ridgefill_rows =*/ prompt.ridgefill_rows,
         },
