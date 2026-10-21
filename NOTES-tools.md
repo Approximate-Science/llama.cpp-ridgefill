@@ -322,3 +322,58 @@ python3 tests/ridgefill/run_g5.py --ref 23da65965 --backend cpu --fixture out/ga
 ```
 
 The archive source cannot discover the parent worktree. Its source grep covered 36 files and returned 1 with zero output; injected-assumption and portable-code controls passed. Built server/bench/perplexity with CPU -j4 and all three report build 11812, commit 23da65965. All 15 live refusal/persistence controls passed again against the archived binaries. Evidence: `out/g5-cpu-23da65965-run.log`, `out/g5-cpu-23da65965/{results.json,audit.json,portability-grep.log,build.log,refusals.log}` and its refusal per-case logs. Container isolation, GPU backends and multi-GPU layer split remain NOT RUN in this lane; no broader G5 claim is inferred from the scoped CPU pass.
+
+## 2026-10-20: final Qwen3.8 docs and GPU G5 handoff
+
+Rebased onto integration f06e89aea before this work. RIDGEFILL.md now describes all three modes, the per-prompt class/digit and 20%-question unions, last-64 causal mass at layers 3/7/11/15 below split 16, zero-share quality identity, the per-slot F16 h_S replay, 1 GiB bound, startup/request flags, named unsupported combinations, projector provenance and backend/build matrix. The question-attention implementation/CPU gate evidence is attributed to rf27-sweep NOTES-sweep.md (native 25 arrays, HTTP 17 comparisons, cancellation/reuse/shutdown); it was read from that branch, not rerun or claimed as this lane's new test. All 27B metric/backend cells remain NOT YET MEASURED. No tools/server or src file was edited.
+
+Added run_g5_gpu.sh (both backends use kind=host), check_gpu_smoke.py, run_g5_two_card.sh, and GPU evidence parser/refusal tests. Extended the existing run_g5.py archive gate with optional --smoke-model/--smoke-projector: the overall archive result cannot report PASS if its real-model smoke fails. Each single-card wrapper performs a clean git archive build (-j4, GGML_NATIVE=OFF), portability grep and live tiny refusal checks, then exactly one short pp8192 speed prefill (T4096, alpha0, F16 KV, FA off, b512/ub128, threads4, no warmup). The archived revision must include this handoff. Both scripts refuse CPU fallback, missing/wrong devices, nonfinite samples, a wrong build, a non-27B model or inactive fill. A bench stderr completion marker is emitted after measured repetitions, outside their timing, so the script checks that a real filled prefix completed rather than inferring success from an exit code alone.
+
+The coordinator's separate two-card script reuses that clean Vulkan build and discovers both R9700 names at runtime, requests -sm layer -ts 1/1, and requires nontrivial model buffers on both GPUs. No device ID, visible-device mask, hostname, user path or TP degree is fixed in production RidgeFill code. HIP takes its SDK directory explicitly, verifies .info/version is 7.10.0*, uses the exact ROCM_PATH/HIP_PATH/CMAKE_PREFIX_PATH/PATH/LD_LIBRARY_PATH exports from KICKOFF and builds gfx1201. The campaign SDK version is ROCm 7.10.0a20251120; hipcc-version.log and rocm-sdk-version.log capture the observed toolchain. The container is not used because it lacks hipBLAS/rocBLAS.
+
+CPU validation performed:
+
+```text
+CPU llama-bench: BUILT (-j4)
+Tiny speed: PASS, finite measurement, completed 500 filled prefix / 200 exact tail rows
+Tiny off: PASS, finite measurement, completion marker absent
+Tiny quality: PASS, finite measurement, completed 500 prefix / 200 exact tail rows
+GPU parser/refusal unit tests: 5 tests OK (synthetic evidence; NOT a GPU gate)
+Real 27B/projector metadata preflight: PASS (read-only CPU)
+Tiny model passed to real-model preflight: REFUSED by name
+CPU-only executable passed to Vulkan smoke: REFUSED by name, no devices, rc 1
+Wrapper/CLI refusal controls: 5 passed (usage, missing SDK, unpaired paths, CPU smoke)
+Portability grep: 44 sources, zero output, rg exit 1
+bash -n: PASS, both new wrappers
+ty: All checks passed!
+git diff --check: PASS
+```
+
+The first preflight rejected the actual GGUF because its block_count is 65, including one nextn_predict_layers MTP layer. Corrected it to compare the 64-layer trunk (block_count minus nextn_predict_layers), matching libllama; the real model/projector preflight then passed. Retained the no-device failure log at out/gpu-smoke-no-gpu-control.log and its FAIL results.json; it is a refusal control, not a GPU test. Parser test log: out/gpu-smoke-parser-tests.log. Tiny actual measurements/logs: out/gpu-smoke-tiny-{speed,off,quality}.{json,log}. Build: out/gpu-smoke-cpu-build.log. Source audit: out/gpu-g5-portability-grep.log. Rejected accepting a one-card run as a two-card smoke, accepting a CPU backend with positive throughput, and using the HIP container or fixed GPU IDs. No GPU/Vulkan/HIP execution, full-27B benchmark, two-card execution or container isolation was possible in this lane; all remain NOT RUN here.
+
+Exact lane-Q bridge commands (submit each as a separate kind=host job, timeout 14400; pin RF_REF after L-A merges this handoff, and create/link the shared tiny fixture at out/gate1-qwen35 if absent):
+
+```sh
+RF_REF=$(git rev-parse rf27-integ)
+RF_MODEL=/var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
+RF_PROJECTOR=/var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
+tests/ridgefill/run_g5_gpu.sh vulkan "$RF_REF" out/gate1-qwen35 "$RF_MODEL" "$RF_PROJECTOR" "out/g5-vulkan-$RF_REF"
+```
+
+```sh
+RF_REF=$(git rev-parse rf27-integ)
+RF_MODEL=/var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
+RF_PROJECTOR=/var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
+RF_SDK=/var/home/dylan/projects/inference/strata/.venv/lib64/python3.14/site-packages/_rocm_sdk_devel
+tests/ridgefill/run_g5_gpu.sh hip "$RF_REF" out/gate1-qwen35 "$RF_MODEL" "$RF_PROJECTOR" "out/g5-hip-$RF_REF" "$RF_SDK"
+```
+
+Coordinator outside the bridge, in lane Q's folder with the Vulkan archive build and both cards visible (set RF_REF to the exact same pinned value as that build; no rebuild):
+
+```sh
+RF_MODEL=/var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
+RF_PROJECTOR=/var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
+tests/ridgefill/run_g5_two_card.sh "out/g5-vulkan-$RF_REF/build/bin" "$RF_REF" "$RF_MODEL" "$RF_PROJECTOR" "out/g5-two-card-$RF_REF"
+```
+
+The scripts never submit bridge jobs themselves. Lane Q/coordinator supply access and record their actual GPU outcomes. The pinned archive version checks prevent a changed branch or stale executable from being reported as the selected build.

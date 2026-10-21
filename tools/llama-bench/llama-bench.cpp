@@ -2607,6 +2607,11 @@ int llama_bench(int argc, char ** argv) {
             t.samples_ns.push_back(t_ns);
         }
 
+        if (rf && p_fill > 0) {
+            fprintf(stderr, "RidgeFill: mode %s completed %d prefix rows, %d exact tail rows, %d measured repetitions\n",
+                    g_ridgefill.ridgefill_mode.c_str(), p_fill, t.n_prompt - p_fill, params.reps);
+        }
+
         if (p) {
             p->print_test(t);
             fflush(p->fout);
