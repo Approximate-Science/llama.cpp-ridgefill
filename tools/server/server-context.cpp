@@ -1,4 +1,5 @@
 #include "server-context.h"
+#include "server-ridgefill-sweep.h"
 #include <atomic>
 #include <thread>
 #include "base64.hpp"
@@ -309,8 +310,11 @@ struct server_slot {
 
     server_prompt prompt;
 
+    std::unique_ptr<server_ridgefill_sweep> ridgefill_sweep;
+    server_ridgefill_sweep_params ridgefill_sweep_params;
+
     bool prompt_save(server_prompt_cache & prompt_cache) const {
-        if (prompt.tokens.size() == 0) {
+        if (ridgefill_sweep || prompt.tokens.size() == 0) {
             return false;
         }
 
@@ -345,6 +349,10 @@ struct server_slot {
     }
 
     void prompt_clear() {
+        if (ridgefill_sweep) {
+            ridgefill_sweep->cancel(ctx_tgt, id);
+            ridgefill_sweep.reset();
+        }
         SLT_TRC(*this, "clearing prompt with %zu tokens\n", prompt.tokens.size());
 
         mem.seq_rm(id, -1, -1);
@@ -385,6 +393,9 @@ struct server_slot {
     int32_t n_gen_last = 0;
 
     void reset() {
+        if (ridgefill_sweep) {
+            prompt_clear();
+        }
         SLT_DBG(*this, "%s", "\n");
 
         spec_is_replay = false;
@@ -488,6 +499,10 @@ struct server_slot {
 
     bool can_batch_with(server_slot & other_slot) const {
         GGML_ASSERT(task);
+
+        if (ridgefill_sweep || other_slot.ridgefill_sweep) {
+            return false;
+        }
 
         // a joint decision head reads the whole batch
         if (!task->decision.order.empty() || !other_slot.task->decision.order.empty()) {
@@ -619,7 +634,7 @@ struct server_slot {
 
             // do not keep context of the child slots - the parent's context is enough
             // nor of the stateless slots - no task ever reuses it
-            if (task->is_child() || task->is_stateless() || audio_stream) {
+            if (ridgefill_sweep || task->is_child() || task->is_stateless() || audio_stream) {
                 prompt_clear();
             }
 
@@ -1070,6 +1085,12 @@ private:
     int64_t t_last_load_progress_ms = 0;
 
     void destroy() {
+        for (auto & slot : slots) {
+            if (slot.ridgefill_sweep) {
+                slot.prompt_clear();
+            }
+        }
+
         spec.reset();
         spec_init.reset();
 
@@ -1359,11 +1380,6 @@ private:
                 params_base.n_cache_reuse = 0;
                 SRV_WRN("%s\n", "cache_reuse is not supported by this context, it will be disabled");
             }
-        }
-
-        if (!params_base.ridgefill_path.empty() && params_base.ridgefill_mode == "quality+qattn" && params_base.ridgefill_qattn_share > 0) {
-            SRV_ERR("%s", "--ridgefill-mode quality+qattn requires the question-attention sweep driver\n");
-            return false;
         }
 
         if (llama_model_n_swa(model_tgt) == 0) {
@@ -3470,6 +3486,39 @@ private:
         }
     }
 
+    bool ridgefill_sweep_prompt(server_slot & slot) {
+        const int32_t before = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
+        auto result = server_ridgefill_sweep_result::pending;
+        metrics_pre_decode();
+        try {
+            queue_tasks.yield_to_queue([&]() {
+                result = server_ridgefill_sweep_step(*slot.ridgefill_sweep, ctx_tgt, slot.id,
+                        slot.task->tokens.get_tokens().data(), slot.prompt.ridgefill_rows, slot.ridgefill_sweep_params);
+            });
+        } catch (const std::exception & error) {
+            send_error(slot, error.what(), ERROR_TYPE_SERVER);
+            slot.release();
+            return false;
+        }
+        const int32_t after = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
+        metrics_queue_prompt(after - before);
+        slot.stats.n_prompt_processed += after - before;
+        slot.stats.update_prompt_last();
+        if (result != server_ridgefill_sweep_result::ready || batch.size() != 0) {
+            if (slot.task->params.stream && slot.task->params.return_progress) {
+                send_partial_response(slot, {}, true);
+            }
+            return false;
+        }
+
+        slot.prompt.ridgefill_rows = slot.ridgefill_sweep->get_rows();
+        while (slot.prompt.n_tokens() < slot.task->n_tokens() - 1) {
+            slot.prompt.tokens.push_back(slot.task->tokens[slot.prompt.n_tokens()]);
+        }
+        SLT_INF(slot, "RidgeFill: question sweep complete, exact prefix rows %zu, final token deferred\n", slot.prompt.ridgefill_rows.size());
+        return true;
+    }
+
     void pre_decode() {
         // apply context-shift if needed
         // TODO: simplify and improve
@@ -4044,8 +4093,10 @@ private:
                             // a prompt that needs outputs before its tail cannot be filled
                             const int32_t p_fill = tparams.ridgefill && !slot.need_embd() && !input_tokens.has_mtmd ?
                                 common_ridgefill_p_end(params_base, slot.task->n_tokens(), tparams.ridgefill_tail, mode) : 0;
-                            if (p_fill > 0 && mode == "quality+qattn" && params_base.ridgefill_qattn_share > 0) {
-                                send_error(slot, "ridgefill_mode quality+qattn requires the question-attention sweep driver", ERROR_TYPE_INVALID_REQUEST);
+                            const bool use_sweep = p_fill > 0 && mode == "quality+qattn" && params_base.ridgefill_qattn_share > 0;
+                            if (use_sweep && (slot.task->type != SERVER_TASK_TYPE_COMPLETION ||
+                                    slot.task->is_parent() || slot.task->is_child() || slot.can_speculate() || !slot.lora.empty())) {
+                                send_error(slot, "RidgeFill quality+qattn requires an independent text completion without speculative decoding or LoRA", ERROR_TYPE_INVALID_REQUEST);
                                 slot.release();
                                 return;
                             }
@@ -4058,6 +4109,23 @@ private:
                                     slot.release();
                                     return;
                                 }
+                            }
+                            if (use_sweep) {
+                                // Question-selected rows depend on the whole prompt.
+                                slot.prompt_clear();
+                                n_past = 0;
+                                auto & sweep_params = slot.ridgefill_sweep_params;
+                                sweep_params = {};
+                                sweep_params.n_embd = llama_model_n_embd(model_tgt);
+                                sweep_params.n_tokens = slot.task->n_tokens();
+                                sweep_params.n_prefix = p_fill;
+                                sweep_params.n_batch = n_batch;
+                                sweep_params.split = llama_ridgefill_split(rf);
+                                sweep_params.qattn_share = params_base.ridgefill_qattn_share;
+                                sweep_params.qattn_window = params_base.ridgefill_qattn_window;
+                                sweep_params.qattn_blind = params_base.ridgefill_qattn_blind;
+                                sweep_params.defer_last_token = true;
+                                slot.ridgefill_sweep = std::make_unique<server_ridgefill_sweep>();
                             }
                             const int32_t cached_fill = std::min({slot.prompt.n_filled, p_fill, n_past});
                             if (cached_fill > 0 && (slot.prompt.ridgefill_mode != mode ||
@@ -4115,6 +4183,10 @@ private:
                         }
                     } // end of SLOT_STATE_STARTED
 
+                    if (slot.ridgefill_sweep && !ridgefill_sweep_prompt(slot)) {
+                        return;
+                    }
+
                     if (!slot.can_split()) {
                         // cannot fit the prompt in the current batch - will try next iter
                         if (batch.size() + slot.task->n_tokens() > n_batch) {
@@ -4131,7 +4203,9 @@ private:
 
                     SLT_TRC(slot, "cached n_tokens = %d, memory_seq_rm [%d, end)\n", slot.prompt.n_tokens(), p0);
 
-                    slot.mem.seq_rm(slot.id, p0, -1);
+                    if (!slot.ridgefill_sweep) {
+                        slot.mem.seq_rm(slot.id, p0, -1);
+                    }
 
                     // shared prompt prefix: once it is processed, the children continue from it with their own prompt
                     bool wait_shared = false;
@@ -4165,7 +4239,7 @@ private:
                         alora_disabled_id = enabled_loras[0];
                     }
 
-                    bool do_checkpoint = params_base.n_ctx_checkpoints > 0;
+                    bool do_checkpoint = params_base.n_ctx_checkpoints > 0 && !slot.ridgefill_sweep;
 
                     // make checkpoints only for completion tasks
                     do_checkpoint = do_checkpoint && slot.task->type == SERVER_TASK_TYPE_COMPLETION;
@@ -4606,6 +4680,10 @@ private:
             }
 
             if (slot.state == SLOT_STATE_DONE_PROMPT) {
+                if (slot.ridgefill_sweep) {
+                    slot.ridgefill_sweep->finish_external_tail(ctx_tgt, slot.id);
+                    slot.ridgefill_sweep.reset();
+                }
                 if (slot.task->type == SERVER_TASK_TYPE_EMBEDDING) {
                     // prompt evaluated for embedding
                     send_embedding(slot, batch.view);
@@ -4979,6 +5057,12 @@ bool server_context::load_model(common_params & params) {
 void server_context::start_loop() {
     auto & params = impl->params_base;
     impl->queue_tasks.start_loop(params.sleep_idle_seconds * 1000);
+    for (auto & slot : impl->slots) {
+        if (slot.ridgefill_sweep && slot.is_processing()) {
+            impl->send_error(slot, "RidgeFill quality+qattn: server is shutting down", ERROR_TYPE_SERVER);
+            slot.release();
+        }
+    }
 }
 
 void server_context::terminate() {
