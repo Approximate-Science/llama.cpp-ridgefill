@@ -331,6 +331,7 @@ Supersedes the H3 bullet of the 22:50 addition (the driver's rule, which lane T'
 - Named refusals: no marker before end; empty window (start + n >= end); turn with blind selection; mode other than
   last / turn; cap <= 0. No fallback to "last".
 - Caveat for prompts: the marker must tokenize identically inside the prompt; a user turn whose content begins with a
-  newline merges "\n\n" in the Qwen pre-tokenizer and is then refused (not silently misplaced).
+  newline is expected to merge "\n\n" in the Qwen pre-tokenizer and then be refused (not silently misplaced) — from
+  the pre-tokenizer rule, not tested here (the tiny vocabulary has no such tokens).
 - llama-ridgefill-score: --qattn-window-mode / --qattn-turn-cap, --special-exact / --header-rows (select_rows_ext);
   the chat options are refused with mode speed, turn needs quality+qattn.
