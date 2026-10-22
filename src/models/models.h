@@ -2488,8 +2488,7 @@ struct llama_model_qwen35 : public llama_model_base {
                     ggml_tensor * cur,
                     ggml_tensor * inp_pos,
                             int * sections,
-                            int   il,
-                    ggml_tensor ** q_out = nullptr); // RidgeFill S1 probe: the roped queries given to build_attn
+                            int   il);
 
         ggml_tensor * build_layer_attn_linear(
              llm_graph_input_rs * inp,

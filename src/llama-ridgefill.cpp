@@ -19,6 +19,7 @@
 #include <map>
 #include <set>
 #include <stdexcept>
+#include <unordered_map>
 
 static const char * LLAMA_RIDGEFILL_KV_SPLIT   = "adapter.ridgefill.split";
 static const char * LLAMA_RIDGEFILL_KV_N_LAYER = "adapter.ridgefill.n_layer";
@@ -1239,13 +1240,32 @@ void llama_ridgefill_attn_mass_split(int64_t n_kv, int64_t n_q, int64_t rep, int
     qb = std::max<int64_t>(1, std::min<int64_t>(n_q, max_elems/(n_kv*hb)));
 }
 
-ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q, ggml_tensor * k, ggml_tensor * mask,
-        int32_t diag_past, float scale, ggml_tensor * ones, int64_t max_elems) {
-    const int64_t d = q->ne[0], n_q = q->ne[1], n_head = q->ne[2];
+ggml_tensor * llama_ridgefill_follow(ggml_context * ctx, ggml_tensor * x, ggml_tensor * dep) {
+    if (!dep) {
+        return x;
+    }
+    // x + 0 * dep[0]: the same values (dep is finite), but in every topological order x is computed after dep, so a
+    // backend that reorders independent nodes (the Vulkan graph optimizer) cannot hoist the next block's scores
+    return ggml_add(ctx, x, ggml_scale(ctx, ggml_view_1d(ctx, dep, 1, 0), 0.0f));
+}
+
+int64_t llama_ridgefill_query_block(int64_t n_kv, int64_t n_q, int64_t max_elems) {
+    if (n_kv*n_q <= max_elems) {
+        return n_q;
+    }
+    const int64_t n_blocks = (n_kv*n_q + max_elems - 1)/max_elems;
+    return std::max<int64_t>(1, (n_q + n_blocks - 1)/n_blocks); // equal blocks, not a short last one
+}
+
+ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q_base, int64_t h0, int64_t n_heads,
+        ggml_tensor * k, ggml_tensor * mask, int32_t diag_past, float scale, ggml_tensor * ones, int64_t max_elems,
+        ggml_tensor ** dep) {
+    const int64_t d = q_base->ne[0], n_q = q_base->ne[2];
     const int64_t n_kv = k->ne[1], n_head_kv = k->ne[2];
-    GGML_ASSERT(k->ne[0] == d && n_head % n_head_kv == 0 && q->ne[3] == 1 && k->ne[3] == 1);
+    GGML_ASSERT(k->ne[0] == d && n_heads % n_head_kv == 0 && h0 + n_heads <= q_base->ne[1] && q_base->ne[3] == 1 && k->ne[3] == 1);
+    GGML_ASSERT(ggml_is_contiguous(q_base) && dep);
     GGML_ASSERT(!mask || (mask->ne[0] == n_kv && mask->ne[1] >= n_q));
-    const int64_t rep = n_head/n_head_kv;
+    const int64_t rep = n_heads/n_head_kv;
     int64_t hb, qb;
     llama_ridgefill_attn_mass_split(n_kv, n_q, rep, max_elems, hb, qb);
     GGML_ASSERT(!ones || ones->ne[1] >= hb*qb);
@@ -1255,10 +1275,13 @@ ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q, ggm
     for (int64_t g = 0; g < n_head_kv; ++g) {
         ggml_tensor * kg = ggml_view_3d(ctx, k, d, n_kv, 1, k->nb[1], k->nb[2], g*k->nb[2]);
         ggml_tensor * acc = nullptr;
-        for (int64_t h0 = g*rep; h0 < (g + 1)*rep; h0 += hb) {
+        for (int64_t hl = 0; hl < rep; hl += hb) {
             for (int64_t q0 = 0; q0 < n_q; q0 += qb) {
                 const int64_t nq = std::min(qb, n_q - q0);
-                ggml_tensor * qv = ggml_view_3d(ctx, q, d, nq, hb, q->nb[1], q->nb[2], q0*q->nb[1] + h0*q->nb[2]);
+                // the queries as the unsliced [d, n_q, n_head] permuted view would give them (same strides)
+                ggml_tensor * qp = ggml_permute(ctx, llama_ridgefill_follow(ctx, q_base, *dep), 0, 2, 1, 3);
+                ggml_tensor * qv = ggml_view_3d(ctx, qp, d, nq, hb, qp->nb[1], qp->nb[2],
+                        q0*qp->nb[1] + (h0 + g*rep + hl)*qp->nb[2]);
                 ggml_tensor * kq = ggml_mul_mat(ctx, kg, qv); // [n_kv, nq, hb]
                 ggml_prec_set_acc(kq, GGML_PREC_F32);
                 ggml_tensor * mv = nullptr;
@@ -1278,6 +1301,7 @@ ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q, ggm
                     m = ggml_sum_rows(ctx, ggml_cont(ctx, ggml_transpose(ctx, p2))); // [1, n_kv]
                     m = ggml_reshape_2d(ctx, m, n_kv, 1);
                 }
+                *dep = m;
                 acc = acc ? ggml_add(ctx, acc, m) : m;
             }
         }
@@ -1290,6 +1314,103 @@ ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q, ggm
     return ones ? total : per_head;
 }
 
+void llama_ridgefill_graph_peaks(const ggml_cgraph * gf, size_t & in_order, size_t & any_order) {
+    const int n = ggml_graph_n_nodes(const_cast<ggml_cgraph *>(gf));
+    std::unordered_map<const ggml_tensor *, int> idx;
+    for (int i = 0; i < n; ++i) {
+        idx[ggml_graph_node(const_cast<ggml_cgraph *>(gf), i)] = i;
+    }
+    auto node = [&](int i) { return ggml_graph_node(const_cast<ggml_cgraph *>(gf), i); };
+    auto root = [](const ggml_tensor * t) { while (t->view_src) { t = t->view_src; } return t; };
+
+    // the earliest step each node can run at (a reorderer that pulls all independent work forward, the worst case for
+    // memory): after its producers, and, as reordering backends keep them (the Vulkan graph optimizer: nodes viewing
+    // the same tensor), after the earlier writers of any storage it reads (a cache view after the cpy into it) and,
+    // for a node writing into a view, after the earlier readers and writers of that storage
+    auto writes = [&](const ggml_tensor * t) {
+        return t->view_src && t->op != GGML_OP_VIEW && t->op != GGML_OP_RESHAPE && t->op != GGML_OP_PERMUTE &&
+               t->op != GGML_OP_TRANSPOSE && t->op != GGML_OP_NONE;
+    };
+    std::vector<int> level(n, 0);
+    std::unordered_map<const ggml_tensor *, int> wlevel, rlevel; // per storage root: latest writer / reader level
+    for (int i = 0; i < n; ++i) {
+        const ggml_tensor * t = node(i);
+        int lvl = 0;
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            const ggml_tensor * src = t->src[s];
+            if (!src) {
+                continue;
+            }
+            auto it = idx.find(src);
+            if (it != idx.end()) {
+                lvl = std::max(lvl, level[it->second] + 1);
+            }
+            auto w = wlevel.find(root(src));
+            if (w != wlevel.end()) {
+                lvl = std::max(lvl, w->second + 1);
+            }
+        }
+        if (writes(t)) {
+            const ggml_tensor * r = root(t);
+            if (wlevel.count(r)) { lvl = std::max(lvl, wlevel[r] + 1); }
+            if (rlevel.count(r)) { lvl = std::max(lvl, rlevel[r] + 1); }
+            wlevel[r] = std::max(wlevel.count(r) ? wlevel[r] : 0, lvl);
+        }
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            if (t->src[s]) {
+                const ggml_tensor * r = root(t->src[s]);
+                rlevel[r] = std::max(rlevel.count(r) ? rlevel[r] : 0, lvl);
+            }
+        }
+        level[i] = lvl;
+    }
+    auto peak = [&](const std::vector<int> & order) {
+        std::vector<int> pos(n);
+        for (int k = 0; k < n; ++k) {
+            pos[order[k]] = k;
+        }
+        // a node that owns memory (not a view, not a leaf) lives from its step to its last reader's step (through
+        // views); graph outputs to the end
+        std::unordered_map<const ggml_tensor *, int> last;
+        for (int i = 0; i < n; ++i) {
+            for (int s = 0; s < GGML_MAX_SRC; ++s) {
+                if (node(i)->src[s]) {
+                    const ggml_tensor * r = root(node(i)->src[s]);
+                    if (idx.count(r)) {
+                        last[r] = std::max(last.count(r) ? last[r] : 0, pos[i]);
+                    }
+                }
+            }
+            if (node(i)->flags & GGML_TENSOR_FLAG_OUTPUT) {
+                last[root(node(i))] = n;
+            }
+        }
+        std::vector<int64_t> delta(n + 2, 0);
+        for (int i = 0; i < n; ++i) {
+            const ggml_tensor * t = node(i);
+            if (t->view_src || t->op == GGML_OP_NONE) {
+                continue;
+            }
+            const int end = last.count(t) ? std::max(last[t], pos[i]) : pos[i];
+            delta[pos[i]] += ggml_nbytes(t);
+            delta[end + 1] -= ggml_nbytes(t);
+        }
+        int64_t cur = 0, best = 0;
+        for (int k = 0; k <= n; ++k) {
+            cur += delta[k];
+            best = std::max(best, cur);
+        }
+        return size_t(best);
+    };
+    std::vector<int> order(n);
+    for (int i = 0; i < n; ++i) {
+        order[i] = i;
+    }
+    in_order = peak(order);
+    std::stable_sort(order.begin(), order.end(), [&](int a, int b) { return level[a] < level[b]; });
+    any_order = peak(order);
+}
+
 int64_t llama_ridgefill_extra_nodes(const llama_ridgefill * rf, const llama_hparams & hparams, int64_t n_ctx, int64_t n_ubatch) {
     if (!rf || n_ctx <= 0 || n_ubatch <= 0) {
         return 0;
@@ -1299,34 +1420,154 @@ int64_t llama_ridgefill_extra_nodes(const llama_ridgefill * rf, const llama_hpar
         if (hparams.is_recr(il) || hparams.n_head_kv(il) == 0) {
             continue;
         }
-        const int64_t n_head_kv = hparams.n_head_kv(il), rep = hparams.n_head(il)/n_head_kv;
-        int64_t hb, qb;
-        llama_ridgefill_attn_mass_split(n_ctx, n_ubatch, rep, LLAMA_RIDGEFILL_MASS_BLOCK, hb, qb);
-        const int64_t blocks = n_head_kv*(rep/hb)*((n_ubatch + qb - 1)/qb);
-        res += 12*blocks + 64; // per block: views, mul_mat, softmax, reduction, add; per layer: vtail, mask
+        // S1 probe: per query head and query block a score block (views, follow, mul_mat, softmax, PV, out_prod,
+        // adds), the per-head output merge; vtail and masks
+        const int64_t qb = llama_ridgefill_query_block(n_ctx, n_ubatch, LLAMA_RIDGEFILL_PROBE_BLOCK);
+        const int64_t blocks = int64_t(hparams.n_head(il))*((n_ubatch + qb - 1)/qb);
+        res += 16*blocks + 8*hparams.n_head_kv(il) + 64;
     }
     return res + 256;
 }
 
-void build_ridgefill_s1_mass(llm_graph_context & g, const llm_graph_input_ridgefill_part * inp, ggml_tensor * q,
-        llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** mass) {
-    ggml_context * ctx0 = g.ctx0;
-    const int64_t n_embd_head = g.hparams.n_embd_head_k(il);
-    const float kq_scale = g.hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : g.hparams.f_attention_scale;
+ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model & model, const llm_graph_input_ridgefill_part * inp,
+        ggml_tensor * cur, ggml_tensor * inp_pos, llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** mass) {
+    // qwen35's build_layer_attn for the window rows, with the attention written out (non-FA math, as 22ef3df4a) so the
+    // softmax weights give the mass: visible cells = the probe mask (causal, the unrun tail rows hidden)
+    const auto & hparams = g.hparams;
+    const auto & layer   = model.layers[il];
+    ggml_context * ctx0  = g.ctx0;
+    const int64_t n_tokens    = g.n_tokens;
+    const int64_t n_embd_head = hparams.n_embd_head_v();
 
-    // the cached K is rotated (build_attn rotates the stored K and its queries the same way)
+    int sections[4];
+    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+
+    auto [Qfull, Kcur, Vcur] = g.build_qkv(layer, cur,
+            n_embd_head * 2, g.n_head,
+            n_embd_head,     g.n_head_kv,
+            n_embd_head,     g.n_head_kv,
+            il, false);
+
+    ggml_tensor * Qcur = ggml_view_3d(ctx0, Qfull, n_embd_head, g.n_head, n_tokens,
+            ggml_element_size(Qfull) * n_embd_head * 2,
+            ggml_element_size(Qfull) * n_embd_head * 2 * g.n_head, 0);
+    Qcur = g.build_norm(Qcur, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
+
+    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, g.n_head_kv, n_tokens);
+    Kcur = g.build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
+
+    ggml_tensor * gate = ggml_view_3d(ctx0, Qfull, n_embd_head, g.n_head, n_tokens,
+            ggml_element_size(Qfull) * n_embd_head * 2,
+            ggml_element_size(Qfull) * n_embd_head * 2 * g.n_head,
+            ggml_element_size(Qfull) * n_embd_head);
+    gate = ggml_cont_2d(ctx0, gate, n_embd_head * g.n_head, n_tokens);
+
+    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, g.n_head_kv, n_tokens);
+
+    Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
+            g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
+    Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
+            g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
+
+    const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
+
+    // as build_attn: the cache's rotations, then store the window's K/V (the later window ubatches read them)
     if (inp_attn->self_k_rot) {
-        q = llama_mul_mat_hadamard(ctx0, q, inp_attn->self_k_rot);
+        Qcur = llama_mul_mat_hadamard(ctx0, Qcur, inp_attn->self_k_rot);
+        Kcur = llama_mul_mat_hadamard(ctx0, Kcur, inp_attn->self_k_rot);
     }
-    ggml_tensor * k = inp_attn->mctx->get_k(ctx0, il); // [d, n_head_kv, n_kv, n_stream]; read after this layer's cpy_k
+    if (inp_attn->self_v_rot) {
+        Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot);
+    }
+    ggml_build_forward_expand(g.gf, Qcur);
+    ggml_build_forward_expand(g.gf, Vcur);
+    ggml_build_forward_expand(g.gf, Kcur);
+
+    const auto * mctx_cur = inp_attn->mctx;
+    ggml_build_forward_expand(g.gf, mctx_cur->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
+    ggml_build_forward_expand(g.gf, mctx_cur->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
+
+    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
+    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
     GGML_ASSERT(k->ne[3] == 1 && "RidgeFill S1 probe: one KV stream");
 
-    ggml_tensor * m = llama_ridgefill_attn_mass(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3), ggml_permute(ctx0, k, 0, 2, 1, 3),
-            inp->s1_mask, 0, kq_scale, inp->ones, LLAMA_RIDGEFILL_MASS_BLOCK);
-    g.cb(m, "ridgefill_s1_mass", il);
-    // now, so the layer's queries and score blocks are freed before the next layer
-    ggml_build_forward_expand(g.gf, m);
-    *mass = *mass ? ggml_add(ctx0, *mass, m) : m;
+    const bool v_trans = v->nb[1] > v->nb[2];
+
+    // per query head (all of the ubatch's queries while a head's scores fit LLAMA_RIDGEFILL_PROBE_BLOCK, else equal
+    // query blocks): the matrices of the unsliced attention, one head at a time, so the per-element arithmetic is the
+    // unsliced one on every backend (the tile and split-k choices depend on m, n, k only); each block follows the
+    // previous one (llama_ridgefill_follow), so one block of scores is alive at a time
+    const int64_t d = n_embd_head, n_head = g.n_head, n_head_kv = g.n_head_kv, rep = n_head/n_head_kv;
+    k = ggml_permute(ctx0, k, 0, 2, 1, 3); // [d, n_kv, n_head_kv]
+    v = ggml_permute(ctx0, v, 0, 2, 1, 3);
+
+    const int64_t n_kv = k->ne[1];
+    ggml_tensor * mask = inp->s1_mask; // [n_kv, n_tokens, 1, 1]
+    GGML_ASSERT(mask->ne[0] == n_kv && mask->ne[1] == n_tokens);
+    const int64_t qb = llama_ridgefill_query_block(n_kv, n_tokens, LLAMA_RIDGEFILL_PROBE_BLOCK);
+
+    ggml_tensor * dep = nullptr;
+    ggml_tensor * m_layer = nullptr;
+    std::vector<ggml_tensor *> heads; // [d, n_tokens, 1] per query head
+    for (int64_t kh = 0; kh < n_head_kv; ++kh) {
+        ggml_tensor * kg = ggml_view_3d(ctx0, k, d, n_kv, 1, k->nb[1], k->nb[2], kh*k->nb[2]);
+        ggml_tensor * vg = ggml_view_3d(ctx0, v, v->ne[0], v->ne[1], 1, v->nb[1], v->nb[2], kh*v->nb[2]);
+        if (!v_trans) {
+            // [n_kv, d, 1], as the unsliced cont(transpose(v)) (not chained: at most one copy per key head is alive)
+            vg = ggml_cont(ctx0, ggml_transpose(ctx0, vg));
+        }
+        for (int64_t h = kh*rep; h < (kh + 1)*rep; ++h) {
+            ggml_tensor * out_h = nullptr;
+            for (int64_t q0 = 0; q0 < n_tokens; q0 += qb) {
+                const int64_t nq = std::min(qb, n_tokens - q0);
+                ggml_tensor * qp = ggml_permute(ctx0, llama_ridgefill_follow(ctx0, Qcur, dep), 0, 2, 1, 3); // [d, n_tokens, n_head]
+                ggml_tensor * qv = ggml_view_3d(ctx0, qp, d, nq, 1, qp->nb[1], qp->nb[2], q0*qp->nb[1] + h*qp->nb[2]);
+
+                ggml_tensor * kq = ggml_mul_mat(ctx0, kg, qv); // [n_kv, nq, 1]
+                ggml_prec_set_acc(kq, GGML_PREC_F32);
+                ggml_tensor * mv = ggml_view_2d(ctx0, mask, n_kv, nq, mask->nb[1], q0*mask->nb[1]);
+                ggml_tensor * probs = ggml_soft_max_ext(ctx0, kq, mv, kq_scale, 0.0f);
+                g.cb(probs, "ridgefill_s1_probs", il);
+
+                ggml_tensor * o = ggml_mul_mat(ctx0, vg, probs); // [d, nq, 1]
+                ggml_tensor * m = ggml_out_prod(ctx0, ggml_reshape_2d(ctx0, probs, n_kv, nq),
+                        ggml_view_2d(ctx0, inp->ones, 1, nq, inp->ones->nb[1], 0)); // [n_kv, 1]
+                m_layer = m_layer ? ggml_add(ctx0, m_layer, m) : m;
+                out_h = out_h ? ggml_concat(ctx0, out_h, o, 1) : o;
+                // the next block follows both consumers of these scores
+                dep = ggml_add(ctx0, ggml_view_1d(ctx0, o, 1, 0), ggml_view_1d(ctx0, m, 1, 0));
+            }
+            heads.push_back(out_h);
+        }
+    }
+    // [d, n_tokens, n_head] from the heads (a balanced merge: copies only), then as the unsliced kqv
+    while (heads.size() > 1) {
+        std::vector<ggml_tensor *> next;
+        for (size_t i = 0; i + 1 < heads.size(); i += 2) {
+            next.push_back(ggml_concat(ctx0, heads[i], heads[i + 1], 2));
+        }
+        if (heads.size() % 2) {
+            next.push_back(heads.back());
+        }
+        heads.swap(next);
+    }
+    ggml_tensor * kqv = heads[0];
+    ggml_tensor * out = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
+    out = ggml_cont_2d(ctx0, out, out->ne[0]*out->ne[1], out->ne[2]*out->ne[3]);
+
+    if (inp_attn->self_v_rot) {
+        out = llama_mul_mat_hadamard(ctx0, out, inp_attn->self_v_rot);
+    }
+
+    out = ggml_mul(ctx0, out, ggml_sigmoid(ctx0, gate));
+    out = g.build_lora_mm(layer.wo, out, layer.wo_s);
+
+    // the layer's mass per cell, summed over the queries and heads; expanded now, so it is computed with this layer
+    g.cb(m_layer, "ridgefill_s1_mass", il);
+    ggml_build_forward_expand(g.gf, m_layer);
+    *mass = *mass ? ggml_add(ctx0, *mass, m_layer) : m_layer;
+
+    return out;
 }
 
 void build_ridgefill_vtail(llm_graph_context & g, const llama_model & model, const llm_graph_input_ridgefill_part * inp,

@@ -84,7 +84,8 @@ static int run(int argc, char ** argv) {
     float alpha = 0;
     bool filled_logit = false;
     int s1_window = 0, s1_k = 0, s1_special = 0, vtail = 0, s1_begin_arg = -1;
-    bool sweep_boundary = false, s1_late_early = false;
+    bool sweep_boundary = false, s1_late_early = false, s1_probe_dump = false;
+    std::string kv_type = "f32";
     for (int i = 1; i < argc; ++i) {
         const std::string arg = argv[i];
         auto next = [&]() {
@@ -130,6 +131,8 @@ static int run(int argc, char ** argv) {
         else if (arg == "--s1-late-early") { s1_late_early = true; }
         else if (arg == "--vtail")     { vtail = std::stoi(next()); }
         else if (arg == "--sweep-boundary") { sweep_boundary = true; }
+        else if (arg == "--s1-probe-dump") { s1_probe_dump = true; } // <output>.probe.kv: the state right after S1_PROBE
+        else if (arg == "--kv-type")   { kv_type = next(); }          // f32 (default) or f16
         else { throw std::invalid_argument("unknown argument " + arg); }
     }
     if (model_path.empty() || tokens_path.empty() || output.empty() || n_batch < 1 || n_ubatch < 1 || tail < 1 || keep < 1 || !(alpha >= 0 && alpha <= 1)) {
@@ -193,11 +196,16 @@ static int run(int argc, char ** argv) {
     cp.n_rs_seq = n_rs_seq;
     cp.n_threads = cp.n_threads_batch = 4;
     cp.flash_attn_type = fa ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
-    cp.type_k = cp.type_v = GGML_TYPE_F32;
+    if (kv_type != "f32" && kv_type != "f16") { throw std::invalid_argument("--kv-type must be f32 or f16"); }
+    cp.type_k = cp.type_v = kv_type == "f16" ? GGML_TYPE_F16 : GGML_TYPE_F32;
     std::unique_ptr<llama_context, decltype(&llama_free)> ctx(llama_init_from_model(model.get(), cp), llama_free);
     if (!ctx) { throw std::runtime_error("context creation failed"); }
     if (rf) {
+#ifdef RF_SET_VOID  // builds before rf27-s1-mem: llama_set_ridgefill returned void
+        llama_set_ridgefill(ctx.get(), rf.get());
+#else
         if (llama_set_ridgefill(ctx.get(), rf.get()) < 0) { throw std::runtime_error("RidgeFill graphs' compute buffers do not fit"); }
+#endif
 #ifdef RF27_API
         llama_ridgefill_set_alpha(ctx.get(), alpha);
 #endif
@@ -320,6 +328,7 @@ static int run(int argc, char ** argv) {
                 pp.s1_end = std::min(n, pp.s1_begin + s1_window);
                 if (llama_ridgefill_seq_set_part(ctx.get(), 0, &pp) != 0) { return 3; }
                 if (!replay(pp.s1_begin, pp.s1_end)) { fprintf(stderr, "S1_PROBE decode refused\n"); return 2; }
+                if (s1_probe_dump) { dump_state(ctx.get(), output + ".probe.kv"); }
                 std::vector<double> mass(prefix);
                 if (llama_ridgefill_seq_get_s1_mass(ctx.get(), 0, mass.data(), prefix) != prefix) { throw std::runtime_error("no S1 mass"); }
                 write_bytes(output + ".mass_s1.f64", mass.data(), mass.size() * sizeof(double));

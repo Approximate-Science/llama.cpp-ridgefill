@@ -161,12 +161,6 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     auto * inp = build_inp_mem_hybrid();
 
-    if (rf_part && ridgefill_params.s1_probe) {
-        // S1_PROBE: every attention layer of this graph is a late layer and attends over the probe's mask (causal, the
-        // unrun tail rows hidden); the stock mask is then unused and left unallocated
-        inp->get_attn()->self_kq_mask_cnv = rf_part->s1_mask;
-    }
-
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
 
@@ -210,10 +204,7 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         } else {
             // Full attention layer
             if (rf_part && ridgefill_params.s1_probe) {
-                // the stock attention (flash or not) over the probe mask, then the layer's mass from its queries
-                ggml_tensor * q = nullptr;
-                cur = build_layer_attn(inp->get_attn(), cur, inp_pos, sections, il, &q);
-                build_ridgefill_s1_mass(*this, rf_part, q, inp->get_attn(), il, &rf_mass);
+                cur = build_ridgefill_s1_attn(*this, model, rf_part, cur, inp_pos, inp->get_attn(), il, &rf_mass);
             } else {
                 if (rf_part && ridgefill_params.vtail_rows > 0) {
                     build_ridgefill_vtail(*this, model, rf_part, cur, rf_h_S, inp->get_attn(), il, &rf_scale);
@@ -331,8 +322,7 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
         ggml_tensor *             cur,
         ggml_tensor *             inp_pos,
         int *                     sections,
-        int                       il,
-        ggml_tensor **            q_out) {
+        int                       il) {
     const int64_t n_embd_head = hparams.n_embd_head_v();
     GGML_ASSERT(n_embd_head == hparams.n_embd_head_k());
 
@@ -390,10 +380,6 @@ ggml_tensor * llama_model_qwen35::graph::build_layer_attn(
 
     // Attention computation
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-
-    if (q_out) {
-        *q_out = Qcur;
-    }
 
     cur = build_attn(inp,
                 nullptr, nullptr, nullptr,
