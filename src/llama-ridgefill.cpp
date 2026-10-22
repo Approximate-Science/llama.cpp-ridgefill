@@ -731,8 +731,19 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
             // the stock KQ mask's type and shape (build_attn_inp_kq_mask), one sequence / stream
             inp->s1_mask = ggml_new_tensor_4d(ctx0, cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, n_kv, n_tokens, 1, 1);
             ggml_set_input(inp->s1_mask);
-            inp->ones = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, (int64_t) n_tokens*n_head);
+            inp->ones = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
             ggml_set_input(inp->ones);
+            inp->s1_qb = llama_ridgefill_query_block(n_kv, n_tokens, LLAMA_RIDGEFILL_PROBE_BLOCK);
+            for (int64_t q0 = 0; q0 < n_tokens; q0 += inp->s1_qb) {
+                const int64_t nq = std::min<int64_t>(inp->s1_qb, n_tokens - q0);
+                if (nq == n_tokens) {
+                    inp->s1_mask_blk.push_back(inp->s1_mask);
+                    inp->s1_ones_blk.push_back(inp->ones);
+                } else {
+                    inp->s1_mask_blk.push_back(ggml_view_2d(ctx0, inp->s1_mask, n_kv, nq, inp->s1_mask->nb[1], q0*inp->s1_mask->nb[1]));
+                    inp->s1_ones_blk.push_back(ggml_view_2d(ctx0, inp->ones, 1, nq, inp->ones->nb[1], 0));
+                }
+            }
         }
         if (p.vtail_rows > 0) {
             inp->vt_bulk = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_kv);
@@ -1314,7 +1325,7 @@ ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q_base
     return ones ? total : per_head;
 }
 
-void llama_ridgefill_graph_peaks(const ggml_cgraph * gf, size_t & in_order, size_t & any_order) {
+void llama_ridgefill_graph_peaks(const ggml_cgraph * gf, size_t & in_order, size_t & any_order, size_t & input_views) {
     const int n = ggml_graph_n_nodes(const_cast<ggml_cgraph *>(gf));
     std::unordered_map<const ggml_tensor *, int> idx;
     for (int i = 0; i < n; ++i) {
@@ -1402,6 +1413,26 @@ void llama_ridgefill_graph_peaks(const ggml_cgraph * gf, size_t & in_order, size
         }
         return size_t(best);
     };
+    // graph inputs and their views as read by compute nodes: a non-CPU backend's scheduler copies each distinct one
+    // into the split's compute buffer, alive for the whole split (848c757ad: one mask view per head and layer, 2.7 GiB
+    // at 9K cells on Vulkan); view nodes themselves only pass the input through
+    auto passes = [](const ggml_tensor * t) {
+        return t->op == GGML_OP_VIEW || t->op == GGML_OP_RESHAPE || t->op == GGML_OP_PERMUTE || t->op == GGML_OP_TRANSPOSE;
+    };
+    std::set<const ggml_tensor *> copies;
+    input_views = 0;
+    for (int i = 0; i < n; ++i) {
+        if (passes(node(i))) {
+            continue;
+        }
+        for (int s = 0; s < GGML_MAX_SRC; ++s) {
+            const ggml_tensor * src = node(i)->src[s];
+            if (src && (root(src)->flags & GGML_TENSOR_FLAG_INPUT) && copies.insert(src).second) {
+                input_views += ggml_nbytes(src);
+            }
+        }
+    }
+
     std::vector<int> order(n);
     for (int i = 0; i < n; ++i) {
         order[i] = i;
@@ -1502,9 +1533,8 @@ ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model &
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
     const int64_t n_kv = k->ne[1];
-    ggml_tensor * mask = inp->s1_mask; // [n_kv, n_tokens, 1, 1]
-    GGML_ASSERT(mask->ne[0] == n_kv && mask->ne[1] == n_tokens);
-    const int64_t qb = llama_ridgefill_query_block(n_kv, n_tokens, LLAMA_RIDGEFILL_PROBE_BLOCK);
+    GGML_ASSERT(inp->s1_mask->ne[0] == n_kv && inp->s1_mask->ne[1] == n_tokens);
+    const int64_t qb = inp->s1_qb; // the query blocks of the mask / ones views made once per graph
 
     ggml_tensor * dep = nullptr;
     ggml_tensor * m_layer = nullptr;
@@ -1525,13 +1555,11 @@ ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model &
 
                 ggml_tensor * kq = ggml_mul_mat(ctx0, kg, qv); // [n_kv, nq, 1]
                 ggml_prec_set_acc(kq, GGML_PREC_F32);
-                ggml_tensor * mv = ggml_view_2d(ctx0, mask, n_kv, nq, mask->nb[1], q0*mask->nb[1]);
-                ggml_tensor * probs = ggml_soft_max_ext(ctx0, kq, mv, kq_scale, 0.0f);
+                ggml_tensor * probs = ggml_soft_max_ext(ctx0, kq, inp->s1_mask_blk[q0/qb], kq_scale, 0.0f);
                 g.cb(probs, "ridgefill_s1_probs", il);
 
                 ggml_tensor * o = ggml_mul_mat(ctx0, vg, probs); // [d, nq, 1]
-                ggml_tensor * m = ggml_out_prod(ctx0, ggml_reshape_2d(ctx0, probs, n_kv, nq),
-                        ggml_view_2d(ctx0, inp->ones, 1, nq, inp->ones->nb[1], 0)); // [n_kv, 1]
+                ggml_tensor * m = ggml_out_prod(ctx0, ggml_reshape_2d(ctx0, probs, n_kv, nq), inp->s1_ones_blk[q0/qb]); // [n_kv, 1]
                 m_layer = m_layer ? ggml_add(ctx0, m_layer, m) : m;
                 out_h = out_h ? ggml_concat(ctx0, out_h, o, 1) : o;
                 // the next block follows both consumers of these scores
@@ -1617,22 +1645,23 @@ void build_ridgefill_vtail(llm_graph_context & g, const llama_model & model, con
         ggml_tensor * b = ggml_repeat_4d(ctx0, ggml_reshape_3d(ctx0, inp->vt_bulk, n_kv, 1, 1), n_kv, n_head_kv, 1, 1);
         mult = ggml_add(ctx0, ggml_mul(ctx0, b, ggml_reshape_3d(ctx0, s, 1, n_head_kv, 1)), ggml_reshape_3d(ctx0, inp->vt_keep, n_kv, 1, 1));
     }
-    if (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32) {
-        // in place in the cache (F16: converted, scaled in F32 and rounded back, as a cast / mul / cpy would): no
-        // n_kv-sized temporary
-        ggml_build_forward_expand(g.gf, ggml_mul_inplace(ctx0, v, mult));
-    } else {
-        // other V types (quantized: flash attention, so not transposed): cast, scale and store back a bounded run of
-        // cells at a time
-        GGML_ASSERT(!v_trans);
-        const int64_t per_cell = v->ne[0]*v->ne[1];
-        const int64_t step = std::max<int64_t>(1, (int64_t(1) << 22)/per_cell);
-        for (int64_t c0 = 0; c0 < n_kv; c0 += step) {
-            const int64_t nc = std::min(step, n_kv - c0);
-            ggml_tensor * vc = ggml_view_3d(ctx0, v, v->ne[0], v->ne[1], nc, v->nb[1], v->nb[2], c0*v->nb[2]);
-            ggml_tensor * mc = ggml_view_3d(ctx0, mult, 1, n_head_kv, nc, mult->nb[1], mult->nb[2], c0*mult->nb[2]);
-            ggml_build_forward_expand(g.gf, ggml_cpy(ctx0, ggml_mul(ctx0, ggml_cast(ctx0, vc, GGML_TYPE_F32), mc), vc));
+    // cast, scale and store back a bounded run of cells at a time: the arithmetic of the unsliced cast / mul / cpy
+    // (an in-place F16 mul rounds differently on Vulkan), without an n_kv-sized temporary. The runs write disjoint views
+    // of one cache tensor, which a reordering backend keeps in order.
+    const int64_t per_cell = n_head_kv*v->ne[v_trans ? 2 : 0]; // elements of one cell
+    const int64_t step = std::max<int64_t>(1, (int64_t(1) << 22)/per_cell);
+    for (int64_t c0 = 0; c0 < n_kv; c0 += step) {
+        const int64_t nc = std::min(step, n_kv - c0);
+        ggml_tensor * vc;
+        ggml_tensor * mc;
+        if (!v_trans) { // v [d, n_head_kv, n_kv]
+            vc = ggml_view_3d(ctx0, v, v->ne[0], v->ne[1], nc, v->nb[1], v->nb[2], c0*v->nb[2]);
+            mc = ggml_view_3d(ctx0, mult, 1, n_head_kv, nc, mult->nb[1], mult->nb[2], c0*mult->nb[2]);
+        } else {        // v [n_kv, n_head_kv, d]
+            vc = ggml_view_3d(ctx0, v, nc, v->ne[1], v->ne[2], v->nb[1], v->nb[2], c0*v->nb[0]);
+            mc = ggml_view_3d(ctx0, mult, nc, n_head_kv, 1, mult->nb[1], mult->nb[2], c0*mult->nb[0]);
         }
+        ggml_build_forward_expand(g.gf, ggml_cpy(ctx0, ggml_mul(ctx0, ggml_cast(ctx0, vc, GGML_TYPE_F32), mc), vc));
     }
 
     ggml_tensor * col = ggml_reshape_2d(ctx0, s, n_head_kv, 1);

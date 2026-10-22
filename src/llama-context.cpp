@@ -797,10 +797,10 @@ void llama_context::sched_reserve() {
 
         if (ridgefill && getenv("LLAMA_RIDGEFILL_GRAPH_CHECK")) {
             // test aid: the stock graph's figures, the baseline of the RidgeFill graphs' (ridgefill_reserve_graphs)
-            size_t in_order = 0, any_order = 0;
-            llama_ridgefill_graph_peaks(gf, in_order, any_order);
-            LLAMA_LOG_INFO("%s: RidgeFill graph check stock: live tensors in graph order %.2f MiB, in any dependency order %.2f MiB\n",
-                    __func__, in_order / (1024.0*1024.0), any_order / (1024.0*1024.0));
+            size_t in_order = 0, any_order = 0, input_views = 0;
+            llama_ridgefill_graph_peaks(gf, in_order, any_order, input_views);
+            LLAMA_LOG_INFO("%s: RidgeFill graph check stock: live tensors in graph order %.2f MiB, in any dependency order %.2f MiB, "
+                    "input views %.2f MiB\n", __func__, in_order / (1024.0*1024.0), any_order / (1024.0*1024.0), input_views / (1024.0*1024.0));
         }
     }
 
@@ -1630,10 +1630,11 @@ void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outpu
         }
         if (gm && getenv("LLAMA_RIDGEFILL_GRAPH_CHECK")) {
             // test aid: the memory a backend that reorders independent nodes could need for this graph
-            size_t in_order = 0, any_order = 0;
-            llama_ridgefill_graph_peaks(gm, in_order, any_order);
-            LLAMA_LOG_INFO("%s: RidgeFill graph check %s: live tensors in graph order %.2f MiB, in any dependency order %.2f MiB\n",
-                    __func__, name.c_str(), in_order / (1024.0*1024.0), any_order / (1024.0*1024.0));
+            size_t in_order = 0, any_order = 0, input_views = 0;
+            llama_ridgefill_graph_peaks(gm, in_order, any_order, input_views);
+            LLAMA_LOG_INFO("%s: RidgeFill graph check %s: live tensors in graph order %.2f MiB, in any dependency order %.2f MiB, "
+                    "input views %.2f MiB\n", __func__, name.c_str(), in_order / (1024.0*1024.0), any_order / (1024.0*1024.0),
+                    input_views / (1024.0*1024.0));
         }
         ggml_cgraph * gf = graph_reserve(n_tokens, 1, n_outputs, mctx);
         ridgefill_reserve_params = nullptr;

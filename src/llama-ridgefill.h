@@ -87,9 +87,15 @@ public:
 
     // S1_PROBE: the KQ mask of the probe graph (the stock mask's type and shape [n_kv, n_tokens, 1, 1]): causal over
     // the sequence's cells, and -inf for the cells of positions [p_end, s1_begin) (tail rows the probe does not run);
-    // the probe's attention layers use it instead of the stock mask. ones: F32 [1, n_tokens * n_head], the mass reduction
+    // the probe's attention layers use it instead of the stock mask. ones: F32 [1, n_tokens], the mass reduction.
+    // Per query block (s1_qb rows; one block: the tensors themselves) their views, made once per graph: every view of
+    // an input is a separate split input, which a non-CPU backend copies into the compute buffer for the whole split
+    // (one view per head and layer was 288 copies of the mask, 2.7 GiB at 9K cells on Vulkan)
     ggml_tensor * s1_mask  = nullptr;
     ggml_tensor * ones     = nullptr;
+    int64_t                    s1_qb = 0;
+    std::vector<ggml_tensor *> s1_mask_blk;
+    std::vector<ggml_tensor *> s1_ones_blk;
     // vtail: F32 [n_kv] 1 for the cells of the bulk prefix rows (positions < p_end, not exact), else 0; and 1 - that
     ggml_tensor * vt_bulk  = nullptr;
     ggml_tensor * vt_keep  = nullptr;
@@ -134,7 +140,9 @@ constexpr int64_t LLAMA_RIDGEFILL_QMASS_BLOCK = int64_t(1) << 20;
 // order, and in the order of a backend that pulls every node as early as its inputs and the memory hazards allow (reads
 // of a storage after its earlier writers, writes after earlier readers / writers: what a reordering backend such as
 // the Vulkan graph optimizer keeps). A large gap means independent large tensors: blocks that would all be alive at once.
-void llama_ridgefill_graph_peaks(const ggml_cgraph * gf, size_t & in_order, size_t & any_order);
+// input_views: the bytes of the distinct graph inputs and views of them that compute nodes read; a non-CPU backend's
+// scheduler copies each into the compute buffer for the whole split, which a CPU run never shows.
+void llama_ridgefill_graph_peaks(const ggml_cgraph * gf, size_t & in_order, size_t & any_order, size_t & input_views);
 
 // graph nodes the RidgeFill graphs may add over a stock graph of n_ubatch tokens over n_ctx cells (the S1 probe's
 // per-head blocks, vtail), for the graph and scheduler sizes
