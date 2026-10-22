@@ -582,3 +582,5 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   copies of the inputs, and the figure was taken after graph_reserve's split. It is now taken in graph_reserve before
   the split (ridgefill_check_peaks); the tiny model then shows the probe mask (8 MiB at 8K). CPU memory gate 223/223,
   G0 72/0, G1 S1/vtail 49/49 after that change (env-gated diagnostic only).
+- Head 12947fda3 on Vulkan (build-vulkan-12947fda3, card 13): memory gate 90/90 (s1_probe input copies 8 / 16 / 32
+  MiB at 8K / 16K / 32K: one mask, the stock mask's growth); lane Q's 12-doc equality check 12/12 MATCH.
