@@ -491,3 +491,53 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   native; check_chat_score PASS (defaults byte-identical to the pre-chat binary); g1_select_chat 42/42; select_rows
   23/23; dispatch 44/44; quality a0 27/27; rollback 11/11; s1_tools 115/115 (architecture 3/3); s1_http 72/72;
   s1_reporting 91 / 16 configs; L-C HTTP sweep 3/3.
+
+## 2026-10-22 rf27-s1-mem: lane Q's Vulkan check of bc3a6af85 (two gaps), fixed on CPU
+- Lane Q (card 03, Qwen3.8-27B Q4_K_XL, scorer -b 2048 -ub 512, F16 KV, FA on): the reserve fix works (no expectation
+  warnings), but s1_probe needs 591 / 1009 / 1793 MiB at 8K / 16K / 32K (stock 533 / 541 / 557): +1236 MiB at 32K,
+  over the +512 bound. And the S1 rows differ from 22ef3df4a by 0.1-0.6 % (10-76 rows of 3.5K-13.5K), dNLL -0.0046 ..
+  +0.0017, +0.028 on one 32K doc.
+- Cause 1 (confirmed in the source, reproduced on CPU by simulation): ggml-vulkan's graph_optimize reorders each
+  split before allocation, pulling independent nodes forward (20-node look-ahead, repeated). bc3a6af85's mass blocks
+  were independent, so every block of a layer was alive at once: 4 KV heads x 7 query blocks x 64 MiB = 1.8 GiB at 32K,
+  exactly the measured growth. The CPU backend does not reorder, so the CPU gate and the CPU per-graph sizes (flat)
+  could not show it; the many-head guess was not the cause (the 27B on CPU was flat too).
+- Cause 2: bc3a6af85 sent the probe's attention output through flash attention (F16 accumulation), so the window
+  rows' later-layer queries and masses moved by ~1e-3 and near-tie rows swapped.
+- Fix: the probe's attention is the explicit math of 22ef3df4a, one query head at a time with all of the ubatch's
+  queries (query blocks only beyond 2^23 scores per head: past 32K cells for the 256-row window), so every matrix keeps
+  its unsliced (m, n, k) (Vulkan's tile and split-k choices depend on m, n, k only). Each block's queries are
+  q + 0 * (previous block's output and mass) (llama_ridgefill_follow): a chain no reordering can break. The Tier-3
+  question mass is chained the same way. The V copies per key head are not chained (a follow-add on the transposed
+  view hits the CPU add's contiguity assert); at most one per key head can be alive.
+- Exactness on CPU (rf27-gates/rf_dump_rs.cpp --s1-probe-dump, built against 22ef3df4a and the new libraries; split 3,
+  where layer 7's window K/V depend on layer 3's probe output, and split 4; fixture and chat prompts; F32 KV FA off and
+  F16 KV FA on): the post-probe state, rows, final state, logits and vtail scales are byte-identical in all 8; the S1
+  mass differs by <= 2.4e-07 relative (results-probe-old-vs-new.json). The mass cannot be made bit-identical within
+  bounded memory: 22ef3df4a's mass is one float reduction over n_tokens x n_head probabilities per cell (CPU: a double
+  sum_rows of the transposed full tensor; Vulkan: the sum_rows shader's tree over that row), which needs all heads'
+  probabilities of a cell at once, i.e. the n_kv x n_tokens x n_head tensor; any bounded slicing regroups the sum. Rows
+  can then differ only where two masses straddling the top-k cut lie within ~2e-7 relative of each other. Long tiny
+  prompts vs the 22ef3df4a scorer (8K / 16K / 32K, two configurations, qattn / s1 / s1+vtail): rows and logprobs
+  identical in 18 / 18, question mass bit-identical at 8K and <= 8.5e-08 beyond, S1 mass <= 4.6e-07.
+- Gate (tests/ridgefill/check_compute_buffer.py): context = each length (as served; stock compared at the same ctx);
+  growth allowance 16 MiB + 8 B x ubatch per added cell (two F32 [n_kv, ubatch] tensors, no head factor); graph check:
+  LLAMA_RIDGEFILL_GRAPH_CHECK logs, at reserve, every RidgeFill graph's and the stock graph's live-tensor peak in graph
+  order and in any dependency order (llama_ridgefill_graph_peaks: ASAP schedule honouring data and memory hazards,
+  i.e. what any reordering backend could keep alive); a graph's any-order peak may not grow faster than stock's plus
+  the allowance; also run load-only on Qwen3.8-27B through rf27-gates/rf_reserve.cpp. Self-test
+  (tests/ridgefill/test_graph_peaks.cpp, 27B attention shape): bc3a6af85's blocks 448 -> 1600 MiB any-order from 8K to
+  32K (+1152, flagged; lane Q measured 591 -> 1793 with the rest of the graph), chained blocks 128 -> 128 (not flagged).
+  Note: ASAP is pessimistic for naturally parallel graphs (the bulk fills: 1.6 GiB any-order, flat, 160-185 MiB on
+  Vulkan per lane Q); the rule is about growth with the prompt, which is requirement 1.
+- CPU sizes after (tiny, ctx = length, MiB at 8K / 16K / 32K): stock FA on 9.6 / 17.6 / 33.6, every RidgeFill mode
+  24.7 / 49.0 / 96.7 (excess 15 / 31 / 63: the probe block and the masked fill's F32 + F16 mask rows, no head factor);
+  FA off stock 81 / 161 / 321, RidgeFill 96.8 / 192.8 / 384.8. Qwen3.8-27B CPU load-only: reserve 543 / 561 / 577 with
+  or without the projector; s1_probe 130 / 139 / 181 (any-order 221 / 235 / 268, flat within the allowance); bc3a6af85
+  on Vulkan was 591 / 1009 / 1793.
+- Gates on the clean rebuild after the crash (cmake --build --clean-first, -j4; rf27-gates/out/s1 regenerated):
+  compute-buffer 179/179; G1 S1/vtail 49/49; canonical G1 27/27 x2; G0 72/0; G0 server 8/8; Tier-3 native 12/12 + 3/3;
+  check_score 24/24; check_s1_score 24 + 12; check_chat_score PASS (defaults byte-identical to the pre-chat binary);
+  select_chat 42/42; select_rows 23/23; dispatch 44/44; a0 27/27; rollback 11/11; s1_tools 115/115; s1_http 72/72;
+  s1_reporting 91 / 16; HTTP sweep 3/3.
+- Cost note superseded: the probe computes QK once again, so the reported 2 x n_head x d x probe_kv_pairs is right.

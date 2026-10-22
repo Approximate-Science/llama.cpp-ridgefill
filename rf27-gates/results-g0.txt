@@ -1,4 +1,4 @@
-INFO upstream base 1242be66f65d5d8a3d996ba56d6de106ced98cf6, branch 22ef3df4a+dirty
+INFO upstream base 1242be66f65d5d8a3d996ba56d6de106ced98cf6, branch bc3a6af85+dirty
 PASS G0 off        llama-fa0-b128-ub64: no projector, byte-identical to upstream
 PASS G0 T>=N       llama-fa0-b128-ub64: projector loaded, nothing filled, byte-identical
 PASS dense fill      llama-fa0-b128-ub64 (tol 1e-4): logits rel 4.28e-07 kv rel max 8.14e-06
@@ -40,8 +40,8 @@ PASS dense fill      llama-fa1-b256-ub256 (tol 1e-2): logits rel 3.79e-03 kv rel
 PASS dense fill!=ex  llama-fa1-b256-ub256: logits rel 9.07e-01 kv rel max 1.33e+00
 PASS dense wrongmap  llama-fa1-b256-ub256: logits rel 1.08e+00 kv rel max 1.26e+00 (must exceed tolerance)
 PASS refuse-output llama: decode refuses a filled token that is an output (rc 2)
-PASS G0 ppl-off    llama: 34 lines identical (Final estimate: PPL = 301.4395 +/- 0.71842), attempts 1/1
-PASS G0 ppl-tgen    llama: 34 lines identical (Final estimate: PPL = 301.4395 +/- 0.71842), attempts 1/1
+PASS G0 ppl-off    llama: 34 lines identical (Final estimate: PPL = 301.4395 +/- 0.71842), attempts 2/1
+PASS G0 ppl-tgen    llama: 34 lines identical (Final estimate: PPL = 301.4395 +/- 0.71842), attempts 2/1
 PASS G0 off        qwen3-fa0-b128-ub64: no projector, byte-identical to upstream
 PASS G0 T>=N       qwen3-fa0-b128-ub64: projector loaded, nothing filled, byte-identical
 PASS dense fill      qwen3-fa0-b128-ub64 (tol 1e-4): logits rel 4.32e-07 kv rel max 2.80e-06

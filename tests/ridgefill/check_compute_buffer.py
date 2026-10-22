@@ -4,15 +4,22 @@ cover every RidgeFill graph. Earlier gates checked correctness and speed only an
 n_kv x window x heads (9.4 GiB at 32K on Qwen3.8-27B, re-allocated mid-request).
 
 Runs llama-ridgefill-score on the tiny qwen35 fixture, stock (mode off) and each RidgeFill mode, at several prompt
-lengths with the same context size, batch and ubatch, and parses llama.cpp's own lines:
+lengths (context = the length, as served; the same batch and ubatch), and parses llama.cpp's own lines:
   sched_reserve: <buft> compute buffer size = X MiB                       (reserved at load)
   ~llama_context: <buft> compute buffer size is X MiB, matches expectation of Y MiB
   ~llama_context: <buft> compute buffer size of X MiB, does not match expectation of Y MiB
 FAIL when: any "does not match expectation" line (a graph needed more than the reserve: re-allocation mid-request);
-a mode's buffer exceeds stock's at the same length by more than --bound-mib; the excess over stock grows with length
-by more than --growth-mib between the shortest and the longest length (an n_kv x n_tokens x n_head term would);
+a mode's buffer exceeds stock's at the same length by more than --bound-mib; the excess over stock grows from the
+shortest to the longest length by more than the growth allowance, --growth-mib + --bytes-per-cell (default 8 x ubatch:
+two F32 [n_kv, ubatch] tensors, no head factor) per added cell: an n_kv x n_tokens x n_head term exceeds it;
 the Tier-3 question-mass graph (its own scheduler, allocated per prompt: "RidgeFill question-mass graph: <backend>
-compute buffer X MiB") exceeds --bound-mib or grows across lengths by more than --growth-mib;
+compute buffer X MiB") exceeds --bound-mib or grows by more than the allowance;
+graph check (LLAMA_RIDGEFILL_GRAPH_CHECK, logged at reserve for the stock pp graph and every RidgeFill graph): the
+peak of live tensors in any dependency order (what a reordering backend such as the Vulkan graph optimizer could keep
+alive) grows by more than the stock graph's own growth (flash attention off: stock's kq is n_kv x n_tokens x n_head)
+plus the allowance (bc3a6af85's S1 probe: its independent score blocks, 1.8 GiB at 32K on Qwen3.8-27B). The same on a
+real model, load only: --reserve-binary rf_reserve --reserve-model M --reserve-projector P (the real head count, no
+decode). Self-test of that rule: --graph-selftest test_graph_peaks (bc3a6af85's blocks flagged, chained ones not);
 a run fails or its report shows the mode did not run (nothing filled, no S1 window, no vtail rows).
 Fail at load (Linux, RLIMIT_AS): the smallest address-space limit at which stock (mode off) runs is searched; with
 16 MiB more (less than RidgeFill's reserve excess) a RidgeFill mode must refuse at load, by name ("RidgeFill refused:
@@ -35,7 +42,26 @@ MODES = {
 }
 RESERVE = re.compile(r"sched_reserve:\s+(\S+) compute buffer size =\s+([0-9.]+) MiB")
 QMASS = re.compile(r"RidgeFill question-mass graph: (\S+) compute buffer ([0-9.]+) MiB")
+GCHECK = re.compile(r"RidgeFill graph check ([^:]+): live tensors in graph order ([0-9.]+) MiB, in any dependency order ([0-9.]+) MiB")
 FINAL = re.compile(r"~llama_context:\s+(\S+) compute buffer size (?:is|of)\s+([0-9.]+) MiB, (matches|does not match) expectation of\s+([0-9.]+) MiB")
+
+
+def graph_growth(record, prefix, g, lengths, limit):
+    """Per RidgeFill graph: its any-order peak may not grow from the shortest to the longest length by more than the
+    stock graph's any-order peak does, plus limit."""
+    names = set().union(*(set(v) for v in g.values())) if g else set()
+    stock = {n: g[n].get("stock") for n in lengths}
+    if not names or any(v is None for v in stock.values()):
+        record(f"{prefix}-graph-check-reported", False, why="no 'RidgeFill graph check' lines (LLAMA_RIDGEFILL_GRAPH_CHECK)")
+        return
+    stock_growth = stock[lengths[-1]][1] - stock[lengths[0]][1]
+    for name in sorted(names - {"stock"}):
+        vals = {n: g[n].get(name) for n in lengths}
+        ok = all(v is not None for v in vals.values())
+        growth = vals[lengths[-1]][1] - vals[lengths[0]][1] if ok else None
+        record(f"{prefix}-graph-{name.replace(' ', '-')}-any-order-does-not-grow", ok and growth <= max(0.0, stock_growth) + limit,
+               any_order_mib={n: v[1] for n, v in vals.items() if v}, in_order_mib={n: v[0] for n, v in vals.items() if v},
+               growth_mib=growth, stock_growth_mib=stock_growth, limit_mib=limit)
 
 
 def main():
@@ -46,7 +72,7 @@ def main():
     ap.add_argument("--projector", type=Path)
     ap.add_argument("--vocab", type=int, default=300, help="random token IDs in [3, vocab)")
     ap.add_argument("--gpu-layers", type=int, default=0)
-    ap.add_argument("--ctx-size", type=int, default=0, help="default: the longest length")
+    ap.add_argument("--ctx-size", type=int, default=0, help="default: each length")
     ap.add_argument("--cache-type", default="f16")
     ap.add_argument("--out", type=Path, required=True)
     ap.add_argument("--lengths", default="8192,16384,32768")
@@ -55,7 +81,13 @@ def main():
     ap.add_argument("--batch", type=int, default=2048)
     ap.add_argument("--ubatch", type=int, default=512)
     ap.add_argument("--bound-mib", type=float, default=512.0, help="max excess over stock at any length")
-    ap.add_argument("--growth-mib", type=float, default=4.0, help="max growth of the excess over stock across lengths")
+    ap.add_argument("--growth-mib", type=float, default=16.0, help="constant part of the growth allowance")
+    ap.add_argument("--bytes-per-cell", type=float, default=0, help="per-cell part of the growth allowance (default 8 x ubatch)")
+    ap.add_argument("--reserve-binary", type=Path, help="rf_reserve, for the load-only graph check on a real model")
+    ap.add_argument("--reserve-model", type=Path)
+    ap.add_argument("--reserve-projector", type=Path)
+    ap.add_argument("--reserve-gpu-layers", type=int, default=0)
+    ap.add_argument("--graph-selftest", type=Path, help="test_graph_peaks binary")
     ap.add_argument("--threads", type=int, default=4)
     ap.add_argument("--no-load-check", action="store_true", help="skip the fail-at-load check (reported SKIPPED)")
     args = ap.parse_args()
@@ -73,6 +105,9 @@ def main():
     if "off" not in modes or len(lengths) < 2 or any(m not in MODES for m in modes):
         sys.exit("--modes must include off and known modes; --lengths needs at least two lengths")
 
+    per_cell = args.bytes_per_cell or 8.0*args.ubatch
+    allowance = lambda: args.growth_mib + per_cell*(lengths[-1] - lengths[0])/1048576.0
+    env = dict(os.environ, LLAMA_RIDGEFILL_GRAPH_CHECK="1")
     records = []
     def record(name, ok, **kw):
         e = dict(check=name, result="PASS" if ok else "FAIL", **kw); records.append(e); print(json.dumps(e), flush=True)
@@ -80,6 +115,7 @@ def main():
     rng = random.Random(1234)
     table = {}
     qtable = {}
+    gtable = {} # (fa, n) -> {graph: (in_order, any_order)}
     for fa in args.flash_attn.split(","):
         for n in lengths:
             doc = args.out / f"doc-{n}.jsonl"
@@ -89,11 +125,11 @@ def main():
                 tag = f"fa{fa}-{n}-{mode}"
                 out = args.out / f"{tag}.jsonl"
                 cmd = [str(args.binary), "--model", str(args.model), "--projector", str(args.projector), "--input", str(doc),
-                       "--output", str(out), "--ctx-size", str(args.ctx_size or max(lengths)), "--batch", str(args.batch),
+                       "--output", str(out), "--ctx-size", str(args.ctx_size or n), "--batch", str(args.batch),
                        "--ubatch", str(args.ubatch), "--flash-attn", fa, "--cache-type", args.cache_type, "--threads", str(args.threads),
                        "--gpu-layers", str(args.gpu_layers),
                        "--tail", "4096", "--scored", "512", "--min-prompt", "1024", *MODES[mode]]
-                r = subprocess.run(cmd, capture_output=True, text=True)
+                r = subprocess.run(cmd, capture_output=True, text=True, env=env)
                 log = r.stdout + r.stderr
                 (args.out / f"{tag}.log").write_text(" ".join(cmd) + "\n" + log)
                 reserve = {m.group(1): float(m.group(2)) for m in RESERVE.finditer(log)}
@@ -113,6 +149,9 @@ def main():
                        final_mib={b: v[0] for b, v in final.items()}, expected_mib={b: v[2] for b, v in final.items()},
                        reserve_mib=reserve)
                 table[(fa, n, mode)] = {b: v[0] for b, v in final.items()}
+                g = {m.group(1): (float(m.group(2)), float(m.group(3))) for m in GCHECK.finditer(log)}
+                if g and (fa, n) not in gtable:
+                    gtable[(fa, n)] = g
                 if mode != "off" and MODES[mode][1] == "quality+qattn":
                     q = [float(m.group(2)) for m in QMASS.finditer(log)]
                     record(f"{tag}-question-mass-buffer-reported", ran and bool(q), mib=max(q) if q else None)
@@ -129,8 +168,8 @@ def main():
             record(f"fa{fa}-{mode}-excess-over-stock-bounded", ok and max(excess.values()) <= args.bound_mib,
                    excess_mib=excess, bound_mib=args.bound_mib)
             growth = excess[lengths[-1]] - excess[lengths[0]] if ok else None
-            record(f"fa{fa}-{mode}-excess-does-not-grow-with-length", ok and growth <= args.growth_mib,
-                   growth_mib=growth, limit_mib=args.growth_mib)
+            record(f"fa{fa}-{mode}-excess-does-not-grow-with-length", ok and growth <= allowance(),
+                   growth_mib=growth, limit_mib=allowance())
 
         for mode in modes:
             if mode == "off" or MODES[mode][1] != "quality+qattn":
@@ -138,7 +177,33 @@ def main():
             q = {n: qtable.get((fa, n, mode)) for n in lengths}
             ok = all(v is not None for v in q.values())
             record(f"fa{fa}-{mode}-question-mass-buffer-bounded", ok and max(q.values()) <= args.bound_mib
-                   and q[lengths[-1]] - q[lengths[0]] <= args.growth_mib, mib=q, bound_mib=args.bound_mib, growth_limit_mib=args.growth_mib)
+                   and q[lengths[-1]] - q[lengths[0]] <= allowance(), mib=q, bound_mib=args.bound_mib, growth_limit_mib=allowance())
+
+        graph_growth(record, f"fa{fa}-tiny", {n: gtable.get((fa, n), {}) for n in lengths}, lengths, allowance())
+
+    if args.reserve_binary:
+        g, sizes = {}, {}
+        for n in lengths:
+            cmd = [str(args.reserve_binary), "--model", str(args.reserve_model), "--projector", str(args.reserve_projector),
+                   "--ctx", str(n), "--batch", str(args.batch), "--ubatch", str(args.ubatch), "--fa", "1",
+                   "--gpu-layers", str(args.reserve_gpu_layers)]
+            r = subprocess.run(cmd, capture_output=True, text=True, env=env)
+            (args.out / f"reserve-{n}.log").write_text(" ".join(cmd) + "\n" + r.stdout + r.stderr)
+            g[n] = {m.group(1): (float(m.group(2)), float(m.group(3))) for m in GCHECK.finditer(r.stdout + r.stderr)}
+            line = [l for l in r.stdout.splitlines() if l.startswith("{")]
+            sizes[n] = json.loads(line[-1]) if r.returncode == 0 and line else None
+            record(f"reserve-model-{n}-loaded", sizes[n] is not None and bool(g[n]), rc=r.returncode)
+        graph_growth(record, "model", g, lengths, allowance())
+        ok = all(sizes[n] for n in lengths)
+        excess = {n: max(sizes[n]["ridgefill_mib"][b] - sizes[n]["stock_mib"][b] for b in sizes[n]["stock_mib"]) for n in lengths} if ok else None
+        record("model-reserve-excess-over-stock-bounded", ok and max(excess.values()) <= args.bound_mib
+               and excess[lengths[-1]] - excess[lengths[0]] <= allowance(), excess_mib=excess, bound_mib=args.bound_mib)
+
+    if args.graph_selftest:
+        r = subprocess.run([str(args.graph_selftest)], capture_output=True, text=True)
+        (args.out / "graph-selftest.log").write_text(r.stdout + r.stderr)
+        record("graph-check-selftest", r.returncode == 0 and '"result": "PASS"' in r.stdout, rc=r.returncode,
+               lines=[l for l in r.stdout.splitlines() if l.startswith("{")])
 
     load_check = "SKIPPED: --no-load-check" if args.no_load_check else None
     if not args.no_load_check:
@@ -149,11 +214,13 @@ def main():
         if resource is None or not sys.platform.startswith("linux"):
             load_check = "SKIPPED: needs RLIMIT_AS (Linux)"
         else:
-            n = lengths[0]
+            # the shortest prompt at the longest context: RidgeFill's reserve excess over stock there must exceed the 16 MiB
+            # margin by a clear amount, or the check would test nothing
+            n, ctx = lengths[0], args.ctx_size or max(lengths)
             def limited(mode, kib):
                 out = args.out / f"load-{mode}-{kib}.jsonl"
                 cmd = [str(args.binary), "--model", str(args.model), "--projector", str(args.projector),
-                       "--input", str(args.out / f"doc-{n}.jsonl"), "--output", str(out), "--ctx-size", str(args.ctx_size or max(lengths)), "--batch", str(args.batch), "--ubatch", str(args.ubatch),
+                       "--input", str(args.out / f"doc-{n}.jsonl"), "--output", str(out), "--ctx-size", str(ctx), "--batch", str(args.batch), "--ubatch", str(args.ubatch),
                        "--flash-attn", "on", "--cache-type", "f16", "--threads", "1",
                        "--tail", "4096", "--scored", "512", "--min-prompt", "1024", *MODES[mode]]
                 lim = lambda: resource.setrlimit(resource.RLIMIT_AS, (kib*1024, kib*1024))
@@ -172,9 +239,15 @@ def main():
                 rc_ok, _ = limited("speed", hi + 256*1024)
                 named = "RidgeFill refused: the compute buffers of the RidgeFill graphs" in log_rf
                 decoded = "NLL=" in log_rf
-                record("fail-at-load-ridgefill-refused-by-name", rc_off == 0 and rc_rf != 0 and named and not decoded and rc_ok == 0,
-                       stock_min_kib=hi, limit_kib=hi + 16*1024, stock_rc=rc_off, ridgefill_rc=rc_rf, named=named,
-                       decoded_before_refusal=decoded, positive_control_rc=rc_ok)
+                stock_log = (args.out / f"load-off-{hi + 16*1024}.log").read_text()
+                st = [float(m.group(2)) for m in RESERVE.finditer(stock_log)]
+                ok_ok = (args.out / f"load-speed-{hi + 256*1024}.log").read_text()
+                rf_res = [float(m.group(2)) for m in RESERVE.finditer(ok_ok)]
+                margin = (max(rf_res) - max(st)) if rf_res and st else 0.0
+                record("fail-at-load-ridgefill-refused-by-name", rc_off == 0 and rc_rf != 0 and named and not decoded and rc_ok == 0
+                       and margin >= 32.0, stock_min_kib=hi, limit_kib=hi + 16*1024, ctx=ctx, stock_rc=rc_off, ridgefill_rc=rc_rf,
+                       named=named, decoded_before_refusal=decoded, positive_control_rc=rc_ok,
+                       ridgefill_reserve_excess_mib=margin)
 
     rows = [dict(fa=fa, n=n, mode=mode, mib=v, question_mass_mib=qtable.get((fa, n, mode))) for (fa, n, mode), v in sorted(table.items())]
     s = dict(gate="compute-buffer", checks=len(records), passed=sum(r["result"] == "PASS" for r in records), load_check=load_check)

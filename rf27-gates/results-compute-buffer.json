@@ -1,8 +1,8 @@
 {
   "summary": {
     "gate": "compute-buffer",
-    "checks": 141,
-    "passed": 141,
+    "checks": 179,
+    "passed": 179,
     "load_check": null,
     "result": "PASS"
   },
@@ -17,13 +17,13 @@
       "check": "faon-8192-off-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 33.5879
+        "CPU": 9.5879
       },
       "expected_mib": {
-        "CPU": 33.5879
+        "CPU": 9.5879
       },
       "reserve_mib": {
-        "CPU": 33.59
+        "CPU": 9.59
       }
     },
     {
@@ -36,13 +36,13 @@
       "check": "faon-8192-speed-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 24.66
       }
     },
     {
@@ -55,13 +55,13 @@
       "check": "faon-8192-quality-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 24.66
       }
     },
     {
@@ -74,13 +74,13 @@
       "check": "faon-8192-qattn-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 24.66
       }
     },
     {
@@ -98,13 +98,13 @@
       "check": "faon-8192-s1-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 24.66
       }
     },
     {
@@ -122,13 +122,13 @@
       "check": "faon-8192-vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 24.66
       }
     },
     {
@@ -146,13 +146,13 @@
       "check": "faon-8192-s1+vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 24.66
       }
     },
     {
@@ -170,13 +170,13 @@
       "check": "faon-16384-off-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 33.5879
+        "CPU": 17.5879
       },
       "expected_mib": {
-        "CPU": 33.5879
+        "CPU": 17.5879
       },
       "reserve_mib": {
-        "CPU": 33.59
+        "CPU": 17.59
       }
     },
     {
@@ -189,13 +189,13 @@
       "check": "faon-16384-speed-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 49.03
       }
     },
     {
@@ -208,13 +208,13 @@
       "check": "faon-16384-quality-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 49.03
       }
     },
     {
@@ -227,13 +227,13 @@
       "check": "faon-16384-qattn-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 49.03
       }
     },
     {
@@ -251,13 +251,13 @@
       "check": "faon-16384-s1-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 49.03
       }
     },
     {
@@ -275,13 +275,13 @@
       "check": "faon-16384-vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 49.03
       }
     },
     {
@@ -299,13 +299,13 @@
       "check": "faon-16384-s1+vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "expected_mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "reserve_mib": {
-        "CPU": 96.66
+        "CPU": 49.03
       }
     },
     {
@@ -470,8 +470,8 @@
       "check": "faon-speed-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.072300000000006,
-        "16384": 63.072300000000006,
+        "8192": 15.0723,
+        "16384": 31.4395,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -479,15 +479,15 @@
     {
       "check": "faon-speed-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 48.00000000000001,
+      "limit_mib": 112.0
     },
     {
       "check": "faon-quality-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.072300000000006,
-        "16384": 63.072300000000006,
+        "8192": 15.0723,
+        "16384": 31.4395,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -495,15 +495,15 @@
     {
       "check": "faon-quality-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 48.00000000000001,
+      "limit_mib": 112.0
     },
     {
       "check": "faon-qattn-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.072300000000006,
-        "16384": 63.072300000000006,
+        "8192": 15.0723,
+        "16384": 31.4395,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -511,15 +511,15 @@
     {
       "check": "faon-qattn-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 48.00000000000001,
+      "limit_mib": 112.0
     },
     {
       "check": "faon-s1-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.072300000000006,
-        "16384": 63.072300000000006,
+        "8192": 15.0723,
+        "16384": 31.4395,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -527,15 +527,15 @@
     {
       "check": "faon-s1-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 48.00000000000001,
+      "limit_mib": 112.0
     },
     {
       "check": "faon-vtail-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.072300000000006,
-        "16384": 63.072300000000006,
+        "8192": 15.0723,
+        "16384": 31.4395,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -543,15 +543,15 @@
     {
       "check": "faon-vtail-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 48.00000000000001,
+      "limit_mib": 112.0
     },
     {
       "check": "faon-s1+vtail-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.072300000000006,
-        "16384": 63.072300000000006,
+        "8192": 15.0723,
+        "16384": 31.4395,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -559,8 +559,8 @@
     {
       "check": "faon-s1+vtail-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 48.00000000000001,
+      "limit_mib": 112.0
     },
     {
       "check": "faon-qattn-question-mass-buffer-bounded",
@@ -571,7 +571,7 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
     },
     {
       "check": "faon-s1-question-mass-buffer-bounded",
@@ -582,7 +582,7 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
     },
     {
       "check": "faon-vtail-question-mass-buffer-bounded",
@@ -593,7 +593,7 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
     },
     {
       "check": "faon-s1+vtail-question-mass-buffer-bounded",
@@ -604,7 +604,194 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-full-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.69,
+        "16384": 1.69,
+        "32768": 1.69
+      },
+      "in_order_mib": {
+        "8192": 1.06,
+        "16384": 1.06,
+        "32768": 1.06
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-full-bulk-corrected-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.7,
+        "16384": 1.7,
+        "32768": 1.7
+      },
+      "in_order_mib": {
+        "8192": 1.06,
+        "16384": 1.06,
+        "32768": 1.06
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-full-masked-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 24.25,
+        "16384": 48.25,
+        "32768": 96.25
+      },
+      "in_order_mib": {
+        "8192": 24.12,
+        "16384": 48.12,
+        "32768": 96.12
+      },
+      "growth_mib": 72.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.07,
+        "16384": 1.07,
+        "32768": 1.07
+      },
+      "in_order_mib": {
+        "8192": 1.06,
+        "16384": 1.06,
+        "32768": 1.06
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.69,
+        "16384": 1.69,
+        "32768": 1.69
+      },
+      "in_order_mib": {
+        "8192": 0.76,
+        "16384": 0.76,
+        "32768": 0.76
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-bulk-corrected-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.7,
+        "16384": 1.7,
+        "32768": 1.7
+      },
+      "in_order_mib": {
+        "8192": 0.76,
+        "16384": 0.76,
+        "32768": 0.76
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-masked-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 24.62,
+        "16384": 48.62,
+        "32768": 96.62
+      },
+      "in_order_mib": {
+        "8192": 24.12,
+        "16384": 48.12,
+        "32768": 96.12
+      },
+      "growth_mib": 72.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-vtail-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.14,
+        "16384": 1.2,
+        "32768": 1.33
+      },
+      "in_order_mib": {
+        "8192": 1.19,
+        "16384": 1.19,
+        "32768": 1.19
+      },
+      "growth_mib": 0.19000000000000017,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-lower-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.07,
+        "16384": 1.07,
+        "32768": 1.07
+      },
+      "in_order_mib": {
+        "8192": 1.06,
+        "16384": 1.06,
+        "32768": 1.06
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-s1_fill-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 0.25,
+        "16384": 0.25,
+        "32768": 0.25
+      },
+      "in_order_mib": {
+        "8192": 0.25,
+        "16384": 0.25,
+        "32768": 0.25
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-s1_probe-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 32.66,
+        "16384": 65.19,
+        "32768": 66.25
+      },
+      "in_order_mib": {
+        "8192": 32.41,
+        "16384": 64.69,
+        "32768": 65.25
+      },
+      "growth_mib": 33.59,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
     },
     {
       "check": "faoff-8192-off-ran",
@@ -616,13 +803,13 @@
       "check": "faoff-8192-off-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 321.0215
+        "CPU": 81.0215
       },
       "expected_mib": {
-        "CPU": 321.0215
+        "CPU": 81.0215
       },
       "reserve_mib": {
-        "CPU": 321.02
+        "CPU": 81.02
       }
     },
     {
@@ -635,13 +822,13 @@
       "check": "faoff-8192-speed-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 96.78
       }
     },
     {
@@ -654,13 +841,13 @@
       "check": "faoff-8192-quality-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 96.78
       }
     },
     {
@@ -673,13 +860,13 @@
       "check": "faoff-8192-qattn-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 96.78
       }
     },
     {
@@ -697,13 +884,13 @@
       "check": "faoff-8192-s1-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 96.78
       }
     },
     {
@@ -721,13 +908,13 @@
       "check": "faoff-8192-vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 96.78
       }
     },
     {
@@ -745,13 +932,13 @@
       "check": "faoff-8192-s1+vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 96.78
       }
     },
     {
@@ -769,13 +956,13 @@
       "check": "faoff-16384-off-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 321.0215
+        "CPU": 161.0215
       },
       "expected_mib": {
-        "CPU": 321.0215
+        "CPU": 161.0215
       },
       "reserve_mib": {
-        "CPU": 321.02
+        "CPU": 161.02
       }
     },
     {
@@ -788,13 +975,13 @@
       "check": "faoff-16384-speed-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 192.78
       }
     },
     {
@@ -807,13 +994,13 @@
       "check": "faoff-16384-quality-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 192.78
       }
     },
     {
@@ -826,13 +1013,13 @@
       "check": "faoff-16384-qattn-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 192.78
       }
     },
     {
@@ -850,13 +1037,13 @@
       "check": "faoff-16384-s1-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 192.78
       }
     },
     {
@@ -874,13 +1061,13 @@
       "check": "faoff-16384-vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 192.78
       }
     },
     {
@@ -898,13 +1085,13 @@
       "check": "faoff-16384-s1+vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "expected_mib": {
-        "CPU": 384.7813
+        "CPU": 192.7813
       },
       "reserve_mib": {
-        "CPU": 384.78
+        "CPU": 192.78
       }
     },
     {
@@ -1069,8 +1256,8 @@
       "check": "faoff-speed-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.759799999999984,
-        "16384": 63.759799999999984,
+        "8192": 15.759799999999998,
+        "16384": 31.759799999999984,
         "32768": 63.759799999999984
       },
       "bound_mib": 512.0
@@ -1078,15 +1265,15 @@
     {
       "check": "faoff-speed-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 47.999999999999986,
+      "limit_mib": 112.0
     },
     {
       "check": "faoff-quality-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.759799999999984,
-        "16384": 63.759799999999984,
+        "8192": 15.759799999999998,
+        "16384": 31.759799999999984,
         "32768": 63.759799999999984
       },
       "bound_mib": 512.0
@@ -1094,15 +1281,15 @@
     {
       "check": "faoff-quality-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 47.999999999999986,
+      "limit_mib": 112.0
     },
     {
       "check": "faoff-qattn-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.759799999999984,
-        "16384": 63.759799999999984,
+        "8192": 15.759799999999998,
+        "16384": 31.759799999999984,
         "32768": 63.759799999999984
       },
       "bound_mib": 512.0
@@ -1110,15 +1297,15 @@
     {
       "check": "faoff-qattn-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 47.999999999999986,
+      "limit_mib": 112.0
     },
     {
       "check": "faoff-s1-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.759799999999984,
-        "16384": 63.759799999999984,
+        "8192": 15.759799999999998,
+        "16384": 31.759799999999984,
         "32768": 63.759799999999984
       },
       "bound_mib": 512.0
@@ -1126,15 +1313,15 @@
     {
       "check": "faoff-s1-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 47.999999999999986,
+      "limit_mib": 112.0
     },
     {
       "check": "faoff-vtail-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.759799999999984,
-        "16384": 63.759799999999984,
+        "8192": 15.759799999999998,
+        "16384": 31.759799999999984,
         "32768": 63.759799999999984
       },
       "bound_mib": 512.0
@@ -1142,15 +1329,15 @@
     {
       "check": "faoff-vtail-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 47.999999999999986,
+      "limit_mib": 112.0
     },
     {
       "check": "faoff-s1+vtail-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
-        "8192": 63.759799999999984,
-        "16384": 63.759799999999984,
+        "8192": 15.759799999999998,
+        "16384": 31.759799999999984,
         "32768": 63.759799999999984
       },
       "bound_mib": 512.0
@@ -1158,8 +1345,8 @@
     {
       "check": "faoff-s1+vtail-excess-does-not-grow-with-length",
       "result": "PASS",
-      "growth_mib": 0.0,
-      "limit_mib": 4.0
+      "growth_mib": 47.999999999999986,
+      "limit_mib": 112.0
     },
     {
       "check": "faoff-qattn-question-mass-buffer-bounded",
@@ -1170,7 +1357,7 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
     },
     {
       "check": "faoff-s1-question-mass-buffer-bounded",
@@ -1181,7 +1368,7 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
     },
     {
       "check": "faoff-vtail-question-mass-buffer-bounded",
@@ -1192,7 +1379,7 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
     },
     {
       "check": "faoff-s1+vtail-question-mass-buffer-bounded",
@@ -1203,18 +1390,429 @@
         "32768": 10.5166
       },
       "bound_mib": 512.0,
-      "growth_limit_mib": 4.0
+      "growth_limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-full-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 128.27,
+        "16384": 256.27,
+        "32768": 512.27
+      },
+      "in_order_mib": {
+        "8192": 128.38,
+        "16384": 256.38,
+        "32768": 512.38
+      },
+      "growth_mib": 384.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-full-bulk-corrected-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 128.28,
+        "16384": 256.28,
+        "32768": 512.28
+      },
+      "in_order_mib": {
+        "8192": 128.38,
+        "16384": 256.38,
+        "32768": 512.38
+      },
+      "growth_mib": 384.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-full-masked-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 144.27,
+        "16384": 288.27,
+        "32768": 576.27
+      },
+      "in_order_mib": {
+        "8192": 144.0,
+        "16384": 288.0,
+        "32768": 576.0
+      },
+      "growth_mib": 432.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 128.25,
+        "16384": 256.25,
+        "32768": 512.25
+      },
+      "in_order_mib": {
+        "8192": 128.38,
+        "16384": 256.38,
+        "32768": 512.38
+      },
+      "growth_mib": 384.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.75,
+        "16384": 1.75,
+        "32768": 1.75
+      },
+      "in_order_mib": {
+        "8192": 0.76,
+        "16384": 0.76,
+        "32768": 0.76
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-bulk-corrected-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1.76,
+        "16384": 1.76,
+        "32768": 1.76
+      },
+      "in_order_mib": {
+        "8192": 0.76,
+        "16384": 0.76,
+        "32768": 0.76
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-masked-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 144.0,
+        "16384": 288.0,
+        "32768": 576.0
+      },
+      "in_order_mib": {
+        "8192": 144.0,
+        "16384": 288.0,
+        "32768": 576.0
+      },
+      "growth_mib": 432.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-vtail-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 128.38,
+        "16384": 256.44,
+        "32768": 512.57
+      },
+      "in_order_mib": {
+        "8192": 128.38,
+        "16384": 256.38,
+        "32768": 512.38
+      },
+      "growth_mib": 384.19000000000005,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-lower-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 128.25,
+        "16384": 256.25,
+        "32768": 512.25
+      },
+      "in_order_mib": {
+        "8192": 128.38,
+        "16384": 256.38,
+        "32768": 512.38
+      },
+      "growth_mib": 384.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-s1_fill-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 0.25,
+        "16384": 0.25,
+        "32768": 0.25
+      },
+      "in_order_mib": {
+        "8192": 0.25,
+        "16384": 0.25,
+        "32768": 0.25
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-s1_probe-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 32.16,
+        "16384": 64.19,
+        "32768": 64.25
+      },
+      "in_order_mib": {
+        "8192": 32.16,
+        "16384": 64.19,
+        "32768": 64.25
+      },
+      "growth_mib": 32.09,
+      "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "reserve-model-8192-loaded",
+      "result": "PASS",
+      "rc": 0
+    },
+    {
+      "check": "reserve-model-16384-loaded",
+      "result": "PASS",
+      "rc": 0
+    },
+    {
+      "check": "reserve-model-32768-loaded",
+      "result": "PASS",
+      "rc": 0
+    },
+    {
+      "check": "model-graph-full-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1584.97,
+        "16384": 1584.97,
+        "32768": 1584.97
+      },
+      "in_order_mib": {
+        "8192": 112.12,
+        "16384": 112.12,
+        "32768": 112.12
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-full-bulk-corrected-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1692.97,
+        "16384": 1692.97,
+        "32768": 1692.97
+      },
+      "in_order_mib": {
+        "8192": 112.12,
+        "16384": 112.12,
+        "32768": 112.12
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-full-masked-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 699.1,
+        "16384": 707.1,
+        "32768": 723.1
+      },
+      "in_order_mib": {
+        "8192": 130.12,
+        "16384": 138.12,
+        "32768": 154.12
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 495.0,
+        "16384": 495.0,
+        "32768": 495.0
+      },
+      "in_order_mib": {
+        "8192": 495.0,
+        "16384": 495.0,
+        "32768": 495.0
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1584.97,
+        "16384": 1584.97,
+        "32768": 1584.97
+      },
+      "in_order_mib": {
+        "8192": 63.12,
+        "16384": 63.12,
+        "32768": 63.12
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-bulk-corrected-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 1692.97,
+        "16384": 1692.97,
+        "32768": 1692.97
+      },
+      "in_order_mib": {
+        "8192": 63.12,
+        "16384": 63.12,
+        "32768": 63.12
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-masked-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 699.1,
+        "16384": 707.1,
+        "32768": 723.1
+      },
+      "in_order_mib": {
+        "8192": 130.12,
+        "16384": 138.12,
+        "32768": 154.12
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-vtail-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 495.0,
+        "16384": 495.0,
+        "32768": 495.0
+      },
+      "in_order_mib": {
+        "8192": 495.0,
+        "16384": 495.0,
+        "32768": 495.0
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-lower-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 146.29,
+        "16384": 146.29,
+        "32768": 146.29
+      },
+      "in_order_mib": {
+        "8192": 112.0,
+        "16384": 112.0,
+        "32768": 112.0
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-s1_fill-bulk-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 130.0,
+        "16384": 130.0,
+        "32768": 130.0
+      },
+      "in_order_mib": {
+        "8192": 30.0,
+        "16384": 30.0,
+        "32768": 30.0
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-s1_probe-any-order-does-not-grow",
+      "result": "PASS",
+      "any_order_mib": {
+        "8192": 221.1,
+        "16384": 235.43,
+        "32768": 267.74
+      },
+      "in_order_mib": {
+        "8192": 112.34,
+        "16384": 129.69,
+        "32768": 138.88
+      },
+      "growth_mib": 46.640000000000015,
+      "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-reserve-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 0.0
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "graph-check-selftest",
+      "result": "PASS",
+      "rc": 0,
+      "lines": [
+        "{\"check\": \"unchained-bc3a6af85-blocks-flagged\", \"result\": \"PASS\", \"any_order_mib\": [447.94, 1599.75], \"in_order_mib\": [127.91, 127.75], \"growth_mib\": 1151.81, \"limit_mib\": 112.00, \"flagged\": true}",
+        "{\"check\": \"chained-blocks-not-flagged\", \"result\": \"PASS\", \"any_order_mib\": [127.91, 127.75], \"in_order_mib\": [127.91, 127.75], \"growth_mib\": -0.16, \"limit_mib\": 112.00, \"flagged\": false}",
+        "{\"test\": \"graph-peaks\", \"result\": \"PASS\"}"
+      ]
     },
     {
       "check": "fail-at-load-ridgefill-refused-by-name",
       "result": "PASS",
       "stock_min_kib": 527296,
       "limit_kib": 543680,
+      "ctx": 32768,
       "stock_rc": 0,
       "ridgefill_rc": 1,
       "named": true,
       "decoded_before_refusal": false,
-      "positive_control_rc": 0
+      "positive_control_rc": 0,
+      "ridgefill_reserve_excess_mib": 63.06999999999999
     }
   ],
   "buffers": [
@@ -1223,7 +1821,7 @@
       "n": 8192,
       "mode": "off",
       "mib": {
-        "CPU": 321.0215
+        "CPU": 81.0215
       },
       "question_mass_mib": null
     },
@@ -1232,7 +1830,7 @@
       "n": 8192,
       "mode": "qattn",
       "mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "question_mass_mib": 9.0479
     },
@@ -1241,7 +1839,7 @@
       "n": 8192,
       "mode": "quality",
       "mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "question_mass_mib": null
     },
@@ -1250,7 +1848,7 @@
       "n": 8192,
       "mode": "s1",
       "mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "question_mass_mib": 9.0479
     },
@@ -1259,7 +1857,7 @@
       "n": 8192,
       "mode": "s1+vtail",
       "mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "question_mass_mib": 9.0479
     },
@@ -1268,7 +1866,7 @@
       "n": 8192,
       "mode": "speed",
       "mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "question_mass_mib": null
     },
@@ -1277,13 +1875,76 @@
       "n": 8192,
       "mode": "vtail",
       "mib": {
-        "CPU": 384.7813
+        "CPU": 96.7813
       },
       "question_mass_mib": 9.0479
     },
     {
       "fa": "off",
       "n": 16384,
+      "mode": "off",
+      "mib": {
+        "CPU": 161.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "qattn",
+      "mib": {
+        "CPU": 192.7813
+      },
+      "question_mass_mib": 10.0791
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "quality",
+      "mib": {
+        "CPU": 192.7813
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "s1",
+      "mib": {
+        "CPU": 192.7813
+      },
+      "question_mass_mib": 10.0791
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "s1+vtail",
+      "mib": {
+        "CPU": 192.7813
+      },
+      "question_mass_mib": 10.0791
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "speed",
+      "mib": {
+        "CPU": 192.7813
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "vtail",
+      "mib": {
+        "CPU": 192.7813
+      },
+      "question_mass_mib": 10.0791
+    },
+    {
+      "fa": "off",
+      "n": 32768,
       "mode": "off",
       "mib": {
         "CPU": 321.0215
@@ -1292,69 +1953,6 @@
     },
     {
       "fa": "off",
-      "n": 16384,
-      "mode": "qattn",
-      "mib": {
-        "CPU": 384.7813
-      },
-      "question_mass_mib": 10.0791
-    },
-    {
-      "fa": "off",
-      "n": 16384,
-      "mode": "quality",
-      "mib": {
-        "CPU": 384.7813
-      },
-      "question_mass_mib": null
-    },
-    {
-      "fa": "off",
-      "n": 16384,
-      "mode": "s1",
-      "mib": {
-        "CPU": 384.7813
-      },
-      "question_mass_mib": 10.0791
-    },
-    {
-      "fa": "off",
-      "n": 16384,
-      "mode": "s1+vtail",
-      "mib": {
-        "CPU": 384.7813
-      },
-      "question_mass_mib": 10.0791
-    },
-    {
-      "fa": "off",
-      "n": 16384,
-      "mode": "speed",
-      "mib": {
-        "CPU": 384.7813
-      },
-      "question_mass_mib": null
-    },
-    {
-      "fa": "off",
-      "n": 16384,
-      "mode": "vtail",
-      "mib": {
-        "CPU": 384.7813
-      },
-      "question_mass_mib": 10.0791
-    },
-    {
-      "fa": "off",
-      "n": 32768,
-      "mode": "off",
-      "mib": {
-        "CPU": 321.0215
-      },
-      "question_mass_mib": null
-    },
-    {
-      "fa": "off",
       "n": 32768,
       "mode": "qattn",
       "mib": {
@@ -1412,7 +2010,7 @@
       "n": 8192,
       "mode": "off",
       "mib": {
-        "CPU": 33.5879
+        "CPU": 9.5879
       },
       "question_mass_mib": null
     },
@@ -1421,7 +2019,7 @@
       "n": 8192,
       "mode": "qattn",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "question_mass_mib": 9.0479
     },
@@ -1430,7 +2028,7 @@
       "n": 8192,
       "mode": "quality",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "question_mass_mib": null
     },
@@ -1439,7 +2037,7 @@
       "n": 8192,
       "mode": "s1",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "question_mass_mib": 9.0479
     },
@@ -1448,7 +2046,7 @@
       "n": 8192,
       "mode": "s1+vtail",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "question_mass_mib": 9.0479
     },
@@ -1457,7 +2055,7 @@
       "n": 8192,
       "mode": "speed",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "question_mass_mib": null
     },
@@ -1466,7 +2064,7 @@
       "n": 8192,
       "mode": "vtail",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 24.6602
       },
       "question_mass_mib": 9.0479
     },
@@ -1475,7 +2073,7 @@
       "n": 16384,
       "mode": "off",
       "mib": {
-        "CPU": 33.5879
+        "CPU": 17.5879
       },
       "question_mass_mib": null
     },
@@ -1484,7 +2082,7 @@
       "n": 16384,
       "mode": "qattn",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "question_mass_mib": 10.0791
     },
@@ -1493,7 +2091,7 @@
       "n": 16384,
       "mode": "quality",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "question_mass_mib": null
     },
@@ -1502,7 +2100,7 @@
       "n": 16384,
       "mode": "s1",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "question_mass_mib": 10.0791
     },
@@ -1511,7 +2109,7 @@
       "n": 16384,
       "mode": "s1+vtail",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "question_mass_mib": 10.0791
     },
@@ -1520,7 +2118,7 @@
       "n": 16384,
       "mode": "speed",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "question_mass_mib": null
     },
@@ -1529,7 +2127,7 @@
       "n": 16384,
       "mode": "vtail",
       "mib": {
-        "CPU": 96.6602
+        "CPU": 49.0274
       },
       "question_mass_mib": 10.0791
     },

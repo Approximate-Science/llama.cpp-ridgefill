@@ -1,0 +1,98 @@
+[
+ {
+  "split": 3,
+  "prompt": "fixture",
+  "kv": "f32",
+  "fa": 0,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 1.2494547691751013e-07
+ },
+ {
+  "split": 3,
+  "prompt": "fixture",
+  "kv": "f16",
+  "fa": 1,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 1.2494740495172812e-07
+ },
+ {
+  "split": 3,
+  "prompt": "selchat",
+  "kv": "f32",
+  "fa": 0,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 1.8739338487609206e-07
+ },
+ {
+  "split": 3,
+  "prompt": "selchat",
+  "kv": "f16",
+  "fa": 1,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 1.249306634817676e-07
+ },
+ {
+  "split": 4,
+  "prompt": "fixture",
+  "kv": "f32",
+  "fa": 0,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 1.8104997033496235e-07
+ },
+ {
+  "split": 4,
+  "prompt": "fixture",
+  "kv": "f16",
+  "fa": 1,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 2.414039231396463e-07
+ },
+ {
+  "split": 4,
+  "prompt": "selchat",
+  "kv": "f32",
+  "fa": 0,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 1.809469824135215e-07
+ },
+ {
+  "split": 4,
+  "prompt": "selchat",
+  "kv": "f16",
+  "fa": 1,
+  "probe_state_identical": true,
+  "rows_identical": true,
+  "final_state_identical": true,
+  "logits_identical": true,
+  "vtail_identical": true,
+  "s1_mass_max_rel": 1.8095801707652552e-07
+ }
+]

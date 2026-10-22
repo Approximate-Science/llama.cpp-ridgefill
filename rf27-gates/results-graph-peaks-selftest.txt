@@ -1,0 +1,3 @@
+{"check": "unchained-bc3a6af85-blocks-flagged", "result": "PASS", "any_order_mib": [447.94, 1599.75], "in_order_mib": [127.91, 127.75], "growth_mib": 1151.81, "limit_mib": 112.00, "flagged": true}
+{"check": "chained-blocks-not-flagged", "result": "PASS", "any_order_mib": [127.91, 127.75], "in_order_mib": [127.91, 127.75], "growth_mib": -0.16, "limit_mib": 112.00, "flagged": false}
+{"test": "graph-peaks", "result": "PASS"}

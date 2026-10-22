@@ -92,7 +92,7 @@
     {
       "check": "fixture-S1gw-s1-mass",
       "result": "PASS",
-      "max_rel": 3.3192496564576604e-07,
+      "max_rel": 2.413999750151026e-07,
       "n": 500
     },
     {
@@ -128,7 +128,7 @@
     {
       "check": "fixture-S1gw-vtail-k0-s1-mass",
       "result": "PASS",
-      "max_rel": 3.3192496564576604e-07,
+      "max_rel": 2.413999750151026e-07,
       "n": 500
     },
     {
@@ -164,7 +164,7 @@
     {
       "check": "fixture-S1gw-vtail-k72-s1-mass",
       "result": "PASS",
-      "max_rel": 3.3192496564576604e-07,
+      "max_rel": 2.413999750151026e-07,
       "n": 500
     },
     {
@@ -242,7 +242,7 @@
     {
       "check": "selchat-S1gw-s1-mass",
       "result": "PASS",
-      "max_rel": 3.61893964827043e-07,
+      "max_rel": 2.111048128157751e-07,
       "n": 500
     },
     {
@@ -278,7 +278,7 @@
     {
       "check": "selchat-S1gw-vtail-k0-s1-mass",
       "result": "PASS",
-      "max_rel": 3.61893964827043e-07,
+      "max_rel": 2.111048128157751e-07,
       "n": 500
     },
     {
@@ -314,7 +314,7 @@
     {
       "check": "selchat-S1gw-vtail-k72-s1-mass",
       "result": "PASS",
-      "max_rel": 3.61893964827043e-07,
+      "max_rel": 2.111048128157751e-07,
       "n": 500
     },
     {
@@ -329,7 +329,7 @@
       "check": "selchat-S1gw-ubatch32",
       "result": "PASS",
       "max_rel": 5.525498067981971e-07,
-      "mass_rel": 2.111048128157751e-07,
+      "mass_rel": 1.5078915201126793e-07,
       "rows_equal": true
     },
     {
