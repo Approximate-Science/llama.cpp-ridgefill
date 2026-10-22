@@ -111,13 +111,18 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
                 throw std::runtime_error("RidgeFill qattn-window-mode turn: empty user turn before the window endpoint");
             }
         }
-        for (int32_t il : {3, 7, 11, 15}) {
-            if (il >= params.split || params.qattn_share == 0) {
-                continue;
+        // the question-attention layers: the last 4 attention layers below the split (the reference rule: kva
+        // q27_quality.py, lane T's rf27 references, the projector manifest's qattn_rule); {3, 7, 11, 15} at split 16
+        std::vector<int32_t> qattn_layers;
+        for (int32_t il = 0; il < params.split && params.qattn_share > 0; ++il) {
+            if (!model.hparams.is_recr(il)) {
+                qattn_layers.push_back(il);
             }
-            if (model.hparams.is_recr(il)) {
-                throw std::runtime_error("RidgeFill quality+qattn: question layer is not an attention layer");
-            }
+        }
+        if (qattn_layers.size() > 4) {
+            qattn_layers.erase(qattn_layers.begin(), qattn_layers.end() - 4);
+        }
+        for (int32_t il : qattn_layers) {
             layers.push_back(il);
             windows.push_back(std::make_unique<llama_ridgefill_sweep_buffer>(model.select_buft(il),
                     params.n_embd, win_end - win_begin, GGML_TYPE_F32));

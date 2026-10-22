@@ -2109,6 +2109,16 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
     report.macs_exact = report.macs_ridgefill = head;
     require((window_begin == -1 && window_end == -1) ||
             (window_begin >= 0 && window_end > window_begin && window_end <= n_prompt), "invalid analytic query window");
+    // the question-attention layers, as the sweep driver: the last 4 attention layers below the split
+    std::vector<uint32_t> qattn_layers;
+    for (uint32_t il = 0; il < split; ++il) {
+        if (!hp.is_recr(il)) {
+            qattn_layers.push_back(il);
+        }
+    }
+    if (qattn_layers.size() > 4) {
+        qattn_layers.erase(qattn_layers.begin(), qattn_layers.end() - 4);
+    }
     for (uint32_t il = 0; il < layers; ++il) {
         const double mlp = 3 * hidden * hp.n_ff(il);
         double linear, fill, context = 0, tail_context = 0, row_context = 0;
@@ -2129,7 +2139,7 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
             context = hq * dim * n * (n + 1);
             tail_context = hq * dim * (n - p) * (p + n + 1);
             row_context = 2 * hq * dim * exact_keys;
-            if (window_begin >= 0 && il < split && (il == 3 || il == 7 || il == 11 || il == 15)) {
+            if (window_begin >= 0 && std::find(qattn_layers.begin(), qattn_layers.end(), il) != qattn_layers.end()) {
                 const double window = window_end - window_begin;
                 report.macs_ridgefill += window * query + hq * dim * window * (double(window_begin) + window_end + 1) / 2;
             }

@@ -584,3 +584,36 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   G0 72/0, G1 S1/vtail 49/49 after that change (env-gated diagnostic only).
 - Head 12947fda3 on Vulkan (build-vulkan-12947fda3, card 13): memory gate 90/90 (s1_probe input copies 8 / 16 / 32
   MiB at 8K / 16K / 32K: one mask, the stock mask's growth); lane Q's 12-doc equality check 12/12 MATCH.
+
+## 2026-10-22 rf27-s1-splits (from 41a6e3b87): Qwen3.8-27B projectors for splits 24 and 32
+- Provenance of the shipped S16 GGUF (NOTES-tools.md, finalize.sh): kva-wt-q27 scripts/q27_package.py (commit
+  7fb9fe40, unchanged since) packages q4/proj/qwen3.8-27b-sweep-s16.safetensors + q4/sterm/qwen3.8-27b-sweep-s16.pt
+  (the box-out/sterm copy is an older fit; q4/sterm matches the manifest's sterm_sha256) + the Flash-Next rowsel table
+  into release/ridgefill-projector-qwen3.8-27b-i8 (maps i8_row128: per-128 absmax / 127 in bf16, codes round half to
+  even; corrections [heads, V, K] f32; defaults = the summary's quality-mode arm); q27_readme.py adds README.md (plus
+  a hand-added Caveats section); L-B's convert_ridgefill_to_gguf.py makes the format-2 GGUF (maps dequantised from
+  codes x bf16 scales to Q8_0; biases, corrections, row scores F32; correction heads tiled to llama.cpp order).
+- Reproduction: (a) the current converter on the release package gives the shipped GGUF byte for byte (8646d41a...);
+  (b) q27_package.py re-run on the s16 inputs gives a package whose tensors (names, dtypes, shapes, bytes) and
+  safetensors metadata equal the release's in all 50 files; 48 headers differ only in the order of the 5 __metadata__
+  keys (safetensors serialises a Rust HashMap: the order is random per process; the release's own L16 and L51 differ
+  from each other the same way), so the file hashes differ; its GGUF has all 133 tensors byte-identical to the shipped
+  one, metadata differing only in source-file sha256s, the embedded source manifest and its hash.
+- S24 / S32: the same scripts and inputs (the split's sweep, sterm and fit); q27_package.py needs the split to be the
+  summary's quality-mode split, so the summary is passed with quality_mode null and the measured arm with S16's
+  settings as --tradeoff (s24-t4096-r50-a0, s32-t4096-r50-a0): its own mechanism for a labelled non-passing default.
+  GGUF defaults then: tail 4096, share 0.5, alpha 0, qattn 0, digits off (S16: qattn 0.2, digits on); tools that pass
+  the settings (lane Q's scorer commands) are unaffected. check_converter.py round trip PASS for both (40 / 32 maps,
+  max map error 0.0128 / 0.0091, controls PASS, vocabulary fingerprint bound).
+- Fixed (L-C's driver and L-B's MAC report): the question-attention layers were hard-coded {3, 7, 11, 15}; the
+  reference rule (q27_quality.py, lane T's rf27 scripts, the manifest's qattn_rule) is the last 4 attention layers
+  below the split: S24 11 15 19 23, S32 19 23 27 31; {3, 7, 11, 15} at S16, so S16 is unchanged (the smokes' S16 runs
+  equal lane Q's frozen 22ef3df4a winner at 16K and 32K). MAC figures do not change (equal attention layers).
+- GPU smokes (card 13, lane Q's winner command, projector swapped; dNLL vs the frozen exact arm): 16K chat doc S16
+  +0.0076 / S24 +0.0186 / S32 +0.0152; 32K chat doc -0.0219 / -0.0130 / -0.0042; no refusal; exact rows 4653 / 4651 /
+  4675 of 12288 and 11665 / 11688 / 11592 of 28672. One document each: not a quality result.
+- MACs skipped (analytic, the engine's report incl. S1 fill recompute, dense probe, vtail): 16K 25.8 / 21.5 / 17.1 %,
+  32K 29.1 / 24.2 / 19.4 % (S16 / S24 / S32); tokens skipped 46.6 / 46.6 / 46.5 % and 51.9 / 51.8 / 52.1 %.
+- CPU gates on the branch: canonical G1 27/27 x2; G0 72/0; G0 server 8/8; Tier-3 12/12 + 3/3; check_score 24/24;
+  G1 S1/vtail 49/49; check_s1_score 24 + 12; s1_tools 115/115; s1_http 72/72; s1_reporting 91/16; chat score PASS;
+  select_chat 42/42; select_rows 23/23; dispatch 44/44; a0 27/27; rollback 11/11; HTTP sweep 3/3; memory gate 94/94.
