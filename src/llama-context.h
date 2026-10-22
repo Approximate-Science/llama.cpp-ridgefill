@@ -358,6 +358,10 @@ private:
     ggml_backend_buffer_ptr            ridgefill_reserve_buf;
     void ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outputs, const llama_memory_context_i * mctx);
 
+    // LLAMA_RIDGEFILL_GRAPH_CHECK: the last reserved graph's llama_ridgefill_graph_peaks, taken before the scheduler
+    // splits it (the split points nodes at its own copies of the inputs)
+    size_t ridgefill_check_peaks[3] = { 0, 0, 0 }; // in order, any order, input copies
+
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 
     llama_memory_ptr memory;

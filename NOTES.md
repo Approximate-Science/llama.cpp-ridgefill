@@ -571,3 +571,14 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   27/27 x2; G0 72/0; G0 server 8/8; Tier-3 native 12/12 + 3/3; check_score 24/24; check_s1_score 24 + 12;
   check_chat_score PASS; select_chat 42/42; select_rows 23/23; dispatch 44/44; a0 27/27; rollback 11/11; s1_tools
   115/115; s1_http 72/72; s1_reporting 91/16; HTTP sweep 3/3.
+- Final, on the committed build (build-vulkan-dd02fac3e, card 13; lane Q's stock / winner commands): compute buffer
+  533.52 / 533.52, 541.52 / 541.52, 557.52 / 557.52 MiB at 8K / 16K / 32K, all "matches expectation"; peak VRAM
+  (mem_info_vram_used, 50 ms samples) stock / winner 16.66 / 18.12, 17.17 / 18.72, 18.18 / 19.93 GiB (the +1.5-1.75 GiB
+  is the projector's 1.45 GB of weights and the h_S sweep buffer, not compute buffer). Lane Q's 12-doc equality
+  check: 12/12 MATCH, every array byte-identical to 22ef3df4a. Memory gate on Vulkan with Qwen3.8-27B (stock / qattn /
+  s1+vtail at 8K / 16K / 32K, Vulkan rf_reserve per-graph sizes, self-test): 90/90; every RidgeFill graph below the
+  stock graph (s1_probe 142 / 150 / 179 MiB); Tier-3 question-mass graph 29.8 / 40.1 / 74.4 MiB (its own scheduler).
+- The graph check's input-copy figure was 0 on every reserved graph: the scheduler's split points nodes at its own
+  copies of the inputs, and the figure was taken after graph_reserve's split. It is now taken in graph_reserve before
+  the split (ridgefill_check_peaks); the tiny model then shows the probe mask (8 MiB at 8K). CPU memory gate 223/223,
+  G0 72/0, G1 S1/vtail 49/49 after that change (env-gated diagnostic only).

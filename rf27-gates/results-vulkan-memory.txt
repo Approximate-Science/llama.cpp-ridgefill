@@ -1,0 +1,15 @@
+== 8192
+stock rc=0 baseline_gib=0.08 peak_gib=16.66 peak_over_baseline_gib=16.58
+~llama_context:    Vulkan0 compute buffer size is 533.5215 MiB, matches expectation of 533.5215 MiB
+winner rc=0 baseline_gib=0.08 peak_gib=18.12 peak_over_baseline_gib=18.05
+~llama_context:    Vulkan0 compute buffer size is 533.5215 MiB, matches expectation of 533.5215 MiB
+== 16384
+stock rc=0 baseline_gib=0.08 peak_gib=17.17 peak_over_baseline_gib=17.09
+~llama_context:    Vulkan0 compute buffer size is 541.5215 MiB, matches expectation of 541.5215 MiB
+winner rc=0 baseline_gib=0.08 peak_gib=18.72 peak_over_baseline_gib=18.64
+~llama_context:    Vulkan0 compute buffer size is 541.5215 MiB, matches expectation of 541.5215 MiB
+== 32768
+stock rc=0 baseline_gib=0.08 peak_gib=18.18 peak_over_baseline_gib=18.11
+~llama_context:    Vulkan0 compute buffer size is 557.5215 MiB, matches expectation of 557.5215 MiB
+winner rc=0 baseline_gib=0.08 peak_gib=19.93 peak_over_baseline_gib=19.85
+~llama_context:    Vulkan0 compute buffer size is 557.5215 MiB, matches expectation of 557.5215 MiB
