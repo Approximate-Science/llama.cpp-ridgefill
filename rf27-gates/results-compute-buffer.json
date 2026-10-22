@@ -1,8 +1,8 @@
 {
   "summary": {
     "gate": "compute-buffer",
-    "checks": 179,
-    "passed": 179,
+    "checks": 223,
+    "passed": 223,
     "load_check": null,
     "result": "PASS"
   },
@@ -189,13 +189,13 @@
       "check": "faon-16384-speed-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "expected_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "reserve_mib": {
-        "CPU": 49.03
+        "CPU": 49.02
       }
     },
     {
@@ -208,13 +208,13 @@
       "check": "faon-16384-quality-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "expected_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "reserve_mib": {
-        "CPU": 49.03
+        "CPU": 49.02
       }
     },
     {
@@ -227,13 +227,13 @@
       "check": "faon-16384-qattn-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "expected_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "reserve_mib": {
-        "CPU": 49.03
+        "CPU": 49.02
       }
     },
     {
@@ -251,13 +251,13 @@
       "check": "faon-16384-s1-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "expected_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "reserve_mib": {
-        "CPU": 49.03
+        "CPU": 49.02
       }
     },
     {
@@ -275,13 +275,13 @@
       "check": "faon-16384-vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "expected_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "reserve_mib": {
-        "CPU": 49.03
+        "CPU": 49.02
       }
     },
     {
@@ -299,13 +299,13 @@
       "check": "faon-16384-s1+vtail-reserve-covers-graph",
       "result": "PASS",
       "final_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "expected_mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "reserve_mib": {
-        "CPU": 49.03
+        "CPU": 49.02
       }
     },
     {
@@ -471,7 +471,7 @@
       "result": "PASS",
       "excess_mib": {
         "8192": 15.0723,
-        "16384": 31.4395,
+        "16384": 31.433600000000002,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -487,7 +487,7 @@
       "result": "PASS",
       "excess_mib": {
         "8192": 15.0723,
-        "16384": 31.4395,
+        "16384": 31.433600000000002,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -503,7 +503,7 @@
       "result": "PASS",
       "excess_mib": {
         "8192": 15.0723,
-        "16384": 31.4395,
+        "16384": 31.433600000000002,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -519,7 +519,7 @@
       "result": "PASS",
       "excess_mib": {
         "8192": 15.0723,
-        "16384": 31.4395,
+        "16384": 31.433600000000002,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -535,7 +535,7 @@
       "result": "PASS",
       "excess_mib": {
         "8192": 15.0723,
-        "16384": 31.4395,
+        "16384": 31.433600000000002,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -551,7 +551,7 @@
       "result": "PASS",
       "excess_mib": {
         "8192": 15.0723,
-        "16384": 31.4395,
+        "16384": 31.433600000000002,
         "32768": 63.072300000000006
       },
       "bound_mib": 512.0
@@ -624,6 +624,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faon-tiny-graph-full-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.15,
+        "16384": 16.15,
+        "32768": 32.15
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faon-tiny-graph-full-bulk-corrected-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -638,6 +650,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-full-bulk-corrected-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.15,
+        "16384": 16.15,
+        "32768": 32.15
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -658,6 +682,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faon-tiny-graph-full-masked-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.16,
+        "16384": 16.16,
+        "32768": 32.16
+      },
+      "growth_mib": 23.999999999999996,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faon-tiny-graph-late-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -672,6 +708,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.02,
+        "16384": 16.02,
+        "32768": 32.02
+      },
+      "growth_mib": 24.000000000000004,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -692,6 +740,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faon-tiny-graph-late-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.02,
+        "16384": 0.02,
+        "32768": 0.02
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faon-tiny-graph-late-bulk-corrected-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -706,6 +766,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-bulk-corrected-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.02,
+        "16384": 0.02,
+        "32768": 0.02
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -726,20 +798,44 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faon-tiny-graph-late-masked-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.03,
+        "16384": 16.03,
+        "32768": 32.03
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faon-tiny-graph-late-vtail-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
-        "8192": 1.14,
-        "16384": 1.2,
-        "32768": 1.33
+        "8192": 2.5,
+        "16384": 4.56,
+        "32768": 8.69
       },
       "in_order_mib": {
-        "8192": 1.19,
-        "16384": 1.19,
-        "32768": 1.19
+        "8192": 2.31,
+        "16384": 4.38,
+        "32768": 8.5
       },
-      "growth_mib": 0.19000000000000017,
+      "growth_mib": 6.1899999999999995,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-late-vtail-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.08,
+        "16384": 16.14,
+        "32768": 32.27
+      },
+      "growth_mib": 24.190000000000005,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -760,6 +856,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faon-tiny-graph-lower-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.15,
+        "16384": 16.15,
+        "32768": 32.15
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faon-tiny-graph-s1_fill-bulk-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -777,6 +885,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faon-tiny-graph-s1_fill-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.02,
+        "16384": 0.02,
+        "32768": 0.02
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faon-tiny-graph-s1_probe-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -791,6 +911,18 @@
       },
       "growth_mib": 33.59,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faon-tiny-graph-s1_probe-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.02,
+        "16384": 16.02,
+        "32768": 32.02
+      },
+      "growth_mib": 24.000000000000004,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -1410,6 +1542,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faoff-tiny-graph-full-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.27,
+        "16384": 32.27,
+        "32768": 64.27
+      },
+      "growth_mib": 48.0,
+      "stock_growth_mib": 48.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faoff-tiny-graph-full-bulk-corrected-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1424,6 +1568,18 @@
       },
       "growth_mib": 384.0,
       "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-full-bulk-corrected-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.27,
+        "16384": 32.27,
+        "32768": 64.27
+      },
+      "growth_mib": 48.0,
+      "stock_growth_mib": 48.0,
       "limit_mib": 112.0
     },
     {
@@ -1444,6 +1600,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faoff-tiny-graph-full-masked-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.28,
+        "16384": 32.28,
+        "32768": 64.28
+      },
+      "growth_mib": 48.0,
+      "stock_growth_mib": 48.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faoff-tiny-graph-late-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1458,6 +1626,18 @@
       },
       "growth_mib": 384.0,
       "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.14,
+        "16384": 32.14,
+        "32768": 64.14
+      },
+      "growth_mib": 48.0,
+      "stock_growth_mib": 48.0,
       "limit_mib": 112.0
     },
     {
@@ -1478,6 +1658,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faoff-tiny-graph-late-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.14,
+        "16384": 0.14,
+        "32768": 0.14
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 48.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faoff-tiny-graph-late-bulk-corrected-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1492,6 +1684,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-bulk-corrected-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.14,
+        "16384": 0.14,
+        "32768": 0.14
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 48.0,
       "limit_mib": 112.0
     },
     {
@@ -1512,20 +1716,44 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faoff-tiny-graph-late-masked-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.15,
+        "16384": 32.15,
+        "32768": 64.15
+      },
+      "growth_mib": 48.00000000000001,
+      "stock_growth_mib": 48.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faoff-tiny-graph-late-vtail-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
-        "8192": 128.38,
-        "16384": 256.44,
-        "32768": 512.57
+        "8192": 129.38,
+        "16384": 258.44,
+        "32768": 516.57
       },
       "in_order_mib": {
         "8192": 128.38,
         "16384": 256.38,
         "32768": 512.38
       },
-      "growth_mib": 384.19000000000005,
+      "growth_mib": 387.19000000000005,
       "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-late-vtail-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.2,
+        "16384": 32.27,
+        "32768": 64.39
+      },
+      "growth_mib": 48.19,
+      "stock_growth_mib": 48.0,
       "limit_mib": 112.0
     },
     {
@@ -1546,6 +1774,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faoff-tiny-graph-lower-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.27,
+        "16384": 32.27,
+        "32768": 64.27
+      },
+      "growth_mib": 48.0,
+      "stock_growth_mib": 48.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faoff-tiny-graph-s1_fill-bulk-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1563,6 +1803,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "faoff-tiny-graph-s1_fill-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.14,
+        "16384": 0.14,
+        "32768": 0.14
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 48.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "faoff-tiny-graph-s1_probe-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1577,6 +1829,18 @@
       },
       "growth_mib": 32.09,
       "stock_growth_mib": 384.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "faoff-tiny-graph-s1_probe-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 16.14,
+        "16384": 32.14,
+        "32768": 64.14
+      },
+      "growth_mib": 48.0,
+      "stock_growth_mib": 48.0,
       "limit_mib": 112.0
     },
     {
@@ -1612,6 +1876,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "model-graph-full-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 18.02,
+        "16384": 26.02,
+        "32768": 42.02
+      },
+      "growth_mib": 24.000000000000004,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "model-graph-full-bulk-corrected-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1626,6 +1902,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-full-bulk-corrected-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 18.03,
+        "16384": 26.03,
+        "32768": 42.03
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -1646,6 +1934,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "model-graph-full-masked-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 18.03,
+        "16384": 26.03,
+        "32768": 42.03
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "model-graph-late-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1660,6 +1960,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.02,
+        "16384": 16.02,
+        "32768": 32.02
+      },
+      "growth_mib": 24.000000000000004,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -1680,6 +1992,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "model-graph-late-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.02,
+        "16384": 0.02,
+        "32768": 0.02
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "model-graph-late-bulk-corrected-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1694,6 +2018,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-bulk-corrected-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.02,
+        "16384": 0.02,
+        "32768": 0.02
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -1714,6 +2050,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "model-graph-late-masked-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.03,
+        "16384": 16.03,
+        "32768": 32.03
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "model-graph-late-vtail-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1728,6 +2076,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-vtail-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.77,
+        "16384": 17.52,
+        "32768": 35.02
+      },
+      "growth_mib": 26.250000000000004,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -1748,6 +2108,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "model-graph-lower-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 18.03,
+        "16384": 26.03,
+        "32768": 42.03
+      },
+      "growth_mib": 24.0,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "model-graph-s1_fill-bulk-any-order-does-not-grow",
       "result": "PASS",
       "any_order_mib": {
@@ -1762,6 +2134,18 @@
       },
       "growth_mib": 0.0,
       "stock_growth_mib": 0.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-s1_fill-bulk-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 0.02,
+        "16384": 0.02,
+        "32768": 0.02
+      },
+      "growth_mib": 0.0,
+      "stock_growth_mib": 24.0,
       "limit_mib": 112.0
     },
     {
@@ -1782,6 +2166,18 @@
       "limit_mib": 112.0
     },
     {
+      "check": "model-graph-s1_probe-input-copies-do-not-grow",
+      "result": "PASS",
+      "input_views_mib": {
+        "8192": 8.02,
+        "16384": 16.02,
+        "32768": 32.02
+      },
+      "growth_mib": 24.000000000000004,
+      "stock_growth_mib": 24.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "model-reserve-excess-over-stock-bounded",
       "result": "PASS",
       "excess_mib": {
@@ -1792,12 +2188,266 @@
       "bound_mib": 512.0
     },
     {
+      "check": "model-graph-full-bulk-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -383.0,
+        "16384": -393.0,
+        "32768": -393.0
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 160.03
+        },
+        "16384": {
+          "CPU": 168.03
+        },
+        "32768": {
+          "CPU": 184.03
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-full-bulk-corrected-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -383.0,
+        "16384": -393.0,
+        "32768": -393.0
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 160.03
+        },
+        "16384": {
+          "CPU": 168.03
+        },
+        "32768": {
+          "CPU": 184.03
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-full-masked-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -372.88,
+        "16384": -382.88,
+        "32768": -382.88
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 170.15
+        },
+        "16384": {
+          "CPU": 178.15
+        },
+        "32768": {
+          "CPU": 194.15
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -48.02999999999997,
+        "16384": -66.02999999999997,
+        "32768": -82.02999999999997
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 495.0
+        },
+        "16384": {
+          "CPU": 495.0
+        },
+        "32768": {
+          "CPU": 495.0
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-bulk-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -462.78,
+        "16384": -480.78,
+        "32768": -496.78
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 80.25
+        },
+        "16384": {
+          "CPU": 80.25
+        },
+        "32768": {
+          "CPU": 80.25
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-bulk-corrected-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -462.77,
+        "16384": -480.77,
+        "32768": -496.77
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 80.26
+        },
+        "16384": {
+          "CPU": 80.26
+        },
+        "32768": {
+          "CPU": 80.26
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-masked-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -402.88,
+        "16384": -412.88,
+        "32768": -412.88
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 140.15
+        },
+        "16384": {
+          "CPU": 148.15
+        },
+        "32768": {
+          "CPU": 164.15
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-late-vtail-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -27.949999999999932,
+        "16384": -47.889999999999986,
+        "32768": -37.75999999999999
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 515.08
+        },
+        "16384": {
+          "CPU": 513.14
+        },
+        "32768": {
+          "CPU": 539.27
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-lower-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -383.0,
+        "16384": -393.0,
+        "32768": -393.0
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 160.03
+        },
+        "16384": {
+          "CPU": 168.03
+        },
+        "32768": {
+          "CPU": 184.03
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-s1_fill-bulk-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -519.01,
+        "16384": -537.01,
+        "32768": -553.01
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 24.02
+        },
+        "16384": {
+          "CPU": 24.02
+        },
+        "32768": {
+          "CPU": 24.02
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
+      "check": "model-graph-s1_probe-backend-size-bounded",
+      "result": "PASS",
+      "excess_over_stock_mib": {
+        "8192": -412.65999999999997,
+        "16384": -422.31999999999994,
+        "32768": -395.76
+      },
+      "sizes_mib": {
+        "8192": {
+          "CPU": 130.37
+        },
+        "16384": {
+          "CPU": 138.71
+        },
+        "32768": {
+          "CPU": 181.27
+        }
+      },
+      "stock_growth_mib": 34.0,
+      "bound_mib": 512.0,
+      "limit_mib": 112.0
+    },
+    {
       "check": "graph-check-selftest",
       "result": "PASS",
       "rc": 0,
       "lines": [
-        "{\"check\": \"unchained-bc3a6af85-blocks-flagged\", \"result\": \"PASS\", \"any_order_mib\": [447.94, 1599.75], \"in_order_mib\": [127.91, 127.75], \"growth_mib\": 1151.81, \"limit_mib\": 112.00, \"flagged\": true}",
-        "{\"check\": \"chained-blocks-not-flagged\", \"result\": \"PASS\", \"any_order_mib\": [127.91, 127.75], \"in_order_mib\": [127.91, 127.75], \"growth_mib\": -0.16, \"limit_mib\": 112.00, \"flagged\": false}",
+        "{\"check\": \"unchained-bc3a6af85-blocks-flagged\", \"result\": \"PASS\", \"any_order_mib\": [447.94, 1599.75], \"in_order_mib\": [127.91, 127.75], \"input_views_mib\": [32.05, 128.05], \"limit_mib\": 112.00, \"flagged\": true}",
+        "{\"check\": \"probe-per-block-mask-views-848c757ad-flagged\", \"result\": \"PASS\", \"any_order_mib\": [32.03, 128.12], \"in_order_mib\": [32.03, 128.12], \"input_views_mib\": [2304.56, 9216.56], \"limit_mib\": 112.00, \"flagged\": true}",
+        "{\"check\": \"probe-shared-inputs-chained-not-flagged\", \"result\": \"PASS\", \"any_order_mib\": [32.03, 128.12], \"in_order_mib\": [32.03, 128.12], \"input_views_mib\": [8.56, 32.56], \"limit_mib\": 112.00, \"flagged\": false}",
         "{\"test\": \"graph-peaks\", \"result\": \"PASS\"}"
       ]
     },
@@ -2082,7 +2732,7 @@
       "n": 16384,
       "mode": "qattn",
       "mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "question_mass_mib": 10.0791
     },
@@ -2091,7 +2741,7 @@
       "n": 16384,
       "mode": "quality",
       "mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "question_mass_mib": null
     },
@@ -2100,7 +2750,7 @@
       "n": 16384,
       "mode": "s1",
       "mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "question_mass_mib": 10.0791
     },
@@ -2109,7 +2759,7 @@
       "n": 16384,
       "mode": "s1+vtail",
       "mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "question_mass_mib": 10.0791
     },
@@ -2118,7 +2768,7 @@
       "n": 16384,
       "mode": "speed",
       "mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "question_mass_mib": null
     },
@@ -2127,7 +2777,7 @@
       "n": 16384,
       "mode": "vtail",
       "mib": {
-        "CPU": 49.0274
+        "CPU": 49.0215
       },
       "question_mass_mib": 10.0791
     },

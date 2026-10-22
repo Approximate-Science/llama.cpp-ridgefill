@@ -1,0 +1,410 @@
+[
+ {
+  "name": "chat-v2-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 4653,
+    "new": 4653,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "code-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 4609,
+    "new": 4609,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "encyclopedia-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 6072,
+    "new": 6072,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "math-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 4733,
+    "new": 4733,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "multilingual-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 5813,
+    "new": 5813,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "papers-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 3509,
+    "new": 3509,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "prose-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 3600,
+    "new": 3600,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "web-heldout-00",
+  "length": 16384,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 4053,
+    "new": 4053,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "chat-v2-heldout-32k-00",
+  "length": 32768,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 11665,
+    "new": 11665,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "code-heldout-32k-00",
+  "length": 32768,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 10854,
+    "new": 10854,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "encyclopedia-heldout-32k-00",
+  "length": 32768,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 13487,
+    "new": 13487,
+    "sym_diff": 0
+   }
+  }
+ },
+ {
+  "name": "math-heldout-32k-00",
+  "length": 32768,
+  "verdict": "MATCH",
+  "dNLL_new_minus_old": 0.0,
+  "arrays": {
+   "exact_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logprobs": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "exact_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_logsumexp": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "target_positions": {
+    "match": true,
+    "max_abs": 0.0
+   },
+   "winner_exact_rows": {
+    "match": true,
+    "old": 10514,
+    "new": 10514,
+    "sym_diff": 0
+   }
+  }
+ }
+]

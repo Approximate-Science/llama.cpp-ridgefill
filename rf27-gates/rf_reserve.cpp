@@ -8,6 +8,7 @@
 #include "ggml-backend.h"
 
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <map>
 #include <memory>
@@ -25,7 +26,8 @@ static void log_cb(ggml_log_level level, const char * text, void *) {
             (*g_sizes)[buft] = mib;
         }
     }
-    if (level >= GGML_LOG_LEVEL_WARN || strstr(text, "RidgeFill graph")) {
+    static const bool verbose = getenv("RF_RESERVE_VERBOSE") != nullptr; // every log line (e.g. GGML_SCHED_DEBUG)
+    if (verbose || level >= GGML_LOG_LEVEL_WARN || strstr(text, "RidgeFill graph")) {
         fputs(text, stderr);
     }
 }

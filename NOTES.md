@@ -541,3 +541,33 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
   select_chat 42/42; select_rows 23/23; dispatch 44/44; a0 27/27; rollback 11/11; s1_tools 115/115; s1_http 72/72;
   s1_reporting 91 / 16; HTTP sweep 3/3.
 - Cost note superseded: the probe computes QK once again, so the reported 2 x n_head x d x probe_kv_pairs is right.
+
+## 2026-10-22 rf27-s1-mem: lane Q's Vulkan check of 848c757ad failed; fixed and verified on the GPU (card 13)
+- Lane Q (card 03, ctx = length + 512): winner compute buffer 2583 MiB at 8K (stock 533), a reserve of 4887 MiB at 16K
+  (expectation mismatch: the runtime used 2377), 32K stopped by the desktop floor. Worse than bc3a6af85.
+- Measured with the GPU bridge (rf_reserve load-only, card 13, ctx 9216): s1_probe alone 2727 MiB on Vulkan0; my CPU
+  any-order model said 221. GGML_VK_DISABLE_GRAPH_OPTIMIZE=1: still 2715, so reordering was not the cause (neither
+  lane Q's guess nor my model's). GGML_SCHED_DEBUG: the probe graph is one Vulkan0 split with 581 inputs, mostly
+  9 MiB views of the s1_mask input. The scheduler copies every distinct view of a graph input into the split's compute
+  buffer, alive for the whole split; the probe made one view per query head and layer (288 x 9.4 MiB = 2.7 GiB). The
+  CPU backend needs no copies, hence invisible on CPU. Fix: the mask and ones are used whole, or viewed once per graph
+  per query block (llm_graph_input_ridgefill_part::s1_mask_blk / s1_ones_blk). Vulkan s1_probe after: 165 / 151 /
+  189 MiB at 9K / 17K / 33K cells; every RidgeFill graph below the stock pp graph; RidgeFill reserve == stock.
+- Equality: after that, lane Q's 12-doc check (same commands and frozen 22ef3df4a references, my build, card 13): rows
+  identical in 8/8 16K docs, exact arm identical, but winner logprobs differed (dNLL -4.4e-3 .. +1.2e-3). Cause: vtail's
+  ggml_mul_inplace on the F16 V cache rounds differently from 22ef3df4a's cast / mul / cpy on Vulkan (identical on
+  CPU). Fix: the cast / mul / cpy in bounded runs of cells for every V type. Then one doc byte-identical, and the full
+  check 12/12 MATCH: exact and winner logprobs, logsumexp, target positions and exact rows byte-identical to
+  22ef3df4a on all 8 docs at 16K and 4 at 32K. The S1 mass regrouping (<= 2.4e-07) flipped no row there.
+- Vulkan memory (lane Q's exact stock / winner scorer commands and inputs, card 13): compute buffer MiB, stock /
+  winner: 8K 533.52 / 533.52; 16K 541.52 / 541.52; 32K 557.52 / 557.52; "matches expectation" in all six.
+- Gate: graph check now also reports and bounds the bytes of graph inputs and their views read by nodes (what a
+  non-CPU scheduler copies); with a GPU rf_reserve it bounds every RidgeFill graph's own backend size against stock's
+  reserve. Self-test: bc3a6af85's unchained blocks (any-order +1152 MiB) and 848c757ad's per-block mask views (input
+  copies 2305 -> 9217 MiB at 8K -> 32K for the 27B probe shape; Vulkan measured 2727 at 9K) flagged, the fixed
+  structure (8.6 -> 32.6 MiB) not.
+- CPU gates on the final tree: memory gate 223/223 (tiny, 27B CPU reserve, self-test, fail-at-load); probe / rows /
+  final state / logits / vtail byte-identical to 22ef3df4a in 8/8 CPU configurations; G1 S1/vtail 49/49; canonical G1
+  27/27 x2; G0 72/0; G0 server 8/8; Tier-3 native 12/12 + 3/3; check_score 24/24; check_s1_score 24 + 12;
+  check_chat_score PASS; select_chat 42/42; select_rows 23/23; dispatch 44/44; a0 27/27; rollback 11/11; s1_tools
+  115/115; s1_http 72/72; s1_reporting 91/16; HTTP sweep 3/3.

@@ -1,0 +1,39 @@
+== ctx 9216
+ridgefill_reserve_graphs: RidgeFill graph full bulk:    Vulkan0 compute buffer   161.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph full bulk corrected:    Vulkan0 compute buffer   161.03 MiB
+ridgefill_reserve_graphs: RidgeFill graph full masked:    Vulkan0 compute buffer   183.03 MiB
+ridgefill_reserve_graphs: RidgeFill graph lower:    Vulkan0 compute buffer   161.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph late bulk:    Vulkan0 compute buffer    80.25 MiB
+ridgefill_reserve_graphs: RidgeFill graph late bulk corrected:    Vulkan0 compute buffer    80.26 MiB
+ridgefill_reserve_graphs: RidgeFill graph late masked:    Vulkan0 compute buffer   165.14 MiB
+ridgefill_reserve_graphs: RidgeFill graph late:    Vulkan0 compute buffer   495.00 MiB
+ridgefill_reserve_graphs: RidgeFill graph late vtail:    Vulkan0 compute buffer   495.01 MiB
+ridgefill_reserve_graphs: RidgeFill graph s1_fill bulk:    Vulkan0 compute buffer    36.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph s1_probe:    Vulkan0 compute buffer   165.05 MiB
+{"ctx":9216,"batch":2048,"ubatch":512,"fa":1,"stock_mib":{"Vulkan0":534.020000,"Vulkan_Host":49.040000},"ridgefill_mib":{"Vulkan0":534.020000,"Vulkan_Host":49.050000},"refused":false}
+== ctx 17408
+ridgefill_reserve_graphs: RidgeFill graph full bulk:    Vulkan0 compute buffer   169.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph full bulk corrected:    Vulkan0 compute buffer   169.03 MiB
+ridgefill_reserve_graphs: RidgeFill graph full masked:    Vulkan0 compute buffer   196.03 MiB
+ridgefill_reserve_graphs: RidgeFill graph lower:    Vulkan0 compute buffer   169.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph late bulk:    Vulkan0 compute buffer    80.25 MiB
+ridgefill_reserve_graphs: RidgeFill graph late bulk corrected:    Vulkan0 compute buffer    80.26 MiB
+ridgefill_reserve_graphs: RidgeFill graph late masked:    Vulkan0 compute buffer   176.14 MiB
+ridgefill_reserve_graphs: RidgeFill graph late:    Vulkan0 compute buffer   505.00 MiB
+ridgefill_reserve_graphs: RidgeFill graph late vtail:    Vulkan0 compute buffer   505.01 MiB
+ridgefill_reserve_graphs: RidgeFill graph s1_fill bulk:    Vulkan0 compute buffer    36.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph s1_probe:    Vulkan0 compute buffer   151.02 MiB
+{"ctx":17408,"batch":2048,"ubatch":512,"fa":1,"stock_mib":{"Vulkan0":542.020000,"Vulkan_Host":57.040000},"ridgefill_mib":{"Vulkan0":542.020000,"Vulkan_Host":57.050000},"refused":false}
+== ctx 33792
+ridgefill_reserve_graphs: RidgeFill graph full bulk:    Vulkan0 compute buffer   185.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph full bulk corrected:    Vulkan0 compute buffer   185.03 MiB
+ridgefill_reserve_graphs: RidgeFill graph full masked:    Vulkan0 compute buffer   207.03 MiB
+ridgefill_reserve_graphs: RidgeFill graph lower:    Vulkan0 compute buffer   185.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph late bulk:    Vulkan0 compute buffer    80.25 MiB
+ridgefill_reserve_graphs: RidgeFill graph late bulk corrected:    Vulkan0 compute buffer    80.26 MiB
+ridgefill_reserve_graphs: RidgeFill graph late masked:    Vulkan0 compute buffer   189.14 MiB
+ridgefill_reserve_graphs: RidgeFill graph late:    Vulkan0 compute buffer   505.00 MiB
+ridgefill_reserve_graphs: RidgeFill graph late vtail:    Vulkan0 compute buffer   505.00 MiB
+ridgefill_reserve_graphs: RidgeFill graph s1_fill bulk:    Vulkan0 compute buffer    36.02 MiB
+ridgefill_reserve_graphs: RidgeFill graph s1_probe:    Vulkan0 compute buffer   189.15 MiB
+{"ctx":33792,"batch":2048,"ubatch":512,"fa":1,"stock_mib":{"Vulkan0":558.020000,"Vulkan_Host":73.040000},"ridgefill_mib":{"Vulkan0":558.020000,"Vulkan_Host":73.050000},"refused":false}

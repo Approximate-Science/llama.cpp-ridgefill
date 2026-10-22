@@ -1,0 +1,24 @@
+stock rc=0
+sched_reserve:    Vulkan0 compute buffer size =   533.52 MiB
+sched_reserve:    Vulkan0 compute buffer size =   533.52 MiB
+~llama_context:    Vulkan0 compute buffer size is 533.5215 MiB, matches expectation of 533.5215 MiB
+winner rc=0
+ridgefill_reserve_graphs: RidgeFill graph s1_probe:    Vulkan0 compute buffer   164.55 MiB
+sched_reserve:    Vulkan0 compute buffer size =   533.52 MiB
+~llama_context:    Vulkan0 compute buffer size is 533.5215 MiB, matches expectation of 533.5215 MiB
+stock rc=0
+sched_reserve:    Vulkan0 compute buffer size =   541.52 MiB
+sched_reserve:    Vulkan0 compute buffer size =   541.52 MiB
+~llama_context:    Vulkan0 compute buffer size is 541.5215 MiB, matches expectation of 541.5215 MiB
+winner rc=0
+ridgefill_reserve_graphs: RidgeFill graph s1_probe:    Vulkan0 compute buffer   150.52 MiB
+sched_reserve:    Vulkan0 compute buffer size =   541.52 MiB
+~llama_context:    Vulkan0 compute buffer size is 541.5215 MiB, matches expectation of 541.5215 MiB
+stock rc=0
+sched_reserve:    Vulkan0 compute buffer size =   557.52 MiB
+sched_reserve:    Vulkan0 compute buffer size =   557.52 MiB
+~llama_context:    Vulkan0 compute buffer size is 557.5215 MiB, matches expectation of 557.5215 MiB
+winner rc=0
+ridgefill_reserve_graphs: RidgeFill graph s1_probe:    Vulkan0 compute buffer   188.65 MiB
+sched_reserve:    Vulkan0 compute buffer size =   557.52 MiB
+~llama_context:    Vulkan0 compute buffer size is 557.5215 MiB, matches expectation of 557.5215 MiB

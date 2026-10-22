@@ -17,7 +17,11 @@ compute buffer X MiB") exceeds --bound-mib or grows by more than the allowance;
 graph check (LLAMA_RIDGEFILL_GRAPH_CHECK, logged at reserve for the stock pp graph and every RidgeFill graph): the
 peak of live tensors in any dependency order (what a reordering backend such as the Vulkan graph optimizer could keep
 alive) grows by more than the stock graph's own growth (flash attention off: stock's kq is n_kv x n_tokens x n_head)
-plus the allowance (bc3a6af85's S1 probe: its independent score blocks, 1.8 GiB at 32K on Qwen3.8-27B). The same on a
+plus the allowance (bc3a6af85's S1 probe: its independent score blocks), and the same for the bytes of graph inputs
+and their views that nodes read, each of which a non-CPU scheduler copies into the compute buffer (848c757ad: one
+probe-mask view per head and layer, 2.7 GiB at 9K on Vulkan, invisible on CPU). With a GPU build of rf_reserve
+(--reserve-binary, --reserve-gpu-layers 99) also the backend's own size of every RidgeFill graph: <= stock's reserve
++ --bound-mib, growing no faster than stock's + the allowance. The same on a
 real model, load only: --reserve-binary rf_reserve --reserve-model M --reserve-projector P (the real head count, no
 decode). Self-test of that rule: --graph-selftest test_graph_peaks (bc3a6af85's blocks flagged, chained ones not);
 a run fails or its report shows the mode did not run (nothing filled, no S1 window, no vtail rows).
@@ -42,7 +46,8 @@ MODES = {
 }
 RESERVE = re.compile(r"sched_reserve:\s+(\S+) compute buffer size =\s+([0-9.]+) MiB")
 QMASS = re.compile(r"RidgeFill question-mass graph: (\S+) compute buffer ([0-9.]+) MiB")
-GCHECK = re.compile(r"RidgeFill graph check ([^:]+): live tensors in graph order ([0-9.]+) MiB, in any dependency order ([0-9.]+) MiB")
+GCHECK = re.compile(r"RidgeFill graph check ([^:]+): live tensors in graph order ([0-9.]+) MiB, in any dependency order ([0-9.]+) MiB, input views ([0-9.]+) MiB")
+GSIZE = re.compile(r"RidgeFill graph ([^:]+):\s+(\S+) compute buffer\s+([0-9.]+) MiB")
 FINAL = re.compile(r"~llama_context:\s+(\S+) compute buffer size (?:is|of)\s+([0-9.]+) MiB, (matches|does not match) expectation of\s+([0-9.]+) MiB")
 
 
@@ -55,6 +60,7 @@ def graph_growth(record, prefix, g, lengths, limit):
         record(f"{prefix}-graph-check-reported", False, why="no 'RidgeFill graph check' lines (LLAMA_RIDGEFILL_GRAPH_CHECK)")
         return
     stock_growth = stock[lengths[-1]][1] - stock[lengths[0]][1]
+    stock_views = stock[lengths[-1]][2] - stock[lengths[0]][2]
     for name in sorted(names - {"stock"}):
         vals = {n: g[n].get(name) for n in lengths}
         ok = all(v is not None for v in vals.values())
@@ -62,6 +68,9 @@ def graph_growth(record, prefix, g, lengths, limit):
         record(f"{prefix}-graph-{name.replace(' ', '-')}-any-order-does-not-grow", ok and growth <= max(0.0, stock_growth) + limit,
                any_order_mib={n: v[1] for n, v in vals.items() if v}, in_order_mib={n: v[0] for n, v in vals.items() if v},
                growth_mib=growth, stock_growth_mib=stock_growth, limit_mib=limit)
+        views = vals[lengths[-1]][2] - vals[lengths[0]][2] if ok else None
+        record(f"{prefix}-graph-{name.replace(' ', '-')}-input-copies-do-not-grow", ok and views <= max(0.0, stock_views) + limit,
+               input_views_mib={n: v[2] for n, v in vals.items() if v}, growth_mib=views, stock_growth_mib=stock_views, limit_mib=limit)
 
 
 def main():
@@ -149,7 +158,7 @@ def main():
                        final_mib={b: v[0] for b, v in final.items()}, expected_mib={b: v[2] for b, v in final.items()},
                        reserve_mib=reserve)
                 table[(fa, n, mode)] = {b: v[0] for b, v in final.items()}
-                g = {m.group(1): (float(m.group(2)), float(m.group(3))) for m in GCHECK.finditer(log)}
+                g = {m.group(1): (float(m.group(2)), float(m.group(3)), float(m.group(4))) for m in GCHECK.finditer(log)}
                 if g and (fa, n) not in gtable:
                     gtable[(fa, n)] = g
                 if mode != "off" and MODES[mode][1] == "quality+qattn":
@@ -182,14 +191,19 @@ def main():
         graph_growth(record, f"fa{fa}-tiny", {n: gtable.get((fa, n), {}) for n in lengths}, lengths, allowance())
 
     if args.reserve_binary:
-        g, sizes = {}, {}
+        g, sizes, graph_sizes = {}, {}, {}
         for n in lengths:
             cmd = [str(args.reserve_binary), "--model", str(args.reserve_model), "--projector", str(args.reserve_projector),
                    "--ctx", str(n), "--batch", str(args.batch), "--ubatch", str(args.ubatch), "--fa", "1",
                    "--gpu-layers", str(args.reserve_gpu_layers)]
             r = subprocess.run(cmd, capture_output=True, text=True, env=env)
             (args.out / f"reserve-{n}.log").write_text(" ".join(cmd) + "\n" + r.stdout + r.stderr)
-            g[n] = {m.group(1): (float(m.group(2)), float(m.group(3))) for m in GCHECK.finditer(r.stdout + r.stderr)}
+            g[n] = {m.group(1): (float(m.group(2)), float(m.group(3)), float(m.group(4))) for m in GCHECK.finditer(r.stdout + r.stderr)}
+            sz = {}
+            for m in GSIZE.finditer(r.stdout + r.stderr):
+                if not m.group(1).startswith("check "):
+                    sz.setdefault(m.group(1), {})[m.group(2)] = float(m.group(3))
+            graph_sizes[n] = sz
             line = [l for l in r.stdout.splitlines() if l.startswith("{")]
             sizes[n] = json.loads(line[-1]) if r.returncode == 0 and line else None
             record(f"reserve-model-{n}-loaded", sizes[n] is not None and bool(g[n]), rc=r.returncode)
@@ -198,6 +212,21 @@ def main():
         excess = {n: max(sizes[n]["ridgefill_mib"][b] - sizes[n]["stock_mib"][b] for b in sizes[n]["stock_mib"]) for n in lengths} if ok else None
         record("model-reserve-excess-over-stock-bounded", ok and max(excess.values()) <= args.bound_mib
                and excess[lengths[-1]] - excess[lengths[0]] <= allowance(), excess_mib=excess, bound_mib=args.bound_mib)
+        # the backend's own size of every RidgeFill graph (on a GPU build: what the device allocates)
+        if ok:
+            names = set().union(*(set(graph_sizes[n]) for n in lengths))
+            for name in sorted(names):
+                per = {}
+                for n in lengths:
+                    stock = sizes[n]["stock_mib"]
+                    vals = graph_sizes[n].get(name, {})
+                    per[n] = max((vals.get(b, 0.0) - stock[b] for b in stock), default=None) if vals else None
+                good = all(v is not None for v in per.values())
+                stock_growth = max(sizes[lengths[-1]]["stock_mib"][b] - sizes[lengths[0]]["stock_mib"][b] for b in sizes[lengths[0]]["stock_mib"])
+                record(f"model-graph-{name.replace(' ', '-')}-backend-size-bounded",
+                       good and max(per.values()) <= args.bound_mib and per[lengths[-1]] - per[lengths[0]] <= allowance(),
+                       excess_over_stock_mib=per, sizes_mib={n: graph_sizes[n].get(name) for n in lengths},
+                       stock_growth_mib=stock_growth, bound_mib=args.bound_mib, limit_mib=allowance())
 
     if args.graph_selftest:
         r = subprocess.run([str(args.graph_selftest)], capture_output=True, text=True)

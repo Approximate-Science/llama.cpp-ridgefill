@@ -423,20 +423,23 @@ n_ubatch >= c_eff and a decode call of >= c_eff tail rows); otherwise llama_deco
   head: past 32K cells for the default 256-row window). Every matrix keeps its unsliced (m, n, k), so the output is
   the unsliced arithmetic (CPU: the post-probe state is byte-identical to 22ef3df4a); the mass comes from the same
   probabilities (out_prod with ones), its sum regrouped per head (<= 2.4e-07 relative on CPU). Each block's queries
-  are `q + 0 * (previous block's output and mass)` (llama_ridgefill_follow): a dependency chain, so a backend that
-  reorders independent nodes cannot keep several blocks alive (bc3a6af85's independent blocks: 1.8 GiB at 32K on
-  Vulkan, its graph optimizer hoisting them). The QK work is done once again (the bc3a6af85 path did it twice).
+  are `q + 0 * (previous block's output and mass)` (llama_ridgefill_follow), a dependency chain. The probe mask and
+  the ones vector are used whole, or viewed once per graph per query block (llm_graph_input_ridgefill_part), never
+  per head: a non-CPU scheduler copies every distinct view of a graph input into the compute buffer for the whole
+  split (848c757ad viewed the mask per head and layer: 288 copies, 2.7 GiB at 9K cells on Vulkan). The QK work is
+  done once (the bc3a6af85 path did it twice). Verified on Vulkan (Qwen3.8-27B, card 13): compute buffer equal to
+  stock at 8K / 16K / 32K; lane Q's 12-doc equality check byte-identical to 22ef3df4a (12/12 MATCH).
 - Tier-3 question mass (L-C's graph, own scheduler per prompt): keys gathered one KV head at a time, scores cut per KV
   head and beyond 2^20 scores into query ranges, the blocks chained as the probe's; while a head's block fits (the
   gates' prompts), the summation order is the old one, bit for bit. Its buffer is logged ("RidgeFill question-mass graph: <backend> compute buffer X MiB").
   It is allocated per prompt, not in the context's reserve: bounded (about 10 MiB on the tiny model at 32K; per-head
   key gather n_kv x head_dim x 4 B plus one 4 MiB block and its copy), but a request can still fail there.
-- vtail scales the cached V in place (F16 / F32; other types in bounded runs of cells); the masked fill gathers its
-  KQ-mask rows once per graph.
+- vtail scales the cached V by 22ef3df4a's cast / mul / cpy, in bounded runs of cells (an in-place F16 mul rounds
+  differently on Vulkan: it moved the winner logprobs); the masked fill gathers its KQ-mask rows once per graph.
 
 ### Requirements and checks (engine)
 | Requirement | Check | Result |
 |---|---|---|
 | Compute buffer with any RidgeFill mode <= stock + 512 MiB at the same ctx / -b / -ub, with no term growing as n_kv x n_tokens x n_head; the load-time reserve covers every RidgeFill graph (no "does not match expectation"); too little memory fails at load, by name. Failure mode: correctness / speed gates pass while the S1 probe's buffer grows with prompt length and is re-allocated mid-request (Qwen3.8-27B Vulkan 9.4 GiB at 32K). | `tests/ridgefill/check_compute_buffer.py` (tiny qwen35, stock + 6 modes x 8K/16K/32K x FA on/off at ctx = length, RLIMIT_AS fail-at-load control; negative control: fails on 22ef3df4a) | PASS on CPU; full-model GPU check of bc3a6af85 FAILED at 32K (below) |
-| The same bound under any backend node order. Failure mode: the graph has independent large blocks and a reordering backend (Vulkan's graph optimizer) keeps them all alive, which a CPU run never shows (bc3a6af85: s1_probe 591 / 1009 / 1793 MiB at 8K / 16K / 32K on Vulkan). | the same gate's graph check (LLAMA_RIDGEFILL_GRAPH_CHECK: every RidgeFill graph's live-tensor peak in any dependency order may not grow faster than stock's + 16 MiB + 8 B x ubatch per cell), on the tiny model and on Qwen3.8-27B load-only (`rf27-gates/rf_reserve.cpp`); `tests/ridgefill/test_graph_peaks.cpp` (bc3a6af85's blocks flagged: +1152 MiB from 8K to 32K at the 27B shape; chained blocks not) | PASS on CPU (179/179); GPU check pending |
-| S1 rows identical to 22ef3df4a. Failure mode: a cheaper attention path (flash) for the probe output changes the window rows' states and near-tie masses (bc3a6af85 on the 27B: 0.1-0.6 % of exact rows swapped). | post-probe state, rows, final state, logits byte-compared with a 22ef3df4a build (split 3 and 4, two prompts, F32 / F16 KV); long-prompt rows / logprobs vs the 22ef3df4a scorer | PASS on CPU (byte-identical; S1 mass <= 4.6e-07, reduction regrouping only); GPU check pending |
+| The same bound on the GPU backend. Failure modes a CPU run never shows: a backend that reorders independent nodes keeps large blocks alive together; every distinct view of a graph input is copied into the compute buffer for the whole split (bc3a6af85: s1_probe 591 / 1009 / 1793 MiB at 8K / 16K / 32K on Vulkan; 848c757ad: 2583 MiB at 8K and a 4.9 GiB reserve at 16K, 288 copies of the probe mask). | the same gate with a Vulkan `rf27-gates/rf_reserve.cpp` on Qwen3.8-27B (--reserve-gpu-layers 99): every RidgeFill graph's own Vulkan size <= stock's reserve + 512 MiB, growing no faster than stock's + 16 MiB + 8 B x ubatch per cell; graph check (LLAMA_RIDGEFILL_GRAPH_CHECK): any-order live-tensor peak and input-copy bytes may not grow faster than stock's + the allowance; `tests/ridgefill/test_graph_peaks.cpp` (bc3a6af85's blocks and 848c757ad's per-block mask views flagged, the fix not) | PASS on CPU (223/223) and on Vulkan (below) |
+| S1 rows and outputs identical to 22ef3df4a. Failure modes: a cheaper attention path (flash) for the probe output moves near-tie masses (bc3a6af85 on the 27B: 0.1-0.6 % of exact rows swapped); a reordered elementwise path (an in-place F16 mul for vtail) moves the winner logprobs with the rows unchanged. | post-probe state, rows, final state, logits byte-compared with a 22ef3df4a build on CPU (split 3 and 4, two prompts, F32 / F16 KV); lane Q's 12-doc equality check (exact and winner logprobs, logsumexp, target positions, exact rows; 8 docs at 16K, 4 at 32K) on Vulkan against the frozen 22ef3df4a references | PASS: CPU byte-identical (S1 mass <= 2.4e-07, regrouping only); Vulkan 12/12 MATCH |
