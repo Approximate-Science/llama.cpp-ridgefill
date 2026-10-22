@@ -1,0 +1,1 @@
+{"result": "PASS", "oracle_checks": 24, "zero_share_checks": 18, "worst_logprob_lse": 2.1144238449011254e-07, "worst_mass_relative": 2.687013974133729e-07, "defaults": "byte-identical to pre-chat binary", "scope": "tiny CPU correctness; no chat quality verdict"}

@@ -1,0 +1,1600 @@
+{
+  "summary": {
+    "gate": "compute-buffer",
+    "checks": 141,
+    "passed": 83,
+    "load_check": null,
+    "result": "FAIL"
+  },
+  "checks": [
+    {
+      "check": "faon-8192-off-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-8192-off-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-8192-speed-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-8192-speed-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-8192-quality-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-8192-quality-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-8192-qattn-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-8192-qattn-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-8192-qattn-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-8192-s1-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-8192-s1-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 68.2901
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-8192-s1-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-8192-vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-8192-vtail-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-8192-vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-8192-s1+vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-8192-s1+vtail-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 68.2901
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-8192-s1+vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-16384-off-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-16384-off-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-16384-speed-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-16384-speed-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-16384-quality-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-16384-quality-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 34.3135
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-16384-qattn-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-16384-qattn-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 46.144
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-16384-qattn-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-16384-s1-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-16384-s1-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 136.3213
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-16384-s1-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-16384-vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-16384-vtail-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 46.5205
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-16384-vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-16384-s1+vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-16384-s1+vtail-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 136.3213
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-16384-s1+vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-32768-off-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-32768-off-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-32768-speed-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-32768-speed-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 33.5879
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-32768-quality-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-32768-quality-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 77.8758
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-32768-qattn-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-32768-qattn-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 92.3945
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-32768-qattn-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-32768-s1-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-32768-s1-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 272.3838
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-32768-s1-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-32768-vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-32768-vtail-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 92.8955
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-32768-vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-32768-s1+vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faon-32768-s1+vtail-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 272.3838
+      },
+      "expected_mib": {
+        "CPU": 33.5879
+      },
+      "reserve_mib": {
+        "CPU": 33.59
+      }
+    },
+    {
+      "check": "faon-32768-s1+vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faon-speed-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 0.0
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faon-speed-excess-does-not-grow-with-length",
+      "result": "PASS",
+      "growth_mib": 0.0,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faon-quality-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.7256,
+        "32768": 44.2879
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faon-quality-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 44.2879,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faon-qattn-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 12.5561,
+        "32768": 58.806599999999996
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faon-qattn-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 58.806599999999996,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faon-s1-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 34.7022,
+        "16384": 102.73340000000002,
+        "32768": 238.79590000000002
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faon-s1-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 204.0937,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faon-vtail-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 12.9326,
+        "32768": 59.3076
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faon-vtail-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 59.3076,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faon-s1+vtail-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 34.7022,
+        "16384": 102.73340000000002,
+        "32768": 238.79590000000002
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faon-s1+vtail-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 204.0937,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faon-qattn-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "faon-s1-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "faon-vtail-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "faon-s1+vtail-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "faoff-8192-off-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-8192-off-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-8192-speed-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-8192-speed-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-8192-quality-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-8192-quality-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-8192-qattn-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-8192-qattn-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-8192-qattn-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-8192-s1-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-8192-s1-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-8192-s1-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-8192-vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-8192-vtail-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-8192-vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-8192-s1+vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-8192-s1+vtail-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-8192-s1+vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-16384-off-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-16384-off-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-16384-speed-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-16384-speed-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-16384-quality-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-16384-quality-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-16384-qattn-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-16384-qattn-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-16384-qattn-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-16384-s1-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-16384-s1-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-16384-s1-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-16384-vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-16384-vtail-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-16384-vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-16384-s1+vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-16384-s1+vtail-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-16384-s1+vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-32768-off-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-32768-off-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-32768-speed-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-32768-speed-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-32768-quality-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-32768-quality-reserve-covers-graph",
+      "result": "PASS",
+      "final_mib": {
+        "CPU": 321.0215
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-32768-qattn-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-32768-qattn-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 365.3979
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-32768-qattn-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-32768-s1-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-32768-s1-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 384.1485
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-32768-s1-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-32768-vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-32768-vtail-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 367.898
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-32768-vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-32768-s1+vtail-ran",
+      "result": "PASS",
+      "rc": 0,
+      "why": null
+    },
+    {
+      "check": "faoff-32768-s1+vtail-reserve-covers-graph",
+      "result": "FAIL",
+      "final_mib": {
+        "CPU": 384.1485
+      },
+      "expected_mib": {
+        "CPU": 321.0215
+      },
+      "reserve_mib": {
+        "CPU": 321.02
+      }
+    },
+    {
+      "check": "faoff-32768-s1+vtail-question-mass-buffer-reported",
+      "result": "FAIL",
+      "mib": null
+    },
+    {
+      "check": "faoff-speed-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 0.0
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faoff-speed-excess-does-not-grow-with-length",
+      "result": "PASS",
+      "growth_mib": 0.0,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faoff-quality-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 0.0
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faoff-quality-excess-does-not-grow-with-length",
+      "result": "PASS",
+      "growth_mib": 0.0,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faoff-qattn-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 44.37639999999999
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faoff-qattn-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 44.37639999999999,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faoff-s1-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 63.12700000000001
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faoff-s1-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 63.12700000000001,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faoff-vtail-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 46.87650000000002
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faoff-vtail-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 46.87650000000002,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faoff-s1+vtail-excess-over-stock-bounded",
+      "result": "PASS",
+      "excess_mib": {
+        "8192": 0.0,
+        "16384": 0.0,
+        "32768": 63.12700000000001
+      },
+      "bound_mib": 512.0
+    },
+    {
+      "check": "faoff-s1+vtail-excess-does-not-grow-with-length",
+      "result": "FAIL",
+      "growth_mib": 63.12700000000001,
+      "limit_mib": 4.0
+    },
+    {
+      "check": "faoff-qattn-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "faoff-s1-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "faoff-vtail-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "faoff-s1+vtail-question-mass-buffer-bounded",
+      "result": "FAIL",
+      "mib": {
+        "8192": null,
+        "16384": null,
+        "32768": null
+      },
+      "bound_mib": 512.0,
+      "growth_limit_mib": 4.0
+    },
+    {
+      "check": "fail-at-load-ridgefill-refused-by-name",
+      "result": "FAIL",
+      "stock_min_kib": 526336,
+      "limit_kib": 542720,
+      "stock_rc": 0,
+      "ridgefill_rc": 0,
+      "named": false,
+      "decoded_before_refusal": true,
+      "positive_control_rc": 0
+    }
+  ],
+  "buffers": [
+    {
+      "fa": "off",
+      "n": 8192,
+      "mode": "off",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 8192,
+      "mode": "qattn",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 8192,
+      "mode": "quality",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 8192,
+      "mode": "s1",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 8192,
+      "mode": "s1+vtail",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 8192,
+      "mode": "speed",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 8192,
+      "mode": "vtail",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "off",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "qattn",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "quality",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "s1",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "s1+vtail",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "speed",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 16384,
+      "mode": "vtail",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 32768,
+      "mode": "off",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 32768,
+      "mode": "qattn",
+      "mib": {
+        "CPU": 365.3979
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 32768,
+      "mode": "quality",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 32768,
+      "mode": "s1",
+      "mib": {
+        "CPU": 384.1485
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 32768,
+      "mode": "s1+vtail",
+      "mib": {
+        "CPU": 384.1485
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 32768,
+      "mode": "speed",
+      "mib": {
+        "CPU": 321.0215
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "off",
+      "n": 32768,
+      "mode": "vtail",
+      "mib": {
+        "CPU": 367.898
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 8192,
+      "mode": "off",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 8192,
+      "mode": "qattn",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 8192,
+      "mode": "quality",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 8192,
+      "mode": "s1",
+      "mib": {
+        "CPU": 68.2901
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 8192,
+      "mode": "s1+vtail",
+      "mib": {
+        "CPU": 68.2901
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 8192,
+      "mode": "speed",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 8192,
+      "mode": "vtail",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 16384,
+      "mode": "off",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 16384,
+      "mode": "qattn",
+      "mib": {
+        "CPU": 46.144
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 16384,
+      "mode": "quality",
+      "mib": {
+        "CPU": 34.3135
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 16384,
+      "mode": "s1",
+      "mib": {
+        "CPU": 136.3213
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 16384,
+      "mode": "s1+vtail",
+      "mib": {
+        "CPU": 136.3213
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 16384,
+      "mode": "speed",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 16384,
+      "mode": "vtail",
+      "mib": {
+        "CPU": 46.5205
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 32768,
+      "mode": "off",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 32768,
+      "mode": "qattn",
+      "mib": {
+        "CPU": 92.3945
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 32768,
+      "mode": "quality",
+      "mib": {
+        "CPU": 77.8758
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 32768,
+      "mode": "s1",
+      "mib": {
+        "CPU": 272.3838
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 32768,
+      "mode": "s1+vtail",
+      "mib": {
+        "CPU": 272.3838
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 32768,
+      "mode": "speed",
+      "mib": {
+        "CPU": 33.5879
+      },
+      "question_mass_mib": null
+    },
+    {
+      "fa": "on",
+      "n": 32768,
+      "mode": "vtail",
+      "mib": {
+        "CPU": 92.8955
+      },
+      "question_mass_mib": null
+    }
+  ]
+}

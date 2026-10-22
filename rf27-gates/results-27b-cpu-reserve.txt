@@ -1,0 +1,39 @@
+RidgeFill graph full bulk:        CPU compute buffer   160.03 MiB
+RidgeFill graph full bulk corrected:        CPU compute buffer   160.03 MiB
+RidgeFill graph full masked:        CPU compute buffer   170.15 MiB
+RidgeFill graph lower:        CPU compute buffer   160.03 MiB
+RidgeFill graph late bulk:        CPU compute buffer    80.25 MiB
+RidgeFill graph late bulk corrected:        CPU compute buffer    80.26 MiB
+RidgeFill graph late masked:        CPU compute buffer   140.15 MiB
+RidgeFill graph late:        CPU compute buffer   495.00 MiB
+RidgeFill graph late vtail:        CPU compute buffer   515.08 MiB
+RidgeFill graph s1_fill bulk:        CPU compute buffer    24.02 MiB
+RidgeFill graph s1_probe:        CPU compute buffer   140.38 MiB
+RidgeFill: reserved 11 RidgeFill graphs
+{"ctx":8192,"batch":2048,"ubatch":512,"fa":1,"stock_mib":{"CPU":543.030000},"ridgefill_mib":{"CPU":543.030000},"refused":false}
+RidgeFill graph full bulk:        CPU compute buffer   168.03 MiB
+RidgeFill graph full bulk corrected:        CPU compute buffer   168.03 MiB
+RidgeFill graph full masked:        CPU compute buffer   178.15 MiB
+RidgeFill graph lower:        CPU compute buffer   168.03 MiB
+RidgeFill graph late bulk:        CPU compute buffer    80.25 MiB
+RidgeFill graph late bulk corrected:        CPU compute buffer    80.26 MiB
+RidgeFill graph late masked:        CPU compute buffer   148.15 MiB
+RidgeFill graph late:        CPU compute buffer   495.00 MiB
+RidgeFill graph late vtail:        CPU compute buffer   513.14 MiB
+RidgeFill graph s1_fill bulk:        CPU compute buffer    24.02 MiB
+RidgeFill graph s1_probe:        CPU compute buffer   148.57 MiB
+RidgeFill: reserved 11 RidgeFill graphs
+{"ctx":16384,"batch":2048,"ubatch":512,"fa":1,"stock_mib":{"CPU":561.030000},"ridgefill_mib":{"CPU":561.030000},"refused":false}
+RidgeFill graph full bulk:        CPU compute buffer   184.03 MiB
+RidgeFill graph full bulk corrected:        CPU compute buffer   184.03 MiB
+RidgeFill graph full masked:        CPU compute buffer   194.15 MiB
+RidgeFill graph lower:        CPU compute buffer   184.03 MiB
+RidgeFill graph late bulk:        CPU compute buffer    80.25 MiB
+RidgeFill graph late bulk corrected:        CPU compute buffer    80.26 MiB
+RidgeFill graph late masked:        CPU compute buffer   164.15 MiB
+RidgeFill graph late:        CPU compute buffer   495.00 MiB
+RidgeFill graph late vtail:        CPU compute buffer   539.27 MiB
+RidgeFill graph s1_fill bulk:        CPU compute buffer    24.02 MiB
+RidgeFill graph s1_probe:        CPU compute buffer   165.32 MiB
+RidgeFill: reserved 11 RidgeFill graphs
+{"ctx":32768,"batch":2048,"ubatch":512,"fa":1,"stock_mib":{"CPU":577.030000},"ridgefill_mib":{"CPU":577.030000},"refused":false}

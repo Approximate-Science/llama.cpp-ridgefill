@@ -450,3 +450,44 @@ Second instrument, written from L-B's claims (NOTES-tools.md G5), not from its s
 - On the merged tree (CPU, -j4 build clean): check_s1_score PASS 24 + 12 native (worst logprob 1.76e-07, mass
   1.36e-07); check_s1_tools 115/115 (architecture controls 3/3); check_s1_http 72/72; check_s1_reporting 91 checks /
   16 configs, worst relative error 0. Full gate set not rerun (only this test file changed since d5916c0cf's run).
+
+## 2026-10-21 rf27-s1-mem (from 22ef3df4a): bounded RidgeFill compute buffers, reserved at load (owner-approved fix)
+- Problem (coordinator's Vulkan measurement, Qwen3.8-27B Q4_K_XL, -b 2048 -ub 512, F16 KV, FA on): "Vulkan0 compute
+  buffer size of 2379 / 4694 / 9358 MiB, does not match expectation of 161 / 169 / 185 MiB" at 8K / 16K / 32K. The S1
+  probe materialised kq, probs and a transposed copy as [n_kv, n_tokens, n_head] F32 per late attention layer, and no
+  RidgeFill graph was in the load-time reserve, so the buffer was re-allocated inside a request.
+- Reproduced on CPU, tiny qwen35, ctx 32768 (tests/ridgefill/check_compute_buffer.py on a 22ef3df4a build; MiB,
+  FA on): stock 33.6 at every length; s1 68.3 / 136.3 / 272.4; quality 33.6 / 34.3 / 77.9; qattn 33.6 / 46.1 / 92.4;
+  vtail 33.6 / 46.5 / 92.9; FA off: stock 321.0, s1 321.0 / 321.0 / 384.1. "does not match expectation" in 16 of 42
+  runs. The masked fill's mask-row gather and vtail's F32 copy of V were also outside the reserve.
+- Fix: S1 probe attention output through the stock build_attn (FA when enabled) over the probe's own KQ mask (stock
+  type / shape, causal, unrun tail cells hidden); its mass in blocks of <= 2^24 scores (one KV head's query heads or
+  fewer x a query range), reduced with out_prod(probs, ones), expanded per layer so blocks free in order. Tier-3
+  question mass (L-C's file): keys gathered per KV head, blocks of <= 2^20 scores, the old reduction (sum_rows of the
+  transposed block); bit-identical while a head's block fits, its own buffer logged. vtail: ggml_mul_inplace on the
+  cached V (F16/F32), bounded cell runs otherwise. Masked fill: KQ-mask rows gathered once per graph. Reserve: every
+  RidgeFill graph variant at sched_reserve (11 for qwen35), from llama_set_ridgefill (now int32_t, < 0 = refused by
+  name, projector detached, stock reserve restored); node budget + llama_ridgefill_extra_nodes. Callers check the
+  return: common (L-B), llama-bench (L-B), the scorer (L-C), tests/ridgefill/rf_dump.cpp (L-B), rf_dump_rs.
+- After (same gate, CPU tiny, ctx 32768): every RidgeFill mode 96.7 MiB at 8K / 16K / 32K, FA on (stock 33.6; the
+  constant +63 is the 64 MiB mass block budget); FA off 384.8 (stock 321.0); no expectation warning in any of 42 runs
+  per FA setting; question-mass graph 9.0 / 10.1 / 10.5 MiB (before the per-head blocks: 9.0 / 18.1 / 36.1). Gate
+  141/141; the same gate on the 22ef3df4a build: 83/141 (negative control).
+- Fail at load (RLIMIT_AS, Linux): stock runs at 515 MiB of address space, with 16 MiB more the RidgeFill mode refuses
+  at load by name (rc 1, no decode), with 256 MiB more it runs.
+- Qwen3.8-27B on CPU, load only (rf27-gates/rf_reserve.cpp, -b 2048 -ub 512 F16 FA): context reserve 543.0 / 561.0 /
+  577.0 MiB at 8K / 16K / 32K with and without the projector (the CPU stock buffer holds 512 x 248K logits); largest
+  RidgeFill variant: late + vtail 515 / 513 / 539, s1_probe 140 / 149 / 165 (its n_kv x n_tokens F16 mask is the
+  growth, as the stock mask's). Vulkan sizes differ: GPU check pending (commands in the report).
+- Same answers: all gates unchanged (below). S1 mass vs lane T 1.2e-07 -> 3.3e-07 (G1), 3.6e-07 (check_s1_score); rows
+  identical. Old vs new scorer on long tiny prompts (8K / 16K / 32K, FA+F16 and noFA+F32, qattn / s1 / s1+vtail):
+  exact rows and logprobs identical in all 18 runs; question mass bit-identical at 8K, max rel 8.5e-08 beyond; S1
+  mass max rel 9.7e-07 (results-mass-old-vs-new.json).
+- Cost note for L-B / L-C: the probe now computes QK twice per late attention layer (stock attention + mass); the
+  reported 2 x n_head x d x probe_kv_pairs undercounts by n_head x d x probe_kv_pairs. Not changed here (their
+  reporting gates check the current formula).
+- Gates on rf27-s1-mem (CPU, -j4, no warnings): compute-buffer 141/141; G1 S1/vtail 49/49; canonical G1 speed 27/27,
+  quality 27/27; G0 72/0; G0 server 8/8; L-C native Tier-3 G1 12/12 + 3/3; check_score 24/24; check_s1_score 24 + 12
+  native; check_chat_score PASS (defaults byte-identical to the pre-chat binary); g1_select_chat 42/42; select_rows
+  23/23; dispatch 44/44; quality a0 27/27; rollback 11/11; s1_tools 115/115 (architecture 3/3); s1_http 72/72;
+  s1_reporting 91 / 16 configs; L-C HTTP sweep 3/3.

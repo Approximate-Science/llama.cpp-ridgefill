@@ -409,3 +409,28 @@ n_ubatch >= c_eff and a decode call of >= c_eff tail rows); otherwise llama_deco
   two-sweep flow"); the first tail ubatch holding < c_eff rows.
 - The existing part refusals apply to the S1 parts (qwen35 only, n_rs_seq > 0, LoRA, control vectors, embeddings, one
   sweep sequence per batch).
+
+## Addition 2026-10-21 (L-A, branch rf27-s1-mem): bounded RidgeFill compute buffers, reserved at load
+- `llama_set_ridgefill` now returns `int32_t` (was `void`; existing calls still compile): it reserves the compute
+  buffers of every RidgeFill graph at once (single-pass bulk / corrected / masked fill, LOWER, LATE bulk / masked /
+  exact tail, the vtail tail ubatch, S1_FILL, S1_PROBE; worst case: all rows exact, the whole ubatch calibrating) and
+  returns < 0 when they do not fit, refused by name in the log ("RidgeFill refused: the compute buffers of the
+  RidgeFill graphs ... cannot be reserved"); the projector is then not attached and the stock reserve is restored.
+  Callers must check it (common, llama-bench, the scorer, the dump harnesses do). Detaching (nullptr) does not reserve.
+- S1_PROBE: the window rows' attention output is the stock path (`build_attn`, flash attention when enabled) over the
+  probe's own KQ mask (stock type and shape; causal, tail rows [p_end, s1_begin) hidden), which replaces the stock mask
+  in the probe graph. The mass is computed separately from the layer's queries and cached K in blocks of at most
+  2^24 scores (one key head's query heads or fewer x a range of queries), reduced with out_prod(probs, ones): no
+  n_kv x n_tokens x n_head tensor, no transposed copy.
+- Tier-3 question mass (L-C's graph, own scheduler per prompt): keys gathered one KV head at a time, scores cut per KV
+  head and beyond 2^20 scores into query ranges; while a head's block fits (the gates' prompts), the summation order
+  is the old one, bit for bit. Its buffer is logged ("RidgeFill question-mass graph: <backend> compute buffer X MiB").
+  It is allocated per prompt, not in the context's reserve: bounded (about 10 MiB on the tiny model at 32K; per-head
+  key gather n_kv x head_dim x 4 B plus one 4 MiB block and its copy), but a request can still fail there.
+- vtail scales the cached V in place (F16 / F32; other types in bounded runs of cells); the masked fill gathers its
+  KQ-mask rows once per graph.
+
+### Requirements and checks (engine)
+| Requirement | Check | Result |
+|---|---|---|
+| Compute buffer with any RidgeFill mode <= stock + 512 MiB at the same ctx / -b / -ub, with no term growing as n_kv x n_tokens x n_head; the load-time reserve covers every RidgeFill graph (no "does not match expectation"); too little memory fails at load, by name. Failure mode: correctness / speed gates pass while the S1 probe's buffer grows with prompt length and is re-allocated mid-request (Qwen3.8-27B Vulkan 9.4 GiB at 32K). | `tests/ridgefill/check_compute_buffer.py` (tiny qwen35, stock + 6 modes x 8K/16K/32K x FA on/off, RLIMIT_AS fail-at-load control; negative control: fails on 22ef3df4a) | PASS on CPU (141/141); full-model GPU check pending |
