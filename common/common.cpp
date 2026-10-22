@@ -1432,7 +1432,12 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             pimpl->context.reset();
             return;
         }
-        llama_set_ridgefill(lctx, pimpl->ridgefill.get());
+        if (llama_set_ridgefill(lctx, pimpl->ridgefill.get()) < 0) {
+            COM_ERR("%s", "RidgeFill: the compute buffers of the RidgeFill graphs do not fit on this device; "
+                    "reduce the context, batch or ubatch size, or run without --ridgefill\n");
+            pimpl->context.reset();
+            return;
+        }
         if (params.ridgefill_mode != "off" && llama_ridgefill_set_alpha(lctx, params.ridgefill_alpha) < 0) {
             COM_ERR("%s", "RidgeFill: --ridgefill-alpha was refused\n");
             pimpl->context.reset();

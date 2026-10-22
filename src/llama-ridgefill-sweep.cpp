@@ -6,6 +6,7 @@
 #include "llama-kv-cache.h"
 #include "llama-model.h"
 #include "llama-memory-hybrid.h"
+#include "llama-ridgefill.h"
 
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
@@ -50,7 +51,12 @@ std::vector<double> llama_ridgefill_sweep_question_mass(
             cpu = backend;
         }
     }
-    const size_t graph_size = 512 * layers.size();
+    // the window's Q per layer, then per KV head its key gather and score blocks
+    int64_t hb = 1, qb = 1;
+    llama_ridgefill_attn_mass_split(n_tokens, count, model.hparams.n_head(layers[0]) / model.hparams.n_head_kv(layers[0]),
+            LLAMA_RIDGEFILL_QMASS_BLOCK, hb, qb);
+    const int64_t blocks = (model.hparams.n_head(layers[0]) / model.hparams.n_head_kv(layers[0]) / hb) * ((int64_t(count) + qb - 1) / qb);
+    const size_t graph_size = layers.size() * size_t(512 + model.hparams.n_head_kv(layers[0]) * (16 + 12 * blocks));
     llm_graph_result result(graph_size);
     llama_adapter_loras loras;
     llm_graph_params params = {};
@@ -72,8 +78,9 @@ std::vector<double> llama_ridgefill_sweep_question_mass(
     for (size_t i = 0; i < layers.size(); ++i) {
         const int32_t il = layers[i];
         auto * input = windows[i];
-        auto * keys = build_ridgefill_sweep_keys(g.ctx0, cache, seq_id, il, model.hparams.n_embd_head_k(il), row_input);
-        auto * mass = build_ridgefill_question_mass(g, model.layers[il], input, positions, keys, window_end, il, rotation);
+        // the keys of one KV head at a time (F32, prompt order): the gather is never all heads x all prompt rows
+        auto * mass = build_ridgefill_question_mass_by_head(g, model.layers[il], input, positions, cache, seq_id, row_input,
+                window_end, il, rotation);
         ggml_set_output(mass);
         ggml_build_forward_expand(g.gf, mass);
         outputs.push_back(mass);
@@ -81,6 +88,13 @@ std::vector<double> llama_ridgefill_sweep_question_mass(
     ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(), nullptr, backends.size(), graph_size, false, true));
     if (!sched || !ggml_backend_sched_alloc_graph(sched.get(), g.gf)) {
         throw std::runtime_error("RidgeFill quality+qattn: question graph allocation failed");
+    }
+    for (auto * backend : backends) {
+        const size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+        if (size > 0) {
+            LLAMA_LOG_INFO("%s: RidgeFill question-mass graph: %s compute buffer %.4f MiB (%d keys)\n", __func__,
+                    ggml_backend_name(backend), size / (1024.0*1024.0), n_tokens);
+        }
     }
     ggml_backend_tensor_set(row_input, rows.data(), 0, rows.size() * sizeof(int32_t));
     std::vector<int32_t> pos(ggml_nelements(positions));
@@ -191,29 +205,21 @@ ggml_tensor * llama_ridgefill_sweep_mass(
         throw std::runtime_error("RidgeFill quality+qattn: mass requires FP32 queries and keys, grouped heads, and a valid causal window");
     }
 
-    const int64_t n_keys = k->ne[1];
     const int64_t n_queries = q->ne[1];
-    const int64_t n_kv_heads = k->ne[2];
-    const int64_t rep = q->ne[2] / n_kv_heads;
 
-    // Flatten each KV-head group's query rows before reducing, as window_mass does.
-    ggml_tensor * scores = ggml_mul_mat(ctx, k, q);
-    ggml_prec_set_acc(scores, GGML_PREC_F32);
-    scores = ggml_diag_mask_inf(ctx, scores, window_end - int32_t(n_queries));
-    ggml_tensor * probabilities = ggml_soft_max_ext(ctx, scores, nullptr, scale, 0.0f);
-    probabilities = ggml_reshape_3d(ctx, probabilities, n_keys, n_queries * rep, n_kv_heads);
-    probabilities = ggml_cont(ctx, ggml_permute(ctx, probabilities, 1, 0, 2, 3));
-    ggml_tensor * mass = ggml_sum_rows(ctx, probabilities);
-    return ggml_reshape_2d(ctx, mass, n_keys, n_kv_heads);
+    // Flatten each KV-head group's query rows before reducing, as window_mass does. The scores are cut per KV head
+    // (and, beyond LLAMA_RIDGEFILL_QMASS_BLOCK scores, into query ranges), so memory does not grow as keys x queries x
+    // heads; when a KV head's block fits, the sums are those of the unsliced softmax-then-sum_rows, bit for bit.
+    return llama_ridgefill_attn_mass(ctx, q, k, nullptr, window_end - int32_t(n_queries), scale, nullptr,
+            LLAMA_RIDGEFILL_QMASS_BLOCK);
 }
 
-ggml_tensor * build_ridgefill_question_mass(
-        llm_graph_context & g, const llama_layer & layer, ggml_tensor * window, ggml_tensor * positions,
-        ggml_tensor * keys, int32_t window_end, int32_t il, ggml_tensor * key_rotation) {
+// the window's queries of layer il: [head_dim, n_window, n_head], post-RoPE (and rotated as the cached keys)
+static ggml_tensor * ridgefill_question_queries(llm_graph_context & g, const llama_layer & layer, ggml_tensor * window,
+        ggml_tensor * positions, int32_t il, ggml_tensor * key_rotation) {
     if (!window || window->type != GGML_TYPE_F32 || window->ne[0] != g.n_embd || window->ne[1] != g.n_tokens ||
             window->ne[2] != 1 || window->ne[3] != 1 || !positions || positions->type != GGML_TYPE_I32 ||
-            ggml_nelements(positions) != 4*g.n_tokens || !keys || keys->ne[0] != g.n_embd_head_k ||
-            keys->ne[2] != g.n_head_kv || g.arch != LLM_ARCH_QWEN35 ||
+            ggml_nelements(positions) != 4*g.n_tokens || g.arch != LLM_ARCH_QWEN35 ||
             il < 0 || il >= g.n_layer || g.hparams.is_recr(il)) {
         throw std::runtime_error("RidgeFill quality+qattn: question graph requires a qwen35 attention layer and its window inputs");
     }
@@ -222,7 +228,6 @@ ggml_tensor * build_ridgefill_question_mass(
             g.n_embd_head_k % key_rotation->ne[0] != 0)) {
         throw std::runtime_error("RidgeFill quality+qattn: invalid key-cache rotation");
     }
-
     ggml_tensor * normalized = g.build_norm(window, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
     auto qkv = g.build_qkv(layer, normalized, 2*g.n_embd_head_k, g.n_head,
             g.n_embd_head_k, g.n_head_kv, g.n_embd_head_v, g.n_head_kv, il, false);
@@ -237,8 +242,39 @@ ggml_tensor * build_ridgefill_question_mass(
         q = llama_mul_mat_hadamard(g.ctx0, q, key_rotation);
     }
     q = ggml_permute(g.ctx0, q, 0, 2, 1, 3);
+    return q;
+}
+
+ggml_tensor * build_ridgefill_question_mass(
+        llm_graph_context & g, const llama_layer & layer, ggml_tensor * window, ggml_tensor * positions,
+        ggml_tensor * keys, int32_t window_end, int32_t il, ggml_tensor * key_rotation) {
+    if (!keys || keys->ne[0] != g.n_embd_head_k || keys->ne[2] != g.n_head_kv) {
+        throw std::runtime_error("RidgeFill quality+qattn: question graph requires a qwen35 attention layer and its window inputs");
+    }
+    ggml_tensor * q = ridgefill_question_queries(g, layer, window, positions, il, key_rotation);
     const float scale = g.hparams.f_attention_scale == 0.0f ? 1.0f / std::sqrt(float(g.n_embd_head_k)) : g.hparams.f_attention_scale;
     return llama_ridgefill_sweep_mass(g.ctx0, q, keys, window_end, scale);
+}
+
+static ggml_tensor * ridgefill_sweep_keys_head(ggml_context * ctx, const llama_kv_cache & cache, int32_t seq_id, int32_t il,
+        int32_t head_dim, ggml_tensor * rows, int64_t head);
+
+ggml_tensor * build_ridgefill_question_mass_by_head(
+        llm_graph_context & g, const llama_layer & layer, ggml_tensor * window, ggml_tensor * positions,
+        const llama_kv_cache & cache, int32_t seq_id, ggml_tensor * rows, int32_t window_end, int32_t il, ggml_tensor * key_rotation) {
+    // one KV head at a time: the head's keys gathered alone and its query heads' mass (llama_ridgefill_sweep_mass's
+    // reduction), concatenated as [n_tokens, n_kv_heads] (the inputs are checked as by build_ridgefill_question_mass)
+    ggml_tensor * q = ridgefill_question_queries(g, layer, window, positions, il, key_rotation);
+    const float scale = g.hparams.f_attention_scale == 0.0f ? 1.0f / std::sqrt(float(g.n_embd_head_k)) : g.hparams.f_attention_scale;
+    const int64_t rep = g.n_head / g.n_head_kv;
+    ggml_tensor * mass = nullptr;
+    for (int64_t h = 0; h < g.n_head_kv; ++h) {
+        ggml_tensor * k = ridgefill_sweep_keys_head(g.ctx0, cache, seq_id, il, g.n_embd_head_k, rows, h);
+        ggml_tensor * qh = ggml_view_3d(g.ctx0, q, q->ne[0], q->ne[1], rep, q->nb[1], q->nb[2], h*rep*q->nb[2]);
+        ggml_tensor * m = llama_ridgefill_sweep_mass(g.ctx0, qh, k, window_end, scale);
+        mass = mass ? ggml_concat(g.ctx0, mass, m, 1) : m;
+    }
+    return mass;
 }
 
 static void ridgefill_sweep_check_sequence(const llama_kv_cache & cache, int32_t seq_id) {
@@ -269,7 +305,8 @@ std::vector<int32_t> llama_ridgefill_sweep_key_rows(const llama_kv_cache & cache
     return rows;
 }
 
-ggml_tensor * build_ridgefill_sweep_keys(
+// the validated key storage of the sequence's stream at layer il: [n_embd_k_gqa, kv_size]
+static ggml_tensor * ridgefill_sweep_key_storage(
         ggml_context * ctx, const llama_kv_cache & cache, int32_t seq_id, int32_t il, int32_t head_dim, ggml_tensor * rows) {
     ridgefill_sweep_check_sequence(cache, seq_id);
     if (!ctx || !rows || rows->type != GGML_TYPE_I32 || rows->ne[0] <= 0 || rows->ne[0] > cache.get_size() ||
@@ -285,10 +322,26 @@ ggml_tensor * build_ridgefill_sweep_keys(
     if (storage->ne[0] % head_dim != 0 || storage->ne[1] != cache.get_size() || stream >= storage->ne[2] || storage->ne[3] != 1) {
         throw std::runtime_error("RidgeFill quality+qattn: unexpected attention key-cache layout");
     }
-    ggml_tensor * keys = ggml_view_2d(ctx, storage, storage->ne[0], storage->ne[1], storage->nb[1], stream*storage->nb[2]);
+    return ggml_view_2d(ctx, storage, storage->ne[0], storage->ne[1], storage->nb[1], stream*storage->nb[2]);
+}
+
+ggml_tensor * build_ridgefill_sweep_keys(
+        ggml_context * ctx, const llama_kv_cache & cache, int32_t seq_id, int32_t il, int32_t head_dim, ggml_tensor * rows) {
+    ggml_tensor * keys = ridgefill_sweep_key_storage(ctx, cache, seq_id, il, head_dim, rows);
     keys = ggml_get_rows(ctx, keys, rows);
-    keys = ggml_reshape_3d(ctx, keys, head_dim, storage->ne[0] / head_dim, rows->ne[0]);
+    keys = ggml_reshape_3d(ctx, keys, head_dim, keys->ne[0] / head_dim, rows->ne[0]);
     return ggml_permute(ctx, keys, 0, 2, 1, 3);
+}
+
+// the keys of one KV head, F32 [head_dim, n_rows, 1] in prompt order (the same values as that head of
+// build_ridgefill_sweep_keys)
+static ggml_tensor * ridgefill_sweep_keys_head(ggml_context * ctx, const llama_kv_cache & cache, int32_t seq_id, int32_t il,
+        int32_t head_dim, ggml_tensor * rows, int64_t head) {
+    ggml_tensor * all = ridgefill_sweep_key_storage(ctx, cache, seq_id, il, head_dim, rows);
+    // head `head` of every cell: a [head_dim, kv_size] view at its column offset (rows keep the cell stride)
+    ggml_tensor * keys = ggml_view_2d(ctx, all, head_dim, all->ne[1], all->nb[1], head*ggml_row_size(all->type, head_dim));
+    keys = ggml_get_rows(ctx, keys, rows);
+    return ggml_reshape_3d(ctx, keys, head_dim, rows->ne[0], 1);
 }
 
 std::vector<int32_t> llama_ridgefill_sweep_top_rows(const std::vector<double> & mass, int32_t prefix, double share) {

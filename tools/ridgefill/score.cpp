@@ -393,7 +393,7 @@ int main(int argc, char ** argv) {
                 (o.flash == "off" ? LLAMA_FLASH_ATTN_TYPE_DISABLED : LLAMA_FLASH_ATTN_TYPE_AUTO);
         std::unique_ptr<llama_context, decltype(&llama_free)> ctx(llama_init_from_model(model.get(), cp), llama_free);
         require(bool(ctx), "context creation failed");
-        llama_set_ridgefill(ctx.get(), rf.get());
+        require(llama_set_ridgefill(ctx.get(), rf.get()) == 0, "RidgeFill: the compute buffers of the RidgeFill graphs do not fit on this device");
         require(!rf || llama_ridgefill_set_alpha(ctx.get(), o.alpha) == 0, "alpha was refused");
         std::ofstream output(o.output);
         require(bool(output), "cannot open output " + o.output);

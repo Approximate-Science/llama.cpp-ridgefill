@@ -153,8 +153,10 @@ LLAMA_API struct llama_ridgefill * llama_ridgefill_init(const struct llama_model
 LLAMA_API void                     llama_ridgefill_free(struct llama_ridgefill * rf);
 LLAMA_API int32_t                  llama_ridgefill_split(const struct llama_ridgefill * rf);
 
-// attach a projector to the context (nullptr to detach), it must outlive the context
-LLAMA_API void llama_set_ridgefill(struct llama_context * ctx, const struct llama_ridgefill * rf);
+// attach a projector to the context (nullptr to detach), it must outlive the context. Reserves the compute buffers of
+// every RidgeFill graph (fill, sweep parts, S1 probe, vtail) at once, so a request never re-allocates them: returns 0,
+// or < 0 if they do not fit (refused by name in the log; the projector is then not attached)
+LLAMA_API int32_t llama_set_ridgefill(struct llama_context * ctx, const struct llama_ridgefill * rf);
 
 // from now on, the tokens of seq_id at positions < p_end are filled (p_end <= 0: none)
 // a filled token cannot be an output, llama_decode() returns -1 for such a batch

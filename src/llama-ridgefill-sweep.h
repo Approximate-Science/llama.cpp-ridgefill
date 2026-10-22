@@ -57,6 +57,20 @@ ggml_tensor * build_ridgefill_question_mass(
         int32_t il,
         ggml_tensor * key_rotation = nullptr);
 
+// build_ridgefill_question_mass with the keys of one KV head gathered at a time (rows: llama_ridgefill_sweep_key_rows);
+// the same values, the memory of one head's keys and score block
+ggml_tensor * build_ridgefill_question_mass_by_head(
+        llm_graph_context & g,
+        const llama_layer & layer,
+        ggml_tensor * window,
+        ggml_tensor * positions,
+        const llama_kv_cache & cache,
+        int32_t seq_id,
+        ggml_tensor * rows,
+        int32_t window_end,
+        int32_t il,
+        ggml_tensor * key_rotation = nullptr);
+
 std::vector<int32_t> llama_ridgefill_sweep_key_rows(const llama_kv_cache & cache, int32_t seq_id, int32_t n_tokens);
 
 // rows contains the indices returned by llama_ridgefill_sweep_key_rows for this sequence.

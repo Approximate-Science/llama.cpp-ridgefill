@@ -813,6 +813,11 @@ void llama_context::sched_reserve() {
         n_input_tensors_tg = this->n_input_tensors;
     }
 
+    // the RidgeFill graphs (a projector is attached): part of the worst case, so a request never re-allocates
+    if (ridgefill && !model.hparams.no_alloc) {
+        ridgefill_reserve_graphs(n_tokens, n_outputs_pp, mctx.get());
+    }
+
     // reserve again with pp graph to avoid ggml-alloc reallocations during inference
     {
         // TODO: the worst case graph is not always reached for `n_seqs > 1`
@@ -1507,9 +1512,121 @@ bool llama_context::set_adapter_cvec(
     return res;
 }
 
-void llama_context::set_ridgefill(const llama_ridgefill * rf) {
+int32_t llama_context::set_ridgefill(const llama_ridgefill * rf) {
     ridgefill = rf;
     ridgefill_alpha = rf ? rf->alpha_default : 0.0f;
+
+    if (!rf) {
+        sched_need_reserve = true; // detached: the stock graphs at the next decode
+        return 0;
+    }
+
+    // reserve now (not at the first decode): the RidgeFill graphs are part of the worst case, and too little memory
+    // must fail here, at load, rather than in a request
+    sched_need_reserve = true;
+    try {
+        sched_reserve();
+    } catch (const std::exception & err) {
+        LLAMA_LOG_ERROR("%s: RidgeFill refused: the compute buffers of the RidgeFill graphs (fill, sweep parts, S1 probe, "
+                "vtail) cannot be reserved: %s\n", __func__, err.what());
+        ridgefill = nullptr;
+        ridgefill_alpha = 0.0f;
+        sched_need_reserve = true;
+        try {
+            sched_reserve();
+        } catch (const std::exception & err2) {
+            LLAMA_LOG_ERROR("%s: the stock graphs cannot be reserved again either: %s\n", __func__, err2.what());
+        }
+        return -1;
+    }
+    return 0;
+}
+
+void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outputs, const llama_memory_context_i * mctx) {
+    // the RidgeFill graphs a decode may build, at their worst case (all rows exact, the whole ubatch calibrating vtail);
+    // graph shapes depend on counts, not on the rows or positions, so stand-in state is enough
+    std::vector<llm_graph_params_ridgefill> variants;
+    llm_graph_params_ridgefill base;
+    base.rf    = ridgefill;
+    base.p_end = ridgefill_p_end.data();
+
+    auto fill = [&](llm_graph_params_ridgefill v) {
+        v.fill = LLM_RIDGEFILL_FILL_BULK;
+        variants.push_back(v);
+        if (ridgefill->n_gdn_late > 0) {
+            auto c = v;
+            c.correct = true;
+            c.alpha   = 1.0f;
+            variants.push_back(c);
+        }
+        v.fill     = LLM_RIDGEFILL_FILL_MASKED;
+        v.n_rows   = n_tokens;
+        v.rows_seq = ridgefill_rows.data();
+        variants.push_back(v);
+    };
+    fill(base);
+
+    if (model.arch == LLM_ARCH_QWEN35 && dynamic_cast<llama_memory_hybrid *>(memory.get())) {
+        if (!ridgefill_reserve_buf) {
+            ggml_init_params ip = { ggml_tensor_overhead(), nullptr, true };
+            ridgefill_reserve_ctx.reset(ggml_init(ip));
+            ggml_tensor * h = ggml_new_tensor_2d(ridgefill_reserve_ctx.get(), GGML_TYPE_F32, model.hparams.n_embd, 1);
+            ridgefill_reserve_buf.reset(ggml_backend_alloc_ctx_tensors_from_buft(ridgefill_reserve_ctx.get(),
+                    model.select_buft(ridgefill->split)));
+            if (!ridgefill_reserve_buf) {
+                throw std::runtime_error("cannot allocate the stand-in sweep buffer");
+            }
+            ridgefill_reserve_state.h_buf = h;
+        }
+        auto part = base;
+        part.part_state = &ridgefill_reserve_state;
+
+        part.part = LLM_RIDGEFILL_PART_LOWER;
+        variants.push_back(part);
+
+        part.part = LLM_RIDGEFILL_PART_LATE;
+        fill(part);
+        variants.push_back(part); // the exact tail
+        auto vt = part;
+        vt.vtail_rows = n_tokens;
+        vt.rows_vtail = &ridgefill_rows[0];
+        variants.push_back(vt);
+
+        auto s1 = part;
+        s1.part         = LLM_RIDGEFILL_PART_S1_FILL;
+        s1.fill         = LLM_RIDGEFILL_FILL_BULK;
+        s1.s1_attn_only = true;
+        variants.push_back(s1);
+
+        s1 = part;
+        s1.part     = LLM_RIDGEFILL_PART_S1_PROBE;
+        s1.s1_probe = true;
+        variants.push_back(s1);
+    }
+
+    static const char * part_names[] = { "full", "lower", "late", "s1_fill", "s1_probe" };
+    std::vector<size_t> sizes(backend_ptrs.size());
+    for (const auto & v : variants) {
+        ridgefill_reserve_params = &v;
+        // this graph's own size per backend (logged), then the reserve (the buffers grow to the largest graph)
+        std::fill(sizes.begin(), sizes.end(), 0);
+        graph_reserve(n_tokens, 1, n_outputs, mctx, true, sizes.data());
+        for (size_t i = 0; i < backend_ptrs.size(); ++i) {
+            if (sizes[i] > 1) {
+                LLAMA_LOG_INFO("%s: RidgeFill graph %s%s%s%s: %10s compute buffer %8.2f MiB\n", __func__,
+                        part_names[std::min<int>(v.part, 4)], v.fill == LLM_RIDGEFILL_FILL_BULK ? " bulk" : v.fill == LLM_RIDGEFILL_FILL_MASKED ? " masked" : "",
+                        v.correct ? " corrected" : "", v.vtail_rows > 0 ? " vtail" : "",
+                        ggml_backend_buft_name(backend_buft[i]), sizes[i] / (1024.0*1024.0));
+            }
+        }
+        ggml_cgraph * gf = graph_reserve(n_tokens, 1, n_outputs, mctx);
+        ridgefill_reserve_params = nullptr;
+        if (!gf) {
+            throw std::runtime_error(format("failed to allocate the compute buffers of the RidgeFill graph (part %d, fill %d, "
+                    "s1 probe %d, vtail %d)", (int) v.part, v.fill, (int) v.s1_probe, v.vtail_rows));
+        }
+    }
+    LLAMA_LOG_INFO("%s: RidgeFill: reserved %zu RidgeFill graphs\n", __func__, variants.size());
 }
 
 void llama_context::ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end) {
@@ -1858,6 +1975,10 @@ bool llama_context::ridgefill_correct(const llama_ubatch & ubatch) const {
 }
 
 llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_ubatch & ubatch, uint32_t n_outputs) const {
+    if (ridgefill_reserve_params) {
+        return *ridgefill_reserve_params; // sched_reserve: a RidgeFill graph variant
+    }
+
     llm_graph_params_ridgefill res;
 
     if (!ridgefill || ubatch.n_tokens == 0 || ubatch.n_seq_id[0] != 1) {
@@ -3087,6 +3208,9 @@ uint32_t llama_context::graph_max_nodes(uint32_t n_tokens) const {
     if (cparams.training) {
         res *= 4;
     }
+
+    // the RidgeFill graphs (the S1 probe's mass blocks scale with n_ctx / the block size)
+    res += (uint32_t) llama_ridgefill_extra_nodes(ridgefill, model.hparams, cparams.n_ctx, n_tokens);
 
     return res;
 }

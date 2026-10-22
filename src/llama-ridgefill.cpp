@@ -556,8 +556,8 @@ bool        llama_ridgefill_digits_default(const llama_ridgefill * rf) { return 
 float       llama_ridgefill_qattn_default (const llama_ridgefill * rf) { return rf->qattn_default;  }
 const char * llama_ridgefill_desc         (const llama_ridgefill * rf) { return rf->desc.c_str();   }
 
-void llama_set_ridgefill(llama_context * ctx, const llama_ridgefill * rf) {
-    ctx->set_ridgefill(rf);
+int32_t llama_set_ridgefill(llama_context * ctx, const llama_ridgefill * rf) {
+    return ctx->set_ridgefill(rf);
 }
 
 void llama_ridgefill_seq_set(llama_context * ctx, llama_seq_id seq_id, llama_pos p_end) {
@@ -727,8 +727,11 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
         inp->seq = ubatch.seq_id[0][0];
         const int64_t n_kv = inp->kv->get_n_kv();
         if (p.s1_probe) {
-            inp->s1_bias = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_kv);
-            ggml_set_input(inp->s1_bias);
+            // the stock KQ mask's type and shape (build_attn_inp_kq_mask), one sequence / stream
+            inp->s1_mask = ggml_new_tensor_4d(ctx0, cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, n_kv, n_tokens, 1, 1);
+            ggml_set_input(inp->s1_mask);
+            inp->ones = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, (int64_t) n_tokens*n_head);
+            ggml_set_input(inp->ones);
         }
         if (p.vtail_rows > 0) {
             inp->vt_bulk = ggml_new_tensor_1d(ctx0, GGML_TYPE_F32, n_kv);
@@ -767,19 +770,33 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
         ggml_backend_tensor_set(win_rows, dst.data(), 0, dst.size()*sizeof(int32_t));
     }
 
-    if (s1_bias || vt_bulk) {
+    if (s1_mask || vt_bulk) {
         std::vector<llama_pos> cell_pos;
         kv->get_cell_pos(seq, cell_pos);
         const llama_pos p_end = params.p_end[seq];
-        if (s1_bias) {
-            // the probe sees the prefix [0, p_end) and the window rows; the tail rows in between were not run
-            std::vector<float> bias(cell_pos.size(), 0.0f);
-            for (size_t i = 0; i < cell_pos.size(); ++i) {
-                if (cell_pos[i] >= p_end && cell_pos[i] < ps->s1_begin) {
-                    bias[i] = -INFINITY;
+        if (s1_mask) {
+            // query i sees the sequence's cells at positions <= its own (causal, as the stock mask), except the tail
+            // rows [p_end, s1_begin) the probe does not run: the prefix [0, p_end) as filled and the window rows
+            const int64_t n_kv = s1_mask->ne[0];
+            GGML_ASSERT((int64_t) cell_pos.size() == n_kv && s1_mask->ne[1] == ubatch->n_tokens);
+            std::vector<float> row(n_kv);
+            std::vector<ggml_fp16_t> row16(s1_mask->type == GGML_TYPE_F16 ? n_kv : 0);
+            for (uint32_t t = 0; t < ubatch->n_tokens; ++t) {
+                const llama_pos pt = ubatch->pos[t];
+                for (int64_t c = 0; c < n_kv; ++c) {
+                    const llama_pos pc = cell_pos[c];
+                    const bool visible = pc >= 0 && pc <= pt && !(pc >= p_end && pc < ps->s1_begin);
+                    row[c] = visible ? 0.0f : -INFINITY;
+                }
+                if (s1_mask->type == GGML_TYPE_F16) {
+                    ggml_fp32_to_fp16_row(row.data(), row16.data(), n_kv);
+                    ggml_backend_tensor_set(s1_mask, row16.data(), t*s1_mask->nb[1], n_kv*sizeof(ggml_fp16_t));
+                } else {
+                    ggml_backend_tensor_set(s1_mask, row.data(), t*s1_mask->nb[1], n_kv*sizeof(float));
                 }
             }
-            ggml_backend_tensor_set(s1_bias, bias.data(), 0, bias.size()*sizeof(float));
+            const std::vector<float> one(ggml_nelements(ones), 1.0f);
+            ggml_backend_tensor_set(ones, one.data(), 0, one.size()*sizeof(float));
         }
         if (vt_bulk) {
             const auto & rows = params.rows_vtail ? *params.rows_vtail : std::vector<llama_pos>();
@@ -798,7 +815,7 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
 }
 
 bool llm_graph_input_ridgefill_part::can_reuse(const llm_graph_params & p) {
-    if (s1_bias || vt_bulk) {
+    if (s1_mask || vt_bulk) {
         return false; // sized by the ubatch's n_kv; rare graphs (the probe, the first tail ubatch)
     }
     return p.ridgefill == params && h_rows->ne[0] == (int64_t) p.ubatch.n_tokens;
@@ -946,6 +963,7 @@ ggml_tensor * build_ridgefill_late(
     ggml_tensor * rows  = masked ? rows_mask->rows : nullptr;
     ggml_tensor * h_R   = masked ? ggml_get_rows(ctx0, h_S, rows) : nullptr; // [n_embd, n_R]
     const int64_t n_R   = masked ? rows->ne[0] : 0;
+    ggml_tensor * mask_R = nullptr; // the KQ mask rows of R, gathered once for all late attention layers
 
     const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(hparams.n_embd_head_v())) : hparams.f_attention_scale;
 
@@ -1057,12 +1075,14 @@ ggml_tensor * build_ridgefill_late(
                 }
 
                 // the KQ mask rows of R (one KV stream: refused otherwise in llama_context)
-                ggml_tensor * kq_mask = inp_attn->get_kq_mask();
-                GGML_ASSERT(kq_mask->ne[2] == 1 && kq_mask->ne[3] == 1);
-                ggml_tensor * mask_R = ggml_get_rows(ctx0, kq_mask, rows); // F32 [n_kv, n_R]
-                mask_R = ggml_reshape_4d(ctx0, mask_R, mask_R->ne[0], n_R, 1, 1);
-                if (g.cparams.flash_attn) {
-                    mask_R = ggml_cast(ctx0, mask_R, GGML_TYPE_F16);
+                if (!mask_R) {
+                    ggml_tensor * kq_mask = inp_attn->get_kq_mask();
+                    GGML_ASSERT(kq_mask->ne[2] == 1 && kq_mask->ne[3] == 1);
+                    mask_R = ggml_get_rows(ctx0, kq_mask, rows); // F32 [n_kv, n_R]
+                    mask_R = ggml_reshape_4d(ctx0, mask_R, mask_R->ne[0], n_R, 1, 1);
+                    if (g.cparams.flash_attn) {
+                        mask_R = ggml_cast(ctx0, mask_R, GGML_TYPE_F16);
+                    }
                 }
 
                 ggml_tensor * k = mctx_cur->get_k(ctx0, il);
@@ -1206,108 +1226,107 @@ ggml_tensor * build_ridgefill_late(
     return h_R;
 }
 
-ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model & model, const llm_graph_input_ridgefill_part * inp,
-        ggml_tensor * cur, ggml_tensor * inp_pos, llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** mass) {
-    // qwen35's build_layer_attn for the window rows, with the attention written out (non-FA math) so the softmax
-    // weights are available: visible cells = the KQ mask (causal, sequence) plus s1_bias (tail rows not run)
-    const auto & hparams = g.hparams;
-    const auto & layer   = model.layers[il];
-    ggml_context * ctx0  = g.ctx0;
-    const int64_t n_tokens    = g.n_tokens;
-    const int64_t n_embd_head = hparams.n_embd_head_v();
+void llama_ridgefill_attn_mass_split(int64_t n_kv, int64_t n_q, int64_t rep, int64_t max_elems, int64_t & hb, int64_t & qb) {
+    GGML_ASSERT(n_kv > 0 && n_q > 0 && rep > 0 && max_elems > 0);
+    if (n_kv*rep*n_q <= max_elems) {
+        hb = rep; qb = n_q; // one block per key head: the unsliced summation order
+        return;
+    }
+    hb = 1;
+    for (int64_t d = rep; d >= 1; --d) {
+        if (rep % d == 0 && n_kv*d <= max_elems) { hb = d; break; }
+    }
+    qb = std::max<int64_t>(1, std::min<int64_t>(n_q, max_elems/(n_kv*hb)));
+}
 
-    int sections[4];
-    std::copy(std::begin(hparams.rope_sections), std::begin(hparams.rope_sections) + 4, sections);
+ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q, ggml_tensor * k, ggml_tensor * mask,
+        int32_t diag_past, float scale, ggml_tensor * ones, int64_t max_elems) {
+    const int64_t d = q->ne[0], n_q = q->ne[1], n_head = q->ne[2];
+    const int64_t n_kv = k->ne[1], n_head_kv = k->ne[2];
+    GGML_ASSERT(k->ne[0] == d && n_head % n_head_kv == 0 && q->ne[3] == 1 && k->ne[3] == 1);
+    GGML_ASSERT(!mask || (mask->ne[0] == n_kv && mask->ne[1] >= n_q));
+    const int64_t rep = n_head/n_head_kv;
+    int64_t hb, qb;
+    llama_ridgefill_attn_mass_split(n_kv, n_q, rep, max_elems, hb, qb);
+    GGML_ASSERT(!ones || ones->ne[1] >= hb*qb);
 
-    auto [Qfull, Kcur, Vcur] = g.build_qkv(layer, cur,
-            n_embd_head * 2, g.n_head,
-            n_embd_head,     g.n_head_kv,
-            n_embd_head,     g.n_head_kv,
-            il, false);
+    ggml_tensor * total = nullptr;   // ones: [n_kv]
+    ggml_tensor * per_head = nullptr; // sum_rows: [n_kv, n_head_kv]
+    for (int64_t g = 0; g < n_head_kv; ++g) {
+        ggml_tensor * kg = ggml_view_3d(ctx, k, d, n_kv, 1, k->nb[1], k->nb[2], g*k->nb[2]);
+        ggml_tensor * acc = nullptr;
+        for (int64_t h0 = g*rep; h0 < (g + 1)*rep; h0 += hb) {
+            for (int64_t q0 = 0; q0 < n_q; q0 += qb) {
+                const int64_t nq = std::min(qb, n_q - q0);
+                ggml_tensor * qv = ggml_view_3d(ctx, q, d, nq, hb, q->nb[1], q->nb[2], q0*q->nb[1] + h0*q->nb[2]);
+                ggml_tensor * kq = ggml_mul_mat(ctx, kg, qv); // [n_kv, nq, hb]
+                ggml_prec_set_acc(kq, GGML_PREC_F32);
+                ggml_tensor * mv = nullptr;
+                if (mask) {
+                    mv = ggml_view_2d(ctx, mask, n_kv, nq, mask->nb[1], q0*mask->nb[1]);
+                } else {
+                    kq = ggml_diag_mask_inf(ctx, kq, diag_past + int32_t(q0));
+                }
+                ggml_tensor * p = ggml_soft_max_ext(ctx, kq, mv, scale, 0.0f);
+                ggml_tensor * p2 = ggml_reshape_2d(ctx, p, n_kv, nq*hb);
+                ggml_tensor * m;
+                if (ones) {
+                    // sum over the block's (query, head) columns without a transposed copy
+                    m = ggml_out_prod(ctx, p2, ggml_view_2d(ctx, ones, 1, nq*hb, ones->nb[1], 0)); // [n_kv, 1]
+                    m = ggml_reshape_1d(ctx, m, n_kv);
+                } else {
+                    m = ggml_sum_rows(ctx, ggml_cont(ctx, ggml_transpose(ctx, p2))); // [1, n_kv]
+                    m = ggml_reshape_2d(ctx, m, n_kv, 1);
+                }
+                acc = acc ? ggml_add(ctx, acc, m) : m;
+            }
+        }
+        if (ones) {
+            total = total ? ggml_add(ctx, total, acc) : acc;
+        } else {
+            per_head = per_head ? ggml_concat(ctx, per_head, acc, 1) : acc;
+        }
+    }
+    return ones ? total : per_head;
+}
 
-    ggml_tensor * Qcur = ggml_view_3d(ctx0, Qfull, n_embd_head, g.n_head, n_tokens,
-            ggml_element_size(Qfull) * n_embd_head * 2,
-            ggml_element_size(Qfull) * n_embd_head * 2 * g.n_head, 0);
-    Qcur = g.build_norm(Qcur, layer.attn_q_norm, nullptr, LLM_NORM_RMS, il);
+int64_t llama_ridgefill_extra_nodes(const llama_ridgefill * rf, const llama_hparams & hparams, int64_t n_ctx, int64_t n_ubatch) {
+    if (!rf || n_ctx <= 0 || n_ubatch <= 0) {
+        return 0;
+    }
+    int64_t res = 0;
+    for (uint32_t il = std::max(rf->split, 0); il < hparams.n_layer(); ++il) {
+        if (hparams.is_recr(il) || hparams.n_head_kv(il) == 0) {
+            continue;
+        }
+        const int64_t n_head_kv = hparams.n_head_kv(il), rep = hparams.n_head(il)/n_head_kv;
+        int64_t hb, qb;
+        llama_ridgefill_attn_mass_split(n_ctx, n_ubatch, rep, LLAMA_RIDGEFILL_MASS_BLOCK, hb, qb);
+        const int64_t blocks = n_head_kv*(rep/hb)*((n_ubatch + qb - 1)/qb);
+        res += 12*blocks + 64; // per block: views, mul_mat, softmax, reduction, add; per layer: vtail, mask
+    }
+    return res + 256;
+}
 
-    Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, g.n_head_kv, n_tokens);
-    Kcur = g.build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
+void build_ridgefill_s1_mass(llm_graph_context & g, const llm_graph_input_ridgefill_part * inp, ggml_tensor * q,
+        llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** mass) {
+    ggml_context * ctx0 = g.ctx0;
+    const int64_t n_embd_head = g.hparams.n_embd_head_k(il);
+    const float kq_scale = g.hparams.f_attention_scale == 0.0f ? 1.0f/sqrtf(float(n_embd_head)) : g.hparams.f_attention_scale;
 
-    ggml_tensor * gate = ggml_view_3d(ctx0, Qfull, n_embd_head, g.n_head, n_tokens,
-            ggml_element_size(Qfull) * n_embd_head * 2,
-            ggml_element_size(Qfull) * n_embd_head * 2 * g.n_head,
-            ggml_element_size(Qfull) * n_embd_head);
-    gate = ggml_cont_2d(ctx0, gate, n_embd_head * g.n_head, n_tokens);
-
-    Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, g.n_head_kv, n_tokens);
-
-    Qcur = ggml_rope_multi(ctx0, Qcur, inp_pos, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
-            g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
-    Kcur = ggml_rope_multi(ctx0, Kcur, inp_pos, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
-            g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
-
-    const float kq_scale = hparams.f_attention_scale == 0.0f ? 1.0f / sqrtf(float(n_embd_head)) : hparams.f_attention_scale;
-
-    // as build_attn: the cache's rotations, then store the window's K/V (the later window ubatches read them)
+    // the cached K is rotated (build_attn rotates the stored K and its queries the same way)
     if (inp_attn->self_k_rot) {
-        Qcur = llama_mul_mat_hadamard(ctx0, Qcur, inp_attn->self_k_rot);
-        Kcur = llama_mul_mat_hadamard(ctx0, Kcur, inp_attn->self_k_rot);
+        q = llama_mul_mat_hadamard(ctx0, q, inp_attn->self_k_rot);
     }
-    if (inp_attn->self_v_rot) {
-        Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot);
-    }
-    ggml_build_forward_expand(g.gf, Qcur);
-    ggml_build_forward_expand(g.gf, Vcur);
-    ggml_build_forward_expand(g.gf, Kcur);
-
-    const auto * mctx_cur = inp_attn->mctx;
-    ggml_build_forward_expand(g.gf, mctx_cur->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
-    ggml_build_forward_expand(g.gf, mctx_cur->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
-
-    ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-    ggml_tensor * v = mctx_cur->get_v(ctx0, il);
+    ggml_tensor * k = inp_attn->mctx->get_k(ctx0, il); // [d, n_head_kv, n_kv, n_stream]; read after this layer's cpy_k
     GGML_ASSERT(k->ne[3] == 1 && "RidgeFill S1 probe: one KV stream");
 
-    const bool v_trans = v->nb[1] > v->nb[2];
-
-    ggml_tensor * q = ggml_permute(ctx0, Qcur, 0, 2, 1, 3);   // [d, n_tokens, n_head]
-    k = ggml_permute(ctx0, k, 0, 2, 1, 3);                    // [d, n_kv, n_head_kv]
-    v = ggml_permute(ctx0, v, 0, 2, 1, 3);
-
-    ggml_tensor * kq = ggml_mul_mat(ctx0, k, q);              // [n_kv, n_tokens, n_head]
-    ggml_prec_set_acc(kq, GGML_PREC_F32);
-
-    ggml_tensor * mask = inp_attn->get_kq_mask();
-    if (mask->type != GGML_TYPE_F32) {
-        mask = ggml_cast(ctx0, mask, GGML_TYPE_F32);
-    }
-    mask = ggml_add(ctx0, mask, inp->s1_bias);                // [n_kv, n_tokens, 1, 1] + [n_kv]
-
-    ggml_tensor * probs = ggml_soft_max_ext(ctx0, kq, mask, kq_scale, 0.0f);
-    g.cb(probs, "ridgefill_s1_probs", il);
-
-    if (!v_trans) {
-        v = ggml_cont(ctx0, ggml_transpose(ctx0, v));
-    }
-    ggml_tensor * kqv = ggml_mul_mat(ctx0, v, probs);         // [d, n_tokens, n_head]
-    ggml_tensor * out = ggml_permute(ctx0, kqv, 0, 2, 1, 3);
-    out = ggml_cont_2d(ctx0, out, out->ne[0]*out->ne[1], out->ne[2]*out->ne[3]);
-
-    if (inp_attn->self_v_rot) {
-        out = llama_mul_mat_hadamard(ctx0, out, inp_attn->self_v_rot);
-    }
-
-    out = ggml_mul(ctx0, out, ggml_sigmoid(ctx0, gate));
-    out = g.build_lora_mm(layer.wo, out, layer.wo_s);
-
-    // the layer's mass per cell: summed over the queries and heads
-    const int64_t n_kv = probs->ne[0];
-    ggml_tensor * p2 = ggml_reshape_2d(ctx0, probs, n_kv, probs->ne[1]*probs->ne[2]);
-    ggml_tensor * m  = ggml_sum_rows(ctx0, ggml_cont(ctx0, ggml_transpose(ctx0, p2)));   // [1, n_kv]
-    m = ggml_reshape_1d(ctx0, m, n_kv);
+    ggml_tensor * m = llama_ridgefill_attn_mass(ctx0, ggml_permute(ctx0, q, 0, 2, 1, 3), ggml_permute(ctx0, k, 0, 2, 1, 3),
+            inp->s1_mask, 0, kq_scale, inp->ones, LLAMA_RIDGEFILL_MASS_BLOCK);
+    g.cb(m, "ridgefill_s1_mass", il);
+    // now, so the layer's queries and score blocks are freed before the next layer
+    ggml_build_forward_expand(g.gf, m);
     *mass = *mass ? ggml_add(ctx0, *mass, m) : m;
-
-    return out;
 }
 
 void build_ridgefill_vtail(llm_graph_context & g, const llama_model & model, const llm_graph_input_ridgefill_part * inp,
@@ -1357,8 +1376,23 @@ void build_ridgefill_vtail(llm_graph_context & g, const llama_model & model, con
         ggml_tensor * b = ggml_repeat_4d(ctx0, ggml_reshape_3d(ctx0, inp->vt_bulk, n_kv, 1, 1), n_kv, n_head_kv, 1, 1);
         mult = ggml_add(ctx0, ggml_mul(ctx0, b, ggml_reshape_3d(ctx0, s, 1, n_head_kv, 1)), ggml_reshape_3d(ctx0, inp->vt_keep, n_kv, 1, 1));
     }
-    ggml_tensor * scaled = ggml_mul(ctx0, ggml_cast(ctx0, v, GGML_TYPE_F32), mult);
-    ggml_build_forward_expand(g.gf, ggml_cpy(ctx0, scaled, v));
+    if (v->type == GGML_TYPE_F16 || v->type == GGML_TYPE_F32) {
+        // in place in the cache (F16: converted, scaled in F32 and rounded back, as a cast / mul / cpy would): no
+        // n_kv-sized temporary
+        ggml_build_forward_expand(g.gf, ggml_mul_inplace(ctx0, v, mult));
+    } else {
+        // other V types (quantized: flash attention, so not transposed): cast, scale and store back a bounded run of
+        // cells at a time
+        GGML_ASSERT(!v_trans);
+        const int64_t per_cell = v->ne[0]*v->ne[1];
+        const int64_t step = std::max<int64_t>(1, (int64_t(1) << 22)/per_cell);
+        for (int64_t c0 = 0; c0 < n_kv; c0 += step) {
+            const int64_t nc = std::min(step, n_kv - c0);
+            ggml_tensor * vc = ggml_view_3d(ctx0, v, v->ne[0], v->ne[1], nc, v->nb[1], v->nb[2], c0*v->nb[2]);
+            ggml_tensor * mc = ggml_view_3d(ctx0, mult, 1, n_head_kv, nc, mult->nb[1], mult->nb[2], c0*mult->nb[2]);
+            ggml_build_forward_expand(g.gf, ggml_cpy(ctx0, ggml_mul(ctx0, ggml_cast(ctx0, vc, GGML_TYPE_F32), mc), vc));
+        }
+    }
 
     ggml_tensor * col = ggml_reshape_2d(ctx0, s, n_head_kv, 1);
     *scales = *scales ? ggml_concat(ctx0, *scales, col, 1) : col;

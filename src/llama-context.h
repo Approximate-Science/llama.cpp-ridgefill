@@ -136,7 +136,7 @@ struct llama_context {
                 int32_t   il_start,
                 int32_t   il_end);
 
-    void set_ridgefill(const llama_ridgefill * rf);
+    int32_t set_ridgefill(const llama_ridgefill * rf);
     void ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end);
     int32_t ridgefill_set_alpha(float alpha);
     int32_t ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n);
@@ -349,6 +349,14 @@ private:
     };
     std::array<ridgefill_vtail_state, LLAMA_MAX_SEQ> ridgefill_vtail;
     uint64_t ridgefill_part_gen = 0;
+
+    // sched_reserve: the RidgeFill graph being reserved (graph_params uses it instead of the context's state), its
+    // stand-in sweep state and one-row h_buf (graph shapes depend on counts only), and the variants reserved
+    const llm_graph_params_ridgefill * ridgefill_reserve_params = nullptr;
+    llama_ridgefill_part_state         ridgefill_reserve_state;
+    ggml_context_ptr                   ridgefill_reserve_ctx;
+    ggml_backend_buffer_ptr            ridgefill_reserve_buf;
+    void ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outputs, const llama_memory_context_i * mctx);
 
     llama_cross cross; // TODO: tmp for handling cross-attention - need something better probably
 

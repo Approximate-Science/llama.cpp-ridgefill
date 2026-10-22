@@ -100,7 +100,9 @@ static int run(int argc, char ** argv) {
     std::unique_ptr<llama_context, decltype(&llama_free)> ctx(llama_init_from_model(model.get(), cp), llama_free);
     if (!ctx) { throw std::runtime_error("context creation failed"); }
     if (rf) {
-        llama_set_ridgefill(ctx.get(), rf.get());
+        if (llama_set_ridgefill(ctx.get(), rf.get()) < 0) {
+            throw std::runtime_error("RidgeFill graphs' compute buffers do not fit");
+        }
 #ifdef RF27_API
         if (llama_ridgefill_set_alpha(ctx.get(), alpha) < 0) {
             throw std::invalid_argument("--alpha was refused");

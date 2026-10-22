@@ -85,8 +85,11 @@ public:
     ggml_tensor * win_sel  = nullptr; // I32 [n_win]: LOWER, the ubatch rows inside the capture window
     ggml_tensor * win_rows = nullptr; // I32 [n_win]: their rows in the window buffers
 
-    // S1_PROBE: F32 [n_kv]: 0, or -inf for the cells of positions [p_end, s1_begin) (tail rows the probe does not run)
-    ggml_tensor * s1_bias  = nullptr;
+    // S1_PROBE: the KQ mask of the probe graph (the stock mask's type and shape [n_kv, n_tokens, 1, 1]): causal over
+    // the sequence's cells, and -inf for the cells of positions [p_end, s1_begin) (tail rows the probe does not run);
+    // it replaces the stock mask for the probe's attention layers. ones: F32 [1, n_tokens * n_head], the mass reduction
+    ggml_tensor * s1_mask  = nullptr;
+    ggml_tensor * ones     = nullptr;
     // vtail: F32 [n_kv] 1 for the cells of the bulk prefix rows (positions < p_end, not exact), else 0; and 1 - that
     ggml_tensor * vt_bulk  = nullptr;
     ggml_tensor * vt_keep  = nullptr;
@@ -97,11 +100,35 @@ public:
     const llm_graph_params_ridgefill params;
 };
 
-// S1_PROBE, one late attention layer of the window rows (as qwen35's build_layer_attn, with an explicit softmax over
-// the visible cells: the KQ mask plus s1_bias); adds the layer's attention mass per cell (summed over heads and the
-// ubatch's queries) to *mass ([n_kv], created on the first call). Returns the layer's attention output (after wo).
-ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model & model, const llm_graph_input_ridgefill_part * inp,
-        ggml_tensor * cur, ggml_tensor * inp_pos, llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** mass);
+// the attention mass per key of a block of queries: sum over the queries and query heads of
+// softmax_k(scale * k . q + mask) (mask: [n_kv, >= n_q] or nullptr with a causal diagonal at diag_past, as
+// ggml_diag_mask_inf). q: [d, n_q, n_head], k: [d, n_kv, n_head_kv] (views allowed; grouped heads, query head h uses
+// key head h / (n_head / n_head_kv)). The scores are never materialised beyond max_elems at a time: the work is cut
+// into blocks of one key head's query heads (or fewer) x a range of queries, accumulated per key.
+//   ones != nullptr: F32 [1, >= max block], the reduction is out_prod(probs, ones) (no transposed copy); returns [n_kv].
+//   ones == nullptr: per key head, the reduction is sum_rows of the transposed block, the summation order of an
+//                    unsliced softmax-then-sum_rows whenever a key head's block fits max_elems; returns [n_kv, n_head_kv].
+ggml_tensor * llama_ridgefill_attn_mass(ggml_context * ctx, ggml_tensor * q, ggml_tensor * k, ggml_tensor * mask,
+        int32_t diag_past, float scale, ggml_tensor * ones, int64_t max_elems);
+
+// the block size of llama_ridgefill_attn_mass: query heads per block (a divisor of rep) and queries per block
+void llama_ridgefill_attn_mass_split(int64_t n_kv, int64_t n_q, int64_t rep, int64_t max_elems, int64_t & hb, int64_t & qb);
+
+// scores per mass block (F32 elements), independent of the prompt length: the S1 probe 64 MiB (in the context's
+// reserve); the Tier-3 question mass 4 MiB (its own per-prompt scheduler; a 700-token prompt still fits one block per
+// key head, the unsliced summation order)
+constexpr int64_t LLAMA_RIDGEFILL_MASS_BLOCK  = int64_t(1) << 24;
+constexpr int64_t LLAMA_RIDGEFILL_QMASS_BLOCK = int64_t(1) << 20;
+
+// graph nodes the RidgeFill graphs may add over a stock graph of n_ubatch tokens over n_ctx cells (the S1 probe's
+// mass blocks, vtail), for the graph and scheduler sizes
+int64_t llama_ridgefill_extra_nodes(const llama_ridgefill * rf, const llama_hparams & hparams, int64_t n_ctx, int64_t n_ubatch);
+
+// S1_PROBE, one late attention layer: after the layer's stock attention (build_layer_attn over the probe mask), its
+// attention mass per cell (summed over heads and the ubatch's queries) from the rotated queries q ([d, n_head,
+// n_tokens], as given to build_attn) and the layer's cached K; added to *mass ([n_kv], created on the first call)
+void build_ridgefill_s1_mass(llm_graph_context & g, const llm_graph_input_ridgefill_part * inp, ggml_tensor * q,
+        llm_graph_input_attn_kv * inp_attn, int il, ggml_tensor ** mass);
 
 // vtail on the first tail ubatch of a LATE replay, one late attention layer: s_h = mean over the ubatch's first
 // vtail_rows rows of ||V_true|| / ||V_fill|| per KV head (V_true from cur = attn_norm of the rows' exact input, V_fill

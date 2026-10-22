@@ -2526,7 +2526,10 @@ int llama_bench(int argc, char ** argv) {
 
         const int p_fill = rf && g_ridgefill.ridgefill_mode != "off" && t.n_depth == 0 && t.n_prompt > g_ridgefill.ridgefill_tail ? t.n_prompt - g_ridgefill.ridgefill_tail : 0;
         if (rf) {
-            llama_set_ridgefill(ctx, rf);
+            if (llama_set_ridgefill(ctx, rf) < 0) {
+                fprintf(stderr, "RidgeFill: the compute buffers of the RidgeFill graphs do not fit on this device\n");
+                return 1;
+            }
             if (g_ridgefill.ridgefill_mode != "off" && llama_ridgefill_set_alpha(ctx, g_ridgefill.ridgefill_alpha) < 0) {
                 fprintf(stderr, "RidgeFill: --ridgefill-alpha was refused\n");
                 return 1;
