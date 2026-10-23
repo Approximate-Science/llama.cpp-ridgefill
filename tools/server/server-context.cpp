@@ -3496,6 +3496,7 @@ private:
         selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
         selection.ridgefill_share = tparams.ridgefill_share;
         selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
+        selection.ridgefill_lexical = tparams.ridgefill_lexical;
         selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
         selection.ridgefill_qattn_turn_cap = tparams.ridgefill_qattn_turn_cap;
@@ -3513,7 +3514,7 @@ private:
         slot.stats.ridgefill = common_ridgefill_get_report(model_tgt, llama_init->ridgefill(), selection,
                 slot.task->tokens.get_tokens().data(), slot.task->n_tokens(), prefix, rows,
                 tparams.ridgefill ? tparams.ridgefill_mode : "off", window_begin, window_end,
-                slot.prompt.ridgefill_fill_start, std::min(prefix, slot.prompt.n_filled), extra_work ? &completed : nullptr);
+                slot.prompt.ridgefill_fill_start, std::min(prefix, slot.prompt.n_filled), extra_work ? &completed : nullptr, slot.ridgefill_sweep ? &slot.ridgefill_sweep->get_lexical() : nullptr);
     }
 
     bool ridgefill_sweep_prompt(server_slot & slot) {
@@ -4171,6 +4172,7 @@ private:
                                     selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
                                     selection.ridgefill_share = tparams.ridgefill_share;
                                     selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
+                                    selection.ridgefill_lexical = tparams.ridgefill_lexical;
                                     selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
                                     selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
                                     selection.ridgefill_qattn_turn_cap = tparams.ridgefill_qattn_turn_cap;
@@ -4197,6 +4199,7 @@ private:
                                 sweep_params.s1_factor = tparams.ridgefill_s1_factor;
                                 sweep_params.projector = rf;
                                 sweep_params.special_exact = tparams.ridgefill_special_exact;
+                                sweep_params.lexical = tparams.ridgefill_lexical;
                                 sweep_params.vtail = tparams.ridgefill_vtail;
                                 sweep_params.vtail_rows = tparams.ridgefill_vtail_rows;
                                 sweep_params.qattn_share = params_base.ridgefill_qattn_share;
@@ -5633,6 +5636,7 @@ static json get_res_props(const server_context_meta & meta, const common_params 
             { "share", params.ridgefill_share }, { "digits", params.ridgefill_digits }, { "alpha", params.ridgefill_alpha },
             { "qattn_share", params.ridgefill_qattn_share }, { "qattn_window", params.ridgefill_qattn_window },
             { "qattn_blind", params.ridgefill_qattn_blind },
+            { "lexical", params.ridgefill_lexical },
             { "special_exact", params.ridgefill_special_exact }, { "header_rows", params.ridgefill_header_rows },
             { "qattn_window_mode", params.ridgefill_qattn_window_mode }, { "qattn_turn_cap", params.ridgefill_qattn_turn_cap },
             { "s1_window", params.ridgefill_s1_window }, { "s1_factor", params.ridgefill_s1_factor },

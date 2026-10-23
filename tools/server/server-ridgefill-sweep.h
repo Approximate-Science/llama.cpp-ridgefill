@@ -1,6 +1,7 @@
 #pragma once
 
 #include "llama.h"
+#include "common.h"
 #include "../../src/llama-ext.h"
 #include "../../src/llama-ridgefill-sweep.h"
 
@@ -27,6 +28,7 @@ struct server_ridgefill_sweep_params {
     double s1_factor = 1.0;
     const llama_ridgefill * projector = nullptr;
     bool special_exact = false;
+    bool lexical = false;
     bool vtail = false;
     int32_t vtail_rows = 512;
     bool all_tail_logits = false;
@@ -78,6 +80,7 @@ struct server_ridgefill_sweep {
     const std::vector<double> & get_s1_mass() const { return s1_mass; }
     const std::vector<float> & get_vtail_scales() const { return vtail_scales; }
     const server_ridgefill_sweep_cost & get_cost() const { return cost; }
+    const common_ridgefill_lexical_result & get_lexical() const { return lexical; }
     // Finish after the deferred token is decoded. Cancel before releasing an incomplete slot.
     void finish_external_tail(llama_context * ctx, llama_seq_id seq);
     void cancel(llama_context * ctx, llama_seq_id seq);
@@ -99,13 +102,14 @@ private:
     std::vector<double> s1_mass;
     std::vector<float> vtail_scales;
     server_ridgefill_sweep_cost cost;
+    common_ridgefill_lexical_result lexical;
     std::vector<llama_pos> rows;
     std::vector<int32_t> layers;
     std::vector<std::unique_ptr<llama_ridgefill_sweep_buffer>> windows;
 
     void sweep_lower(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void question_mass(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params);
-    void select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params);
+    void select_rows(llama_context * ctx, const llama_token * tokens, const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params);
     void prepare_cost(const llama_model & model, const server_ridgefill_sweep_params & params);
     void sweep_s1_fill(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void sweep_s1_probe(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);

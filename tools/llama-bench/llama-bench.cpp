@@ -1093,7 +1093,7 @@ static cmd_params parse_cmd_params(int argc, char ** argv, bool validate_only = 
                 g_ridgefill.ridgefill_path = argv[i];
             } else if (arg == "--ridgefill-s1-window" || arg == "--ridgefill-s1-factor" || arg == "--ridgefill-vtail" || arg == "--ridgefill-vtail-rows" ||
                        arg == "--ridgefill-tail" || arg == "--ridgefill-mode" || arg == "--ridgefill-share" ||
-                       arg == "--ridgefill-special-exact" || arg == "--ridgefill-header-rows" || arg == "--ridgefill-qattn-window-mode" ||
+                       arg == "--ridgefill-lexical" || arg == "--ridgefill-special-exact" || arg == "--ridgefill-header-rows" || arg == "--ridgefill-qattn-window-mode" ||
                        arg == "--qattn-window-mode" || arg == "--qattn-turn-cap" || arg == "--ridgefill-qattn-turn-cap" ||
                        arg == "--ridgefill-digits" || arg == "--ridgefill-alpha" || arg == "--ridgefill-qattn-share" || arg == "--ridgefill-qattn-window") {
                 if (++i >= argc) {

@@ -48,6 +48,14 @@ The common class/digit helper calls the real `llama_ridgefill_select_rows` API (
 
 `test_row_selection.cpp` exercises the helper against the actual tiny model/projector with hand-computed positions: class scores, half-even rounding, ties by position, digit union, both quality modes, off/speed/empty-prefix controls and named bad-input refusals. Compile it against the built common and engine libraries, then run with `tiny-qwen35-f32.gguf projector-s3-f32.gguf` as its two arguments. No mock selector implementation is used.
 
+The same test covers the lexical net on synthetic multikey-style prompts: case/leading-space normalization, the needle plus its 32-row value span, distractor exclusion, one/two/three prefix occurrences, ChatML boundaries and selector endpoint exclusion, longest-first admission under the 5% cap, report attribution and exact-row budget reservation. It also checks named refusals. It runs on CPU and needs no full-model weights.
+
+```sh
+c++ -std=c++17 -O2 -Icommon -Iinclude -Isrc -Iggml/include tests/ridgefill/test_row_selection.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama-common -lllama -lggml -lggml-base -o build-cpu/test-row-selection
+build-cpu/test-row-selection /path/to/tiny-qwen35-f32.gguf /path/to/projector-s3-f32.gguf
+```
+
+
 Speed cases compare tail logits, every layer's final KV/conv/recurrent state, and every late layer's prefix state at N=700/T=200 over batch/ubatch pairs 700/512, 128/128 and 50/50. Prefix dumps are necessary to expose a wrong alpha correction before tail decay. Alpha is 0 and 1. Controls require byte-identical mode-off and T>=N outputs, a wrong map that fails by over 100x tolerance, a wrong correction orientation at alpha 1, and refusal of a filled row asking for logits. The tolerance is 1e-4 relative F32.
 
 The same harness is the canonical G1 for quality with hand-picked rows through the RF27 API. It compares alpha-0 inference against the oracle and requires wrong maps, wrong exact rows and speed-instead-of-quality to fail that comparison. Its T>=N control supplies no exact rows because the prefix is empty. Quality alpha 1 is an expected refusal (rc 2 naming the rho-scaled correction), not a passing inference comparison. Speed retains its alpha-0/1 inference and wrong-correction-orientation checks. The canonical shell harness still returns nonzero SKIPPED for quality+qattn. L-C's separate native/HTTP sweep gates now pass on split 4, including real class/digit selection, question mass/rows, 25 cache/state/logit arrays, zero-share equality, cancellation/reuse and shutdown. Those gate measurements are recorded in NOTES-sweep.md on rf27-sweep; the shell harness does not claim to execute them.

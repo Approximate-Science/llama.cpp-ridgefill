@@ -363,9 +363,14 @@ std::vector<int32_t> llama_ridgefill_sweep_top_rows(const std::vector<double> & 
     return llama_ridgefill_sweep_top_k(mass, prefix, count);
 }
 
-std::vector<int32_t> llama_ridgefill_sweep_top_k(const std::vector<double> & mass, int32_t prefix, int32_t count) {
+std::vector<int32_t> llama_ridgefill_sweep_top_k(const std::vector<double> & mass, int32_t prefix, int32_t count,
+        const std::vector<int32_t> & forced) {
     if (prefix < 0 || size_t(prefix) > mass.size() || count < 0 || count > prefix) {
         throw std::runtime_error("RidgeFill: invalid prefix or exact-row count");
+    }
+    if (!std::is_sorted(forced.begin(), forced.end()) || std::adjacent_find(forced.begin(), forced.end()) != forced.end() ||
+            (!forced.empty() && (forced.front() < 0 || forced.back() >= prefix || int32_t(forced.size()) > count))) {
+        throw std::runtime_error("RidgeFill lexical: forced rows exceed the exact-row budget or are invalid");
     }
     for (int32_t i = 0; i < prefix; ++i) {
         if (!std::isfinite(mass[i]) || mass[i] < 0.0) {
@@ -375,6 +380,11 @@ std::vector<int32_t> llama_ridgefill_sweep_top_k(const std::vector<double> & mas
     std::vector<int32_t> rows(prefix);
     std::iota(rows.begin(), rows.end(), 0);
     std::partial_sort(rows.begin(), rows.begin() + count, rows.end(), [&](int32_t a, int32_t b) {
+        if (!forced.empty()) {
+            const bool fa = std::binary_search(forced.begin(), forced.end(), a);
+            const bool fb = std::binary_search(forced.begin(), forced.end(), b);
+            if (fa != fb) { return fa; }
+        }
         return mass[a] > mass[b] || (mass[a] == mass[b] && a < b);
     });
     rows.resize(count);

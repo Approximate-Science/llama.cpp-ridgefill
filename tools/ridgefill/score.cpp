@@ -36,7 +36,7 @@ struct options {
     int32_t turn_cap = 256, header_rows = 0;
     int32_t threads = 4, batch = 512, ubatch = 512, ctx = 0, gpu_layers = 0;
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
-    bool digits = true, special_exact = false, diagnostics = false;
+    bool digits = true, special_exact = false, diagnostics = false, lexical = false;
     bool vtail = false, explicit_window_end = false;
     int32_t s1_window = 0, vtail_rows = 512;
     double s1_factor = 1.0;
@@ -95,6 +95,9 @@ static options parse(int argc, char ** argv) {
         else if (key == "--qattn-window-mode" || key == "--ridgefill-qattn-window-mode") { o.window_mode = value; }
         else if (key == "--qattn-turn-cap" || key == "--ridgefill-qattn-turn-cap") { o.turn_cap = integer(value); }
         else if (key == "--header-rows" || key == "--ridgefill-header-rows") { o.header_rows = integer(value); }
+        else if (key == "--ridgefill-lexical") {
+            require(value == "on" || value == "off", "--ridgefill-lexical must be on or off"); o.lexical = value == "on";
+        }
         else if (key == "--special-exact" || key == "--ridgefill-special-exact") {
             require(value == "on" || value == "off", "--special-exact must be on or off"); o.special_exact = value == "on";
         }
@@ -136,13 +139,14 @@ static options parse(int argc, char ** argv) {
     selection.ridgefill_s1_factor = o.s1_factor;
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
+    selection.ridgefill_lexical = o.lexical;
     selection.ridgefill_special_exact = o.special_exact;
     selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
     selection.ridgefill_qattn_turn_cap = o.turn_cap;
     common_ridgefill_validate_options(selection, o.mode);
     common_ridgefill_require_api_v2(selection, o.mode);
-    if ((o.s1_window > 0 || o.vtail) && !o.explicit_window_end) { o.window_end = -2; }
+    if ((o.s1_window > 0 || o.vtail || o.lexical) && !o.explicit_window_end) { o.window_end = -2; }
     require(o.mode == "off" || (o.s1_window == 0 && !o.vtail) || server_ridgefill_sweep_api_version() >= 2,
             "S1/vtail requires libllama C API v2");
     tensor_type(o.cache); tensor_type(o.hidden);
@@ -212,6 +216,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     selection.ridgefill_s1_factor = o.s1_factor;
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
+    selection.ridgefill_lexical = o.lexical;
     selection.ridgefill_special_exact = o.special_exact; selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
     selection.ridgefill_qattn_turn_cap = o.turn_cap;
@@ -252,7 +257,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         p.qattn_window_mode = o.window_mode; p.qattn_turn_cap = o.turn_cap;
         p.qattn_end = window_end; p.logits_begin = begin; p.logits_end = end; p.type = tensor_type(o.hidden);
         p.s1 = s1; p.s1_window = o.s1_window; p.s1_factor = o.s1_factor; p.projector = rf; p.special_exact = o.special_exact;
-        p.vtail = vtail; p.vtail_rows = o.vtail_rows;
+        p.vtail = vtail; p.vtail_rows = o.vtail_rows; p.lexical = o.lexical;
         try {
             while (true) {
                 const auto result = server_ridgefill_sweep_step(sweep, ctx, 0, doc.ids.data(), rows, p);
@@ -290,7 +295,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         {"logprobs", logprobs}, {"logsumexp", logsumexp}, {"target_positions", positions},
         {"logits_begin", begin}, {"logits_end", end}, {"exact_rows", rows},
         {"qattn_window", qattn ? json::array({sweep.window_begin(), sweep.window_end()}) : json(nullptr)},
-        {"selector_excludes_targets", !qattn || window_end <= n - o.scored},
+        {"selector_excludes_targets", !(qattn || o.lexical) || window_end <= n - o.scored},
         {"parameters", {{"tail", o.tail}, {"share", o.share}, {"digits", o.digits}, {"qattn_share", o.qattn_share},
             {"special_exact", o.special_exact}, {"header_rows", o.header_rows}, {"qattn_window_mode", o.window_mode}, {"qattn_turn_cap", o.turn_cap},
             {"alpha", o.alpha}, {"cache_type", o.cache}, {"h_type", o.hidden}, {"flash_attn", o.flash}}},
@@ -304,7 +309,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     }
     if (vtail) { completed.vtail_rows = cost.vtail_rows; }
     const auto report = common_ridgefill_get_report(model, rf, selection, doc.ids.data(), n, prefix, rows, o.mode,
-            qattn ? sweep.window_begin() : -1, qattn ? sweep.window_end() : -1, 0, -1, s1 || vtail ? &completed : nullptr);
+            qattn ? sweep.window_begin() : -1, qattn ? sweep.window_end() : -1, 0, -1, s1 || vtail ? &completed : nullptr, o.lexical ? &sweep.get_lexical() : nullptr);
     const double modeled = report.macs_s1_fill + report.macs_s1_probe + report.macs_vtail;
     const double observed = cost.s1_fill_macs + cost.s1_probe_macs + cost.vtail_macs;
     require(std::abs(modeled - observed) <= 1e-12 * std::max(1.0, observed), "S1/vtail driver/report cost mismatch");
@@ -314,6 +319,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         result["parameters"]["vtail"] = o.vtail;
         result["parameters"]["vtail_rows"] = o.vtail_rows;
     }
+    if (o.lexical) { result["parameters"]["lexical"] = true; }
     result["ridgefill"] = json::parse(report.to_json().dump());
     if ((o.s1_window > 0) || o.vtail) {
         result["parameters"].update({{"s1", (o.s1_window > 0)}, {"s1_window", o.s1_window}, {"s1_factor", o.s1_factor},
@@ -347,6 +353,7 @@ int main(int argc, char ** argv) {
                 "--qattn-end is an alias. NLL with endpoint N reads scored targets; the G3 wrapper uses N-K.\n"
                 "Chat: --special-exact off --header-rows 0 --qattn-window-mode last --qattn-turn-cap 256\n"
                 "turn uses [max(after_last_user_header,END-cap),END), searching only before END; missing/empty turns are refused.\n"
+                "Lexical: --ridgefill-lexical on|off (default off; quality+qattn, endpoint N-K).\n"
                 "S1/vtail (C API v2): --ridgefill-s1-window 0 (use 256 to enable) --ridgefill-s1-factor 1 --ridgefill-vtail off --ridgefill-vtail-rows 512\n"
                 "S1/vtail default to endpoint N-K in this scorer; vtail calibration must precede scored targets.\n"
                 "Runtime: --gpu-layers 0 --threads 4 --batch 512 --ubatch 512 --ctx-size 0 --cache-type f16 --h-type f16 --flash-attn auto\n"

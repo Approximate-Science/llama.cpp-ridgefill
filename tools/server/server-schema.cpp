@@ -122,6 +122,8 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (count < 1 || count > INT32_MAX) { throw std::invalid_argument("ridgefill_vtail_rows has an invalid row count"); }
             ctx.params.ridgefill_vtail_rows = int32_t(count);
         }));
+    add((new field_bool("ridgefill_lexical", params.ridgefill_lexical))
+        ->set_desc("RidgeFill: reserve rare question-matching prefix spans"));
     add((new field_bool("ridgefill_special_exact", params.ridgefill_special_exact))
         ->set_desc("RidgeFill quality: keep added/special token rows exact"));
     add((new field_num("ridgefill_header_rows", params.ridgefill_header_rows))
@@ -569,6 +571,7 @@ task_params eval_llama_cmpl_schema(
     params.ridgefill_vtail_rows = params_base.ridgefill_vtail_rows;
     params.ridgefill_share = params_base.ridgefill_share;
     params.ridgefill_special_exact = params_base.ridgefill_special_exact;
+    params.ridgefill_lexical = params_base.ridgefill_lexical;
     params.ridgefill_header_rows = params_base.ridgefill_header_rows;
     params.ridgefill_qattn_window_mode = params_base.ridgefill_qattn_window_mode;
     params.ridgefill_qattn_turn_cap = params_base.ridgefill_qattn_turn_cap;
@@ -603,8 +606,8 @@ task_params eval_llama_cmpl_schema(
                 params.sampling.reasoning_budget_forced.size());
     }
 
-    if (params.ridgefill && params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail) && params_base.ridgefill_path.empty()) {
-        throw std::invalid_argument("RidgeFill: S1/vtail requires a server started with --ridgefill");
+    if (params.ridgefill && params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail || params.ridgefill_lexical) && params_base.ridgefill_path.empty()) {
+        throw std::invalid_argument("RidgeFill: S1/vtail/lexical requires a server started with --ridgefill");
     }
     if (!params_base.ridgefill_path.empty()) {
         common_params selection = params_base;
@@ -614,6 +617,7 @@ task_params eval_llama_cmpl_schema(
         selection.ridgefill_vtail_rows = params.ridgefill_vtail_rows;
         selection.ridgefill_share = params.ridgefill_share;
         selection.ridgefill_special_exact = params.ridgefill_special_exact;
+        selection.ridgefill_lexical = params.ridgefill_lexical;
         selection.ridgefill_header_rows = params.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = params.ridgefill_qattn_window_mode;
         selection.ridgefill_qattn_turn_cap = params.ridgefill_qattn_turn_cap;

@@ -33,6 +33,7 @@
 #include <string>
 #include <thread>
 #include <unordered_set>
+#include <unordered_map>
 #include <vector>
 
 #if defined(__APPLE__) && defined(__MACH__)
@@ -1801,10 +1802,12 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         params.ridgefill_share = number();
     } else if (option == "--ridgefill-qattn-share") {
         params.ridgefill_qattn_share = number();
-    } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind" || option == "--ridgefill-special-exact" || option == "--ridgefill-vtail") {
+    } else if (option == "--ridgefill-digits" || option == "--ridgefill-qattn-blind" || option == "--ridgefill-special-exact" || option == "--ridgefill-vtail" || option == "--ridgefill-lexical") {
         if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
         if (option == "--ridgefill-digits") {
             params.ridgefill_digits = value == "on";
+        } else if (option == "--ridgefill-lexical") {
+            params.ridgefill_lexical = value == "on";
         } else if (option == "--ridgefill-vtail") {
             params.ridgefill_vtail = value == "on";
         } else if (option == "--ridgefill-special-exact") {
@@ -1842,6 +1845,12 @@ static void common_ridgefill_check_quality_alpha(const common_params & params, c
 void common_ridgefill_validate_options(const common_params & params, const std::string & mode) {
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
     if (!common_ridgefill_mode_valid(selected_mode)) { throw std::invalid_argument("RidgeFill: invalid mode " + selected_mode); }
+    if (params.ridgefill_lexical && selected_mode != "off" && selected_mode != "quality+qattn") {
+        throw std::invalid_argument("RidgeFill: --ridgefill-lexical requires the quality+qattn server/scorer sweep");
+    }
+    if (params.ridgefill_lexical && selected_mode != "off" && params.ridgefill_qattn_share == 0) {
+        throw std::invalid_argument("RidgeFill: --ridgefill-lexical requires positive --ridgefill-qattn-share for its exact-row budget");
+    }
     if (params.ridgefill_header_rows < 0) { throw std::invalid_argument("RidgeFill: --ridgefill-header-rows must be nonnegative"); }
     if (params.ridgefill_qattn_window_mode != "last" && params.ridgefill_qattn_window_mode != "turn") {
         throw std::invalid_argument("RidgeFill: --ridgefill-qattn-window-mode must be last or turn");
@@ -1958,6 +1967,111 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
     return rows;
 }
 
+common_ridgefill_lexical_result common_ridgefill_lexical_rows(const llama_vocab * vocab,
+        const llama_token * tokens, int32_t n_prompt, int32_t n_prefix, int32_t selector_end) {
+    if (selector_end == -1) { selector_end = n_prompt; }
+    if (!vocab || !tokens || n_prompt < 0 || n_prefix < 0 || n_prefix > n_prompt || selector_end < n_prefix || selector_end > n_prompt) {
+        throw std::invalid_argument("RidgeFill lexical: invalid prompt or selector bounds");
+    }
+    for (int32_t i = 0; i < n_prompt; ++i) {
+        if (tokens[i] < 0 || tokens[i] >= llama_vocab_n_tokens(vocab)) {
+            throw std::invalid_argument("RidgeFill lexical: token outside the vocabulary");
+        }
+    }
+    common_ridgefill_lexical_result result;
+    result.row_cap = n_prefix / 20;
+    const auto header = common_tokenize(vocab, "<|im_start|>user\n", false, true);
+    const int32_t user = llama_ridgefill_last_marker(tokens, selector_end, header.data(), header.size());
+    int32_t content_begin = 0, content_end = selector_end;
+    if (user >= 0) {
+        content_begin = user + header.size();
+        for (const char * text : {"<|im_end|>", "<|im_start|>"}) {
+            const auto marker = common_tokenize(vocab, text, false, true);
+            if (marker.empty()) { continue; }
+            const auto * end = std::search(tokens + content_begin, tokens + content_end, marker.begin(), marker.end());
+            content_end = end - tokens;
+        }
+    }
+    result.window_end = std::max(n_prefix, content_end);
+    result.window_begin = std::max({n_prefix, content_begin, result.window_end - 256});
+    if (result.window_begin >= result.window_end || n_prefix < 8) { return result; }
+
+    // Decode first: BPE space markers and different token boundaries must compare as text.
+    auto normalize = [&](int32_t begin, int32_t end, std::vector<size_t> & offsets) {
+        std::string text;
+        const int excluded = LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_UNUSED;
+        for (int32_t i = begin; i < end; ++i) {
+            offsets.push_back(text.size());
+            if (llama_vocab_get_attr(vocab, tokens[i]) & excluded) {
+                text += '\0'; // do not match across template or special tokens
+                continue;
+            }
+            for (unsigned char c : common_token_to_piece(vocab, tokens[i])) {
+                if (c == ' ' || (c >= '\t' && c <= '\r')) {
+                    if (text.empty() || text.back() != ' ') { text += ' '; }
+                } else {
+                    text += c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
+                }
+            }
+        }
+        offsets.push_back(text.size());
+        return text;
+    };
+    std::vector<size_t> offsets, question_offsets;
+    const std::string prefix = normalize(0, n_prefix, offsets);
+    const std::string question = normalize(result.window_begin, result.window_end, question_offsets);
+    std::vector<std::array<int32_t, 2>> matches;
+    std::unordered_map<std::string, int32_t> frequency;
+    for (int32_t i = 0; i <= n_prefix - 8; ++i) {
+        size_t begin = offsets[i], end = offsets[i + 8];
+        while (begin < end && prefix[begin] == ' ') { ++begin; }
+        while (end > begin && prefix[end - 1] == ' ') { --end; }
+        if (begin == end || end - begin > question.size()) { continue; }
+        std::string pattern = prefix.substr(begin, end - begin);
+        if (pattern.find('\0') != std::string::npos || question.find(pattern) == std::string::npos) { continue; }
+        int32_t match_end = i + 8;
+        for (int32_t j = match_end; j < n_prefix; ++j) {
+            size_t next = offsets[j + 1];
+            while (next > begin && prefix[next - 1] == ' ') { --next; }
+            if (next - begin > question.size()) { break; }
+            const std::string longer = prefix.substr(begin, next - begin);
+            if (longer.find('\0') != std::string::npos || question.find(longer) == std::string::npos) { break; }
+            pattern = longer;
+            match_end = j + 1;
+        }
+        auto found = frequency.find(pattern);
+        if (found == frequency.end()) {
+            int32_t count = 0;
+            for (size_t pos = prefix.find(pattern); pos != std::string::npos && count < 3; pos = prefix.find(pattern, pos + 1)) { ++count; }
+            found = frequency.emplace(pattern, count).first;
+        }
+        if (found->second <= 2) { matches.push_back({i, match_end}); }
+    }
+    std::sort(matches.begin(), matches.end(), [](const auto & a, const auto & b) {
+        const int32_t na = a[1] - a[0], nb = b[1] - b[0];
+        return na > nb || (na == nb && a[0] < b[0]);
+    });
+    std::vector<uint8_t> selected(n_prefix, 0);
+    int32_t count = 0;
+    for (const auto & match : matches) {
+        if (std::any_of(result.matches.begin(), result.matches.end(), [&](const auto & kept) {
+                return kept[0] <= match[0] && kept[1] >= match[1];
+            })) { continue; }
+        ++result.candidates;
+        const int32_t end = match[1] + std::min(32, n_prefix - match[1]);
+        int32_t extra = 0;
+        for (int32_t i = match[0]; i < end; ++i) { extra += !selected[i]; }
+        if (extra > result.row_cap - count) { result.capped = true; continue; }
+        result.matches.push_back(match);
+        count += extra;
+        for (int32_t i = match[0]; i < end; ++i) { selected[i] = 1; }
+    }
+    for (int32_t i = 0; i < n_prefix; ++i) {
+        if (selected[i]) { result.rows.push_back(i); }
+    }
+    return result;
+}
+
 common_json common_ridgefill_report::to_json() const {
     const int32_t filled = n_prefix - n_exact_prefix;
     common_json result {
@@ -1977,6 +2091,13 @@ common_json common_ridgefill_report::to_json() const {
             {"macs_probe", macs_s1_probe}, {"probe_kv_pairs", s1_probe_kv_pairs}, {"fill_recomputed", true}};
     }
     if (vtail_rows > 0) { result["vtail"] = common_json {{"rows", vtail_rows}, {"macs_measure", macs_vtail}}; }
+    if (lexical_enabled) {
+        result["n_exact_prefix_by_source"]["lexical"] = exact_by_source[6];
+        result["lexical"] = common_json {{"enabled", true}, {"window", std::vector<int32_t>{lexical.window_begin, lexical.window_end}},
+            {"rows", lexical.rows}, {"matches", common_json::array()}, {"n_rows", lexical.rows.size()}, {"n_matches", lexical.matches.size()},
+            {"candidates", lexical.candidates}, {"row_cap", lexical.row_cap}, {"capped", lexical.capped}};
+        for (const auto & match : lexical.matches) { result["lexical"]["matches"].push_back(std::vector<int32_t>{match[0], match[1]}); }
+    }
     if (s1_begin >= 0 || vtail_rows > 0) {
         result["mac_model"] = "kva cold prefill + S1 dense probe pairs and recomputed prefix projector/KV + vtail projector and two V projections";
     }
@@ -1986,7 +2107,7 @@ common_json common_ridgefill_report::to_json() const {
 common_ridgefill_report common_ridgefill_get_report(const llama_model * model, const llama_ridgefill * rf,
         const common_params & params, const llama_token * tokens, int32_t n_prompt, int32_t n_prefix,
         const std::vector<llama_pos> & selected_rows, const std::string & mode, int32_t window_begin, int32_t window_end,
-        int32_t filled_begin, int32_t filled_end, const common_ridgefill_sweep_report * sweep) {
+        int32_t filled_begin, int32_t filled_end, const common_ridgefill_sweep_report * sweep, const common_ridgefill_lexical_result * lexical) {
     auto require = [](bool ok, const char * message) {
         if (!ok) { throw std::runtime_error(std::string("RidgeFill reporting: ") + message); }
     };
@@ -2016,6 +2137,12 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
     report.n_prompt = n_prompt;
     report.n_prefix = n_prefix;
     report.n_exact_prefix = rows.size();
+    report.lexical_enabled = params.ridgefill_lexical;
+    if (params.ridgefill_lexical && n_prefix > 0) {
+        require(lexical != nullptr, "lexical net needs completed selection metadata");
+        report.lexical = *lexical;
+        require(std::includes(rows.begin(), rows.end(), lexical->rows.begin(), lexical->rows.end()), "lexical rows must be exact");
+    }
     const bool s1 = mode != "off" && params.ridgefill_s1_window > 0;
     const bool vtail = mode != "off" && params.ridgefill_vtail;
     if (s1 || vtail) {
@@ -2046,7 +2173,7 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
             require(!special || selected, "S1 special rows differ from the reported exact rows");
             if (!selected) { continue; }
             if (i < filled_begin || i >= filled_end) { ++report.n_cached_exact_prefix; }
-            else { ++report.exact_by_source[special ? 2 : 5]; }
+            else { ++report.exact_by_source[std::binary_search(report.lexical.rows.begin(), report.lexical.rows.end(), i) ? 6 : special ? 2 : 5]; }
         }
     } else if (n_prefix > 0 && (mode == "quality" || mode == "quality+qattn")) {
         require(rf && tokens, "quality breakdown needs the projector and prompt tokens");
@@ -2054,9 +2181,10 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
         const int32_t count = llama_ridgefill_select_rows(rf, tokens, n_prefix, params.ridgefill_share, false, classes.data());
         require(count >= 0 && count <= n_prefix, "class selector refused the breakdown");
         std::vector<uint8_t> source(n_prefix, 0);
+        for (auto row : report.lexical.rows) { source[row] = 7; }
         for (int32_t i = 0; i < count; ++i) {
             require(classes[i] >= 0 && classes[i] < n_prefix, "class selector returned an invalid position");
-            source[classes[i]] = 1;
+            if (!source[classes[i]]) { source[classes[i]] = 1; }
         }
         const auto * vocab = llama_model_get_vocab(model);
         const int excluded = LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_UNUSED;

@@ -156,6 +156,7 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-mode MODE` | speed with a projector | off, speed, quality, quality+qattn; availability above |
 | `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in [0,1] |
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
+| `--ridgefill-lexical on\|off` | off | quality+qattn server/scorer: reserve rare question-matching prefix spans and 32 following rows, within a 5% prefix cap |
 | `--ridgefill-special-exact on\|off` | off | keep unknown/control/user-defined token rows exact in quality modes |
 | `--ridgefill-header-rows K` | 0 | keep the next K prefix rows after each special token exact, independently of special-exact |
 | `--ridgefill-qattn-window-mode last\|turn` | last | last uses the fixed query window; turn uses rows after the last complete user header |
@@ -462,3 +463,11 @@ The release remains ON HOLD. The settings and reporting contract are defined aga
 S1 replaces the base class/digit/header/qattn union with its mass-ranked rows, then unions special rows when requested. Reporting attributes final exact rows to special and S1, rather than claiming the discarded base rows were kept. The driver supplies completed S1 window bounds, the actual dense probe pair count and the actual vtail sample count. Missing execution metadata is refused. Disabled features retain the previous reporting JSON shape and MAC totals.
 
 For prefix P, window W and hidden width H, each late attention layer charges S1_FILL P*(H^2 + K/V projections), because LATE recomputes that fill. S1_PROBE charges W full rows through every late layer, with attention visibility restricted to the prefix plus causal window rows. The implementation still evaluates dense matrices, so probe attention charges 2*query_heads*head_dim*probe_kv_pairs, using the driver's actual per-ubatch pair count including padded and masked cells. Vtail separately charges min(C,tail)*(H^2 + two V projections) per late attention layer for measuring the scale. Norms, softmax, norms of V and elementwise rescaling remain outside the analytic model. Token fractions count final prompt-row coverage, while MAC fractions include the extra passes. Enabled reports add s1 window/fill/probe costs and vtail sample/measurement costs.
+
+### Experimental lexical net
+
+`--ridgefill-lexical on` (HTTP `ridgefill_lexical: true`) reserves prefix spans whose decoded, ASCII-case-folded, whitespace-collapsed text occurs in the question. A match has at least eight prefix tokens; different BPE token boundaries and leading spaces compare as decoded text. The question is the last 256 content tokens, clipped to the exact tail. For ChatML it ends at the last user turn's end, before the assistant header; template/special tokens cannot form a match. The native scorer honors its selector endpoint and defaults to N-K when lexical selection is enabled.
+
+An n-gram occurring more than twice in the normalized prefix is ignored. Complete match-plus-32-row spans are admitted longest first (ties by earlier prefix position), with their union limited to floor(prefix/20) rows. A span that does not fit is skipped, and `lexical.capped` reports this. `lexical.rows`, `lexical.matches` (half-open spans before the forward extension), counts and window bounds are included in the RidgeFill report. Lexical rows have first attribution in the disjoint source counts and count as exact in token and MAC totals.
+
+The net requires quality+qattn with positive qattn share. It reserves rows within the existing base/S1 row budget instead of adding rows above it. A budget smaller than the lexical set (or the base/lexical union in ordinary qattn) is refused by name; S1 retains its existing special-row union. Lexical off keeps the previous selection and report shape. This change has no decode-path or GPU-kernel changes; quality remains subject to lane Q's separate screen.

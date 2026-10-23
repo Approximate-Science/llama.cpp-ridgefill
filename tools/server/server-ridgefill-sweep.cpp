@@ -158,7 +158,8 @@ void server_ridgefill_sweep::question_mass(llama_context * ctx, llama_seq_id seq
     mass = llama_ridgefill_sweep_question_mass(*ctx, seq, params.n_tokens, win_end, layers, buffers);
 }
 
-void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params) {
+void server_ridgefill_sweep::select_rows(llama_context * ctx, const llama_token * tokens,
+        const std::vector<llama_pos> & base_rows, const server_ridgefill_sweep_params & params) {
     if (params.qattn_share > 0 && mass.size() != size_t(params.n_tokens)) {
         throw std::runtime_error("RidgeFill quality+qattn: question mass does not cover the prompt");
     }
@@ -171,6 +172,15 @@ void server_ridgefill_sweep::select_rows(const std::vector<llama_pos> & base_row
     rows.clear();
     std::set_union(base_rows.begin(), base_rows.end(), question_rows.begin(), question_rows.end(), std::back_inserter(rows));
     n_base = rows.size();
+    if (params.lexical) {
+        lexical = common_ridgefill_lexical_rows(llama_model_get_vocab(llama_get_model(ctx)), tokens,
+                params.n_tokens, params.n_prefix, params.qattn_end);
+        if (!params.s1) {
+            std::vector<llama_pos> forced;
+            std::set_union(base_rows.begin(), base_rows.end(), lexical.rows.begin(), lexical.rows.end(), std::back_inserter(forced));
+            rows = llama_ridgefill_sweep_top_k(mass, params.n_prefix, n_base, forced);
+        }
+    }
 }
 
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
@@ -231,7 +241,6 @@ void server_ridgefill_sweep::select_s1_rows(llama_context * ctx, llama_seq_id se
     int32_t count = int32_t(std::floor(budget));
     const double fraction = budget - count;
     if (fraction > 0.5 || (fraction == 0.5 && (count & 1))) { ++count; }
-    const auto selected = llama_ridgefill_sweep_top_k(s1_mass, params.n_prefix, std::max(1, count));
     std::vector<llama_pos> special;
     if (params.special_exact) {
         auto select = llama_ridgefill_select_default_params(params.projector);
@@ -241,6 +250,7 @@ void server_ridgefill_sweep::select_s1_rows(llama_context * ctx, llama_seq_id se
         if (n < 0 || n > params.n_prefix) { throw std::runtime_error("RidgeFill S1: special-row selection was refused"); }
         special.resize(n);
     }
+    const auto selected = llama_ridgefill_sweep_top_k(s1_mass, params.n_prefix, std::max(1, count), lexical.rows);
     rows.clear();
     std::set_union(selected.begin(), selected.end(), special.begin(), special.end(), std::back_inserter(rows));
 }
@@ -342,7 +352,10 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
     if (!std::isfinite(params.qattn_share) || params.qattn_share < 0.0f || params.qattn_share > 1.0f) {
         throw std::runtime_error("RidgeFill quality+qattn: qattn share must be finite and in [0, 1]");
     }
-    if (params.qattn_share == 0.0f && !params.s1 && !params.vtail) {
+    if (params.lexical && params.qattn_share == 0) {
+        throw std::runtime_error("RidgeFill lexical: requires positive question-attention share for its exact-row budget");
+    }
+    if (params.qattn_share == 0.0f && !params.s1 && !params.vtail && !params.lexical) {
         return server_ridgefill_sweep_result::quality;
     }
     if (params.n_tokens <= 0 || params.n_prefix < 0 || params.n_prefix >= params.n_tokens) {
@@ -412,7 +425,7 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
             sweep.next = phase::rows;
             break;
         case phase::rows:
-            sweep.select_rows(base_rows, params);
+            sweep.select_rows(ctx, tokens, base_rows, params);
             sweep.position = 0;
             sweep.next = params.s1 ? phase::s1_fill : phase::prefix;
             break;
