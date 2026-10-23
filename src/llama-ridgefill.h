@@ -69,6 +69,17 @@ struct llama_ridgefill_part_state {
     llama_pos s1_end   = 0;
 };
 
+struct llama_ridgefill_calibration {
+    int32_t layer = 0;
+    int32_t dim = 0;
+    int32_t heads = 0;
+    int32_t kv_heads = 0;
+    int32_t rows = 0;
+    int32_t begin = 0;
+    std::vector<float> queries; // [dim, heads, rows], post-RoPE and cache rotation
+    std::vector<float> beta; // maximum probe key L2 error per KV head
+};
+
 class llama_kv_cache_context;
 
 // graph input of a LOWER / LATE ubatch (one sequence)
@@ -93,6 +104,7 @@ public:
     // (one view per head and layer was 288 copies of the mask, 2.7 GiB at 9K cells on Vulkan)
     ggml_tensor * s1_mask  = nullptr;
     ggml_tensor * ones     = nullptr;
+    ggml_tensor * cert_rows = nullptr; // I32 [n_tokens]: probe cells in the attention cache
     int64_t                    s1_qb = 0;
     std::vector<ggml_tensor *> s1_mask_blk;
     std::vector<ggml_tensor *> s1_ones_blk;

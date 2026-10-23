@@ -3497,6 +3497,9 @@ private:
         const auto & tparams = slot.task->params;
         selection.ridgefill_s1_window = tparams.ridgefill_s1_window;
         selection.ridgefill_s1_factor = tparams.ridgefill_s1_factor;
+        selection.ridgefill_certificate = tparams.ridgefill_certificate;
+        selection.ridgefill_certificate_tau = tparams.ridgefill_certificate_tau;
+        selection.ridgefill_certificate_cap = tparams.ridgefill_certificate_cap;
         selection.ridgefill_vtail = tparams.ridgefill_vtail;
         selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
         selection.ridgefill_share = tparams.ridgefill_share;
@@ -3515,6 +3518,7 @@ private:
                 completed.s1_probe_kv_pairs = cost.s1_probe_kv_pairs;
             }
             completed.vtail_rows = cost.vtail_rows;
+            if (slot.ridgefill_sweep_params.certificate) { completed.certificate = &slot.ridgefill_sweep->get_certificate(); }
         }
         slot.stats.ridgefill = common_ridgefill_get_report(model_tgt, llama_init->ridgefill(), selection,
                 slot.task->tokens.get_tokens().data(), slot.task->n_tokens(), prefix, rows,
@@ -4166,6 +4170,9 @@ private:
                                     selection.ridgefill_mode = mode;
                                     selection.ridgefill_s1_window = tparams.ridgefill_s1_window;
                                     selection.ridgefill_s1_factor = tparams.ridgefill_s1_factor;
+                                    selection.ridgefill_certificate = tparams.ridgefill_certificate;
+                                    selection.ridgefill_certificate_tau = tparams.ridgefill_certificate_tau;
+                                    selection.ridgefill_certificate_cap = tparams.ridgefill_certificate_cap;
                                     selection.ridgefill_vtail = tparams.ridgefill_vtail;
                                     selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
                                     selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
@@ -4196,6 +4203,9 @@ private:
                                     common_params selection = params_base;
                                     selection.ridgefill_s1_window = tparams.ridgefill_s1_window;
                                     selection.ridgefill_s1_factor = tparams.ridgefill_s1_factor;
+                                    selection.ridgefill_certificate = tparams.ridgefill_certificate;
+                                    selection.ridgefill_certificate_tau = tparams.ridgefill_certificate_tau;
+                                    selection.ridgefill_certificate_cap = tparams.ridgefill_certificate_cap;
                                     selection.ridgefill_vtail = tparams.ridgefill_vtail;
                                     selection.ridgefill_vtail_rows = tparams.ridgefill_vtail_rows;
                                     selection.ridgefill_share = tparams.ridgefill_share;
@@ -4225,6 +4235,9 @@ private:
                                 sweep_params.s1 = tparams.ridgefill_s1_window > 0;
                                 sweep_params.s1_window = tparams.ridgefill_s1_window;
                                 sweep_params.s1_factor = tparams.ridgefill_s1_factor;
+                                sweep_params.certificate = tparams.ridgefill_certificate;
+                                sweep_params.certificate_tau = tparams.ridgefill_certificate_tau;
+                                sweep_params.certificate_cap = tparams.ridgefill_certificate_cap;
                                 sweep_params.projector = rf;
                                 sweep_params.special_exact = tparams.ridgefill_special_exact;
                                 sweep_params.lexical = tparams.ridgefill_lexical;
@@ -5671,6 +5684,8 @@ static json get_res_props(const server_context_meta & meta, const common_params 
             { "lexical", params.ridgefill_lexical },
             { "special_exact", params.ridgefill_special_exact }, { "header_rows", params.ridgefill_header_rows },
             { "qattn_window_mode", params.ridgefill_qattn_window_mode }, { "qattn_turn_cap", params.ridgefill_qattn_turn_cap },
+            { "certificate", params.ridgefill_certificate },
+            { "certificate_tau", params.ridgefill_certificate_tau }, { "certificate_cap", params.ridgefill_certificate_cap },
             { "s1_window", params.ridgefill_s1_window }, { "s1_factor", params.ridgefill_s1_factor },
             { "vtail", params.ridgefill_vtail }, { "vtail_rows", params.ridgefill_vtail_rows },
         };

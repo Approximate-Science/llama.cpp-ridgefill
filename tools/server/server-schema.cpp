@@ -122,6 +122,21 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
             if (count < 1 || count > INT32_MAX) { throw std::invalid_argument("ridgefill_vtail_rows has an invalid row count"); }
             ctx.params.ridgefill_vtail_rows = int32_t(count);
         }));
+    add((new field_bool("ridgefill_certificate", params.ridgefill_certificate))
+        ->set_desc("RidgeFill: empirical S1 interval-softmax selection"));
+    for (const auto & name : {"ridgefill_certificate_tau", "ridgefill_certificate_cap"}) {
+        const bool tau = std::string(name) == "ridgefill_certificate_tau";
+        add((new field_num(name, tau ? params.ridgefill_certificate_tau : params.ridgefill_certificate_cap))
+            ->set_handler([tau, name](field_eval_context & ctx, const json & data) {
+                const auto & value = data.at(name);
+                const double number = value.is_number() ? value.get<double>() : -1.0;
+                if (!std::isfinite(number) || number < 0 || number > 1) {
+                    throw std::invalid_argument(std::string(name) + " must be in [0, 1]");
+                }
+                if (tau) { ctx.params.ridgefill_certificate_tau = number; }
+                else { ctx.params.ridgefill_certificate_cap = number; }
+            }));
+    }
     add((new field_bool("ridgefill_lexical", params.ridgefill_lexical))
         ->set_desc("RidgeFill: reserve rare question-matching prefix spans"));
     add((new field_bool("ridgefill_special_exact", params.ridgefill_special_exact))
@@ -567,6 +582,9 @@ task_params eval_llama_cmpl_schema(
     params.ridgefill_mode = params_base.ridgefill_mode;
     params.ridgefill_s1_window = params_base.ridgefill_s1_window;
     params.ridgefill_s1_factor = params_base.ridgefill_s1_factor;
+    params.ridgefill_certificate = params_base.ridgefill_certificate;
+    params.ridgefill_certificate_tau = params_base.ridgefill_certificate_tau;
+    params.ridgefill_certificate_cap = params_base.ridgefill_certificate_cap;
     params.ridgefill_vtail = params_base.ridgefill_vtail;
     params.ridgefill_vtail_rows = params_base.ridgefill_vtail_rows;
     params.ridgefill_share = params_base.ridgefill_share;
@@ -606,13 +624,16 @@ task_params eval_llama_cmpl_schema(
                 params.sampling.reasoning_budget_forced.size());
     }
 
-    if (params.ridgefill && params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail || params.ridgefill_lexical) && params_base.ridgefill_path.empty()) {
+    if (params.ridgefill && params.ridgefill_mode != "off" && (params.ridgefill_s1_window > 0 || params.ridgefill_vtail || params.ridgefill_lexical || params.ridgefill_certificate) && params_base.ridgefill_path.empty()) {
         throw std::invalid_argument("RidgeFill: S1/vtail/lexical requires a server started with --ridgefill");
     }
     if (!params_base.ridgefill_path.empty()) {
         common_params selection = params_base;
         selection.ridgefill_s1_window = params.ridgefill_s1_window;
         selection.ridgefill_s1_factor = params.ridgefill_s1_factor;
+        selection.ridgefill_certificate = params.ridgefill_certificate;
+        selection.ridgefill_certificate_tau = params.ridgefill_certificate_tau;
+        selection.ridgefill_certificate_cap = params.ridgefill_certificate_cap;
         selection.ridgefill_vtail = params.ridgefill_vtail;
         selection.ridgefill_vtail_rows = params.ridgefill_vtail_rows;
         selection.ridgefill_share = params.ridgefill_share;

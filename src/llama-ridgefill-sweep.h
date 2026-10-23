@@ -94,3 +94,29 @@ std::vector<double> llama_ridgefill_sweep_question_mass(
         llama_context & ctx, int32_t seq_id, int32_t n_tokens, int32_t window_end,
         const std::vector<int32_t> & layers, const std::vector<ggml_tensor *> & windows);
 
+
+struct llama_ridgefill_certificate_result {
+    double tau = 0.01;
+    double cap = 0.23;
+    int32_t row_cap = 0;
+    int32_t flagged = 0;
+    int32_t dropped = 0;
+    int32_t probe_rows = 0;
+    bool capped = false;
+    double macs = 0;
+    double seconds = 0;
+    size_t compute_bytes = 0;
+    std::vector<int32_t> layers;
+    std::vector<std::vector<float>> beta;
+    std::vector<int32_t> added;
+};
+
+// Conditional on |logit error| <= delta for uncertain keys. Exact keys have zero radius.
+ggml_tensor * llama_ridgefill_interval_upper(ggml_context * ctx, ggml_tensor * scores,
+        ggml_tensor * delta, ggml_tensor * uncertain, ggml_tensor * mask);
+
+std::vector<double> llama_ridgefill_sweep_certificate(llama_context & ctx, int32_t seq,
+        int32_t n_tokens, int32_t prefix, llama_ridgefill_certificate_result & result);
+
+std::vector<int32_t> llama_ridgefill_certificate_select(const std::vector<double> & upper,
+        const std::vector<int32_t> & base, llama_ridgefill_certificate_result & result);

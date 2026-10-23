@@ -117,7 +117,7 @@ def validate_ridgefill_report(report: dict | None, n_prompt: int, mode: str) -> 
             report["n_prefix"] + report["n_exact_tail"] != n_prompt):
         raise EvalError("RidgeFill report row counts do not cover the prompt")
     sources = report.get("n_exact_prefix_by_source", {})
-    if (not isinstance(sources, dict) or set(sources) not in ({"class", "digit", "special", "header", "qattn"}, {"class", "digit", "special", "header", "qattn", "s1"}) or
+    if (not isinstance(sources, dict) or set(sources) - {"s1", "certificate", "lexical"} != {"class", "digit", "special", "header", "qattn"} or
             any(type(value) is not int or value < 0 for value in sources.values()) or
             sum(sources.values()) + report["n_cached_exact_prefix"] != report["n_exact_prefix"]):
         raise EvalError("RidgeFill report exact-row breakdown does not match its total")
@@ -132,6 +132,26 @@ def validate_ridgefill_report(report: dict | None, n_prompt: int, mode: str) -> 
                 any(sources[key] != 0 for key in ("class", "digit", "header", "qattn")) or
                 any(type(s1.get(key)) not in (int, float) or not math.isfinite(s1[key]) or s1[key] < 0 for key in ("macs_fill", "macs_probe"))):
             raise EvalError("invalid S1 window/source/cost reporting")
+    if ("certificate" in sources) != ("certificate" in report):
+        raise EvalError("certificate reporting needs source counts and selection metadata")
+    if "certificate" in report:
+        cert = report["certificate"]
+        if (not isinstance(cert, dict) or "s1" not in report or cert.get("enabled") is not True or
+                any(type(cert.get(k)) not in (int, float) or not math.isfinite(cert[k]) or not 0 <= cert[k] <= 1 for k in ("tau", "cap")) or
+                any(type(cert.get(k)) is not int or cert[k] < 0 for k in ("row_cap", "flagged", "n_added", "dropped", "probe_rows", "compute_bytes"))):
+            raise EvalError("invalid certificate parameters/counts")
+        added, beta, layers = cert.get("added"), cert.get("beta"), cert.get("layers")
+        if (not isinstance(added, list) or any(type(i) is not int or not 0 <= i < report["n_prefix"] for i in added) or
+                added != sorted(set(added)) or cert["n_added"] != len(added) or sources["certificate"] != len(added) or
+                cert["row_cap"] != math.floor(cert["cap"]*report["n_prefix"]) or report["n_exact_prefix"] > cert["row_cap"] or
+                cert["flagged"] > report["n_prefix"] or cert["flagged"] < cert["n_added"] + cert["dropped"] or
+                cert.get("capped") is not (cert["dropped"] > 0) or cert.get("complete") is not (cert["dropped"] == 0) or
+                cert["probe_rows"] != report["s1"]["window"][1] - report["s1"]["window"][0] or
+                not isinstance(layers, list) or not layers or any(type(i) is not int or i < 0 for i in layers) or layers != sorted(set(layers)) or
+                not isinstance(beta, list) or len(beta) != len(layers) or
+                any(not isinstance(heads, list) or not heads or any(type(x) not in (int, float) or not math.isfinite(x) or x < 0 for x in heads) for heads in beta) or
+                any(type(cert.get(k)) not in (int, float) or not math.isfinite(cert[k]) or cert[k] < 0 for k in ("macs", "seconds"))):
+            raise EvalError("invalid certificate selection/calibration reporting")
     if "vtail" in report:
         vtail = report["vtail"]
         if (not isinstance(vtail, dict) or type(vtail.get("rows")) is not int or not 0 < vtail["rows"] <= report["n_exact_tail"] or
@@ -252,8 +272,9 @@ def reporting_summary(records: list[dict], arm: str) -> dict | None:
     totals = {key: sum(report[key] for report in reports)
               for key in ("n_prompt", "n_prefix", "n_filled", "n_exact_prefix", "n_cached_exact_prefix", "n_exact_tail")}
     source_keys = ("class", "digit", "special", "header", "qattn")
-    if any("s1" in report["n_exact_prefix_by_source"] for report in reports):
-        source_keys += ("s1",)
+    for optional in ("s1", "lexical", "certificate"):
+        if any(optional in report["n_exact_prefix_by_source"] for report in reports):
+            source_keys += (optional,)
     totals["n_exact_prefix_by_source"] = {key: sum(report["n_exact_prefix_by_source"].get(key, 0) for report in reports)
                                           for key in source_keys}
     totals["tokens_skipped"] = totals["n_filled"] / totals["n_prompt"] if totals["n_prompt"] else 0.0

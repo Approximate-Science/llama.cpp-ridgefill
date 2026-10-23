@@ -14,7 +14,7 @@ server_ridgefill_sweep::server_ridgefill_sweep() = default;
 server_ridgefill_sweep::~server_ridgefill_sweep() = default;
 
 const char * server_ridgefill_sweep::phase_name() const {
-    static const char * names[] = {"lower", "mass", "rows", "s1_fill", "s1_probe", "s1_rows", "prefix", "tail", "external", "done"};
+    static const char * names[] = {"lower", "mass", "rows", "s1_fill", "s1_probe", "s1_rows", "certificate", "prefix", "tail", "external", "done"};
     return names[int(next)];
 }
 
@@ -243,6 +243,7 @@ void server_ridgefill_sweep::sweep_s1_probe(llama_context * ctx, llama_seq_id se
         if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
             throw std::runtime_error("RidgeFill S1: S1_PROBE was refused");
         }
+        if (params.certificate) { ctx->ridgefill_certificate_start(seq); }
     }
     const int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), win_end - position});
     const uint64_t pairs = uint64_t(count) * sweep_cache_rows(sweep_cache(ctx), seq);
@@ -276,6 +277,26 @@ void server_ridgefill_sweep::select_s1_rows(llama_context * ctx, llama_seq_id se
     const auto selected = llama_ridgefill_sweep_top_k(s1_mass, params.n_prefix, std::max(1, count), lexical.rows);
     rows.clear();
     std::set_union(selected.begin(), selected.end(), special.begin(), special.end(), std::back_inserter(rows));
+    if (params.certificate) {
+        certificate.tau = params.certificate_tau; certificate.cap = params.certificate_cap;
+        if (rows.size() > size_t(std::floor(certificate.cap*params.n_prefix))) {
+            throw std::runtime_error("RidgeFill certificate: existing exact rows exceed the total cap");
+        }
+        certificate_upper.assign(params.n_prefix, 0.0);
+    }
+}
+
+bool server_ridgefill_sweep::sweep_certificate(llama_context * ctx, llama_seq_id seq,
+        const server_ridgefill_sweep_params & params) {
+    auto upper = llama_ridgefill_sweep_certificate(*ctx, seq, params.n_tokens, params.n_prefix, certificate);
+    for (size_t i = 0; i < upper.size(); ++i) { certificate_upper[i] = std::max(certificate_upper[i], upper[i]); }
+    if (certificate.layers.size() == ctx->ridgefill_certificate_data(seq).size()) {
+        rows = llama_ridgefill_certificate_select(certificate_upper, rows, certificate);
+        ctx->ridgefill_certificate_clear(seq);
+        certificate_upper.clear();
+        return true;
+    }
+    return false;
 }
 #endif
 
@@ -358,6 +379,7 @@ void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq
 }
 
 void server_ridgefill_sweep::cancel(llama_context * ctx, llama_seq_id seq) {
+    ctx->ridgefill_certificate_clear(seq);
     if (active) {
         llama_synchronize(ctx);
         llama_memory_seq_rm(llama_get_memory(ctx), seq, -1, -1);
@@ -374,6 +396,10 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
         const server_ridgefill_sweep_params & params) {
     if (!std::isfinite(params.qattn_share) || params.qattn_share < 0.0f || params.qattn_share > 1.0f) {
         throw std::runtime_error("RidgeFill quality+qattn: qattn share must be finite and in [0, 1]");
+    }
+    if (params.certificate && (!params.s1 || !std::isfinite(params.certificate_tau) || params.certificate_tau < 0 ||
+            params.certificate_tau > 1 || !std::isfinite(params.certificate_cap) || params.certificate_cap < 0 || params.certificate_cap > 1)) {
+        throw std::runtime_error("RidgeFill certificate: requires S1, tau and cap in [0, 1]");
     }
     if (params.lexical && params.qattn_share == 0) {
         throw std::runtime_error("RidgeFill lexical: requires positive question-attention share for its exact-row budget");
@@ -469,11 +495,18 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
             } else {
                 sweep.select_s1_rows(ctx, seq, tokens, params);
                 sweep.position = 0;
-                sweep.next = phase::prefix;
+                sweep.next = params.certificate ? phase::certificate : phase::prefix;
             }
             break;
 #else
             throw std::runtime_error("RidgeFill S1: libllama C API v2 is required");
+#endif
+        case phase::certificate:
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+            if (sweep.sweep_certificate(ctx, seq, params)) { sweep.next = phase::prefix; }
+            break;
+#else
+            throw std::runtime_error("RidgeFill certificate: libllama C API v2 is required");
 #endif
         case phase::prefix:
             sweep.sweep_prefix(ctx, seq, tokens, params);

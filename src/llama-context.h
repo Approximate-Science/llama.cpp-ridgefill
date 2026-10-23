@@ -141,6 +141,9 @@ struct llama_context {
     int32_t ridgefill_set_alpha(float alpha);
     int32_t ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n);
     int32_t ridgefill_seq_set_part(llama_seq_id seq_id, const llama_ridgefill_part_params * params);
+    void ridgefill_certificate_start(llama_seq_id seq);
+    void ridgefill_certificate_clear(llama_seq_id seq);
+    const std::vector<llama_ridgefill_calibration> & ridgefill_certificate_data(llama_seq_id seq) const;
     int32_t ridgefill_seq_get_s1_mass(llama_seq_id seq_id, double * out, int32_t n) const;
     int32_t ridgefill_seq_set_vtail(llama_seq_id seq_id, bool enabled, int32_t rows);
     int32_t ridgefill_seq_get_vtail_scales(llama_seq_id seq_id, float * out, int32_t n) const;
@@ -348,6 +351,9 @@ private:
         std::vector<float> scales;
     };
     std::array<ridgefill_vtail_state, LLAMA_MAX_SEQ> ridgefill_vtail;
+    std::array<std::vector<llama_ridgefill_calibration>, LLAMA_MAX_SEQ> ridgefill_calibration;
+    std::array<bool, LLAMA_MAX_SEQ> ridgefill_certificate_on = {};
+    bool ridgefill_certificate_reserve = false;
     uint64_t ridgefill_part_gen = 0;
 
     // sched_reserve: the RidgeFill graph being reserved (graph_params uses it instead of the context's state), its

@@ -1609,6 +1609,10 @@ void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outpu
         s1.part     = LLM_RIDGEFILL_PART_S1_PROBE;
         s1.s1_probe = true;
         variants.push_back(s1);
+        if (ridgefill_certificate_reserve) {
+            s1.certificate = true;
+            variants.push_back(s1);
+        }
     }
 
     static const char * part_names[] = { "full", "lower", "late", "s1_fill", "s1_probe" };
@@ -1654,6 +1658,7 @@ void llama_context::ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end) {
     ridgefill_rows[seq_id].clear();
 
     // per prompt, as the rows: no S1 mass yet, vtail off until set again (a request's vtail never leaks into the next)
+    ridgefill_certificate_clear(seq_id);
     ridgefill_s1_mass[seq_id].clear();
     ridgefill_s1_mass_ok[seq_id] = false;
     ridgefill_vtail[seq_id] = ridgefill_vtail_state();
@@ -1769,6 +1774,7 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
         if (ps.part != LLM_RIDGEFILL_PART_FULL || !seq_empty) {
             return refuse("LOWER starts on an empty sequence in FULL mode");
         }
+        ridgefill_certificate_clear(seq_id);
         ridgefill_s1_mass[seq_id].clear(); // a new prompt: no probe yet, no vtail scales applied
         ridgefill_s1_mass_ok[seq_id] = false;
         ridgefill_vtail[seq_id].scales.clear();
@@ -1826,6 +1832,53 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
     ps = std::move(next);
 
     return 0;
+}
+
+void llama_context::ridgefill_certificate_clear(llama_seq_id seq) {
+    ridgefill_certificate_on[seq] = false;
+    ridgefill_calibration[seq].clear();
+}
+
+void llama_context::ridgefill_certificate_start(llama_seq_id seq) {
+    if (seq < 0 || seq >= LLAMA_MAX_SEQ || ridgefill_part[seq].part != LLM_RIDGEFILL_PART_S1_PROBE) {
+        throw std::runtime_error("RidgeFill certificate: calibration needs S1_PROBE");
+    }
+    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory.get());
+    const auto & ps = ridgefill_part[seq];
+    std::vector<llama_ridgefill_calibration> data;
+    uint64_t query_elements = 0;
+    for (uint32_t il = ridgefill->split; il < model.hparams.n_layer(); ++il) {
+        if (model.hparams.is_recr(il)) { continue; }
+        const auto type = hybrid->get_mem_attn()->get_k_storage(il)->type;
+        if (type != GGML_TYPE_F32 && type != GGML_TYPE_F16 && type != GGML_TYPE_BF16) {
+            throw std::runtime_error("RidgeFill certificate: key cache must be f32, f16 or bf16");
+        }
+        llama_ridgefill_calibration c;
+        c.layer = il; c.dim = model.hparams.n_embd_head_k(il);
+        c.heads = model.hparams.n_head(il); c.kv_heads = model.hparams.n_head_kv(il);
+        c.rows = ps.s1_end - ps.s1_begin; c.begin = ps.s1_begin;
+        const uint64_t size = uint64_t(c.dim)*c.heads*c.rows;
+        query_elements += size;
+        if (query_elements > (uint64_t(1) << 28)) {
+            throw std::runtime_error("RidgeFill certificate: probe queries exceed the 1 GiB host limit");
+        }
+        c.queries.resize(size);
+        c.beta.assign(c.kv_heads, 0.0f);
+        data.push_back(std::move(c));
+    }
+    ridgefill_calibration[seq] = std::move(data);
+    ridgefill_certificate_on[seq] = true;
+    if (!ridgefill_certificate_reserve) {
+        ridgefill_certificate_reserve = true;
+        sched_need_reserve = true;
+    }
+}
+
+const std::vector<llama_ridgefill_calibration> & llama_context::ridgefill_certificate_data(llama_seq_id seq) const {
+    if (seq < 0 || seq >= LLAMA_MAX_SEQ || !ridgefill_certificate_on[seq] || !ridgefill_s1_mass_ok[seq]) {
+        throw std::runtime_error("RidgeFill certificate: complete probe calibration is unavailable");
+    }
+    return ridgefill_calibration[seq];
 }
 
 int32_t llama_context::ridgefill_seq_get_s1_mass(llama_seq_id seq_id, double * out, int32_t n) const {
@@ -2025,6 +2078,7 @@ llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_uba
     }
 
     res.s1_probe = ps.part == LLM_RIDGEFILL_PART_S1_PROBE;
+    res.certificate = res.s1_probe && ridgefill_certificate_on[seq];
 
     const auto & vt = ridgefill_vtail[seq];
     if (ps.part == LLM_RIDGEFILL_PART_LATE && !fill && vt.on && ridgefill_p_end[seq] > 0 && ubatch.pos[0] == ridgefill_p_end[seq]) {
@@ -2704,6 +2758,32 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 }
                 const auto & ps = ridgefill_part[seq];
                 ridgefill_s1_mass_ok[seq] = ps.part == LLM_RIDGEFILL_PART_S1_PROBE && ps.late_end == ps.s1_end;
+            }
+
+            if (!res->t_rf_calibration.empty()) {
+                ggml_backend_sched_synchronize(sched.get());
+                auto & data = ridgefill_calibration[seq];
+                const auto & ps = ridgefill_part[seq];
+                const int32_t first = ubatch.pos[0] - ps.s1_begin;
+                for (const auto & output : res->t_rf_calibration) {
+                    auto it = std::find_if(data.begin(), data.end(), [&](const auto & c) { return c.layer == output.layer; });
+                    GGML_ASSERT(it != data.end() && first >= 0 && first + int32_t(ubatch.n_tokens) <= it->rows);
+                    const size_t count = size_t(it->dim)*it->heads*ubatch.n_tokens;
+                    float * dst = it->queries.data() + size_t(first)*it->dim*it->heads;
+                    ggml_backend_tensor_get(output.queries, dst, 0, count*sizeof(float));
+                    std::vector<float> errors(ggml_nelements(output.errors));
+                    ggml_backend_tensor_get(output.errors, errors.data(), 0, errors.size()*sizeof(float));
+                    for (size_t i = 0; i < count; ++i) {
+                        if (!std::isfinite(dst[i])) { throw std::runtime_error("RidgeFill certificate: non-finite probe query"); }
+                    }
+                    for (size_t i = 0; i < errors.size(); ++i) {
+                        if (!std::isfinite(errors[i]) || errors[i] < 0) {
+                            throw std::runtime_error("RidgeFill certificate: non-finite probe key error");
+                        }
+                        auto & beta = it->beta[i % it->kv_heads];
+                        beta = std::max(beta, std::nextafter(errors[i]*(1.0f + 1e-6f), INFINITY));
+                    }
+                }
             }
 
             // vtail: the scales the first tail ubatch applied

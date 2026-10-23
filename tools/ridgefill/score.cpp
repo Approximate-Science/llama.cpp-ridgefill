@@ -40,6 +40,8 @@ struct options {
     bool vtail = false, explicit_window_end = false;
     int32_t s1_window = 0, vtail_rows = 512;
     double s1_factor = 1.0;
+    bool certificate = false;
+    double certificate_tau = 0.01, certificate_cap = 0.23;
 };
 
 static int32_t integer(const std::string & value) {
@@ -95,6 +97,13 @@ static options parse(int argc, char ** argv) {
         else if (key == "--qattn-window-mode" || key == "--ridgefill-qattn-window-mode") { o.window_mode = value; }
         else if (key == "--qattn-turn-cap" || key == "--ridgefill-qattn-turn-cap") { o.turn_cap = integer(value); }
         else if (key == "--header-rows" || key == "--ridgefill-header-rows") { o.header_rows = integer(value); }
+        else if (key == "--ridgefill-certificate" || key == "--ridgefill-certificate-tau" || key == "--ridgefill-certificate-cap") {
+            common_params selection;
+            common_ridgefill_set_option(selection, key, value);
+            if (key == "--ridgefill-certificate") { o.certificate = selection.ridgefill_certificate; }
+            if (key == "--ridgefill-certificate-tau") { o.certificate_tau = selection.ridgefill_certificate_tau; }
+            if (key == "--ridgefill-certificate-cap") { o.certificate_cap = selection.ridgefill_certificate_cap; }
+        }
         else if (key == "--ridgefill-lexical") {
             require(value == "on" || value == "off", "--ridgefill-lexical must be on or off"); o.lexical = value == "on";
         }
@@ -137,6 +146,9 @@ static options parse(int argc, char ** argv) {
     selection.ridgefill_qattn_share = o.qattn_share;
     selection.ridgefill_s1_window = o.s1_window;
     selection.ridgefill_s1_factor = o.s1_factor;
+    selection.ridgefill_certificate = o.certificate;
+    selection.ridgefill_certificate_tau = o.certificate_tau;
+    selection.ridgefill_certificate_cap = o.certificate_cap;
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_lexical = o.lexical;
@@ -214,6 +226,9 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     selection.ridgefill_qattn_share = o.qattn_share;
     selection.ridgefill_s1_window = o.s1_window;
     selection.ridgefill_s1_factor = o.s1_factor;
+    selection.ridgefill_certificate = o.certificate;
+    selection.ridgefill_certificate_tau = o.certificate_tau;
+    selection.ridgefill_certificate_cap = o.certificate_cap;
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_lexical = o.lexical;
@@ -257,6 +272,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         p.qattn_window_mode = o.window_mode; p.qattn_turn_cap = o.turn_cap;
         p.qattn_end = window_end; p.logits_begin = begin; p.logits_end = end; p.type = tensor_type(o.hidden);
         p.s1 = s1; p.s1_window = o.s1_window; p.s1_factor = o.s1_factor; p.projector = rf; p.special_exact = o.special_exact;
+        p.certificate = o.certificate; p.certificate_tau = o.certificate_tau; p.certificate_cap = o.certificate_cap;
         p.vtail = vtail; p.vtail_rows = o.vtail_rows; p.lexical = o.lexical;
         try {
             while (true) {
@@ -308,6 +324,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         completed.s1_probe_kv_pairs = cost.s1_probe_kv_pairs;
     }
     if (vtail) { completed.vtail_rows = cost.vtail_rows; }
+    if (o.certificate && s1) { completed.certificate = &sweep.get_certificate(); }
     const auto report = common_ridgefill_get_report(model, rf, selection, doc.ids.data(), n, prefix, rows, o.mode,
             qattn ? sweep.window_begin() : -1, qattn ? sweep.window_end() : -1, 0, -1, s1 || vtail ? &completed : nullptr, o.lexical ? &sweep.get_lexical() : nullptr);
     const double modeled = report.macs_s1_fill + report.macs_s1_probe + report.macs_vtail;
@@ -320,6 +337,9 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         result["parameters"]["vtail_rows"] = o.vtail_rows;
     }
     if (o.lexical) { result["parameters"]["lexical"] = true; }
+    if (o.certificate) {
+        result["parameters"].update({{"certificate", true}, {"certificate_tau", o.certificate_tau}, {"certificate_cap", o.certificate_cap}});
+    }
     result["ridgefill"] = json::parse(report.to_json().dump());
     if ((o.s1_window > 0) || o.vtail) {
         result["parameters"].update({{"s1", (o.s1_window > 0)}, {"s1_window", o.s1_window}, {"s1_factor", o.s1_factor},
@@ -353,6 +373,7 @@ int main(int argc, char ** argv) {
                 "--qattn-end is an alias. NLL with endpoint N reads scored targets; the G3 wrapper uses N-K.\n"
                 "Chat: --special-exact off --header-rows 0 --qattn-window-mode last --qattn-turn-cap 256\n"
                 "turn uses [max(after_last_user_header,END-cap),END), searching only before END; missing/empty turns are refused.\n"
+                "Certificate: --ridgefill-certificate on|off, --ridgefill-certificate-tau 0.01, --ridgefill-certificate-cap 0.23 (requires S1).\n"
                 "Lexical: --ridgefill-lexical on|off (default off; quality+qattn, endpoint N-K).\n"
                 "S1/vtail (C API v2): --ridgefill-s1-window 0 (use 256 to enable) --ridgefill-s1-factor 1 --ridgefill-vtail off --ridgefill-vtail-rows 512\n"
                 "S1/vtail default to endpoint N-K in this scorer; vtail calibration must precede scored targets.\n"

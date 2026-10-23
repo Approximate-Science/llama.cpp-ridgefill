@@ -391,3 +391,169 @@ std::vector<int32_t> llama_ridgefill_sweep_top_k(const std::vector<double> & mas
     std::sort(rows.begin(), rows.end());
     return rows;
 }
+
+ggml_tensor * llama_ridgefill_interval_upper(ggml_context * ctx, ggml_tensor * scores,
+        ggml_tensor * delta, ggml_tensor * uncertain, ggml_tensor * mask) {
+    GGML_ASSERT(scores->type == GGML_TYPE_F32 && delta->ne[0] == 1 && delta->ne[1] == scores->ne[1]);
+    ggml_tensor * radius = ggml_mul(ctx, ggml_repeat_4d(ctx, delta, scores->ne[0], scores->ne[1], 1, 1), uncertain);
+    ggml_tensor * lower = ggml_sub(ctx, scores, radius);
+    if (mask) { lower = ggml_add(ctx, lower, mask); }
+    ggml_tensor * p = ggml_soft_max_ext(ctx, lower, nullptr, 1.0f, 0.0f);
+    // Round upward before the logit transform; clamp underflow upward as well.
+    p = ggml_clamp(ctx, ggml_scale_bias(ctx, p, 1.0f, 8.0f*std::numeric_limits<float>::epsilon()),
+            std::numeric_limits<float>::min(), 1.0f);
+    ggml_tensor * complement = ggml_scale_bias(ctx, p, -1.0f, 1.0f);
+    ggml_tensor * logit = ggml_sub(ctx, ggml_log(ctx, p), ggml_log(ctx, complement));
+    return ggml_sigmoid(ctx, ggml_add(ctx, logit, ggml_scale(ctx, radius, 2.0f)));
+}
+
+std::vector<int32_t> llama_ridgefill_certificate_select(const std::vector<double> & upper,
+        const std::vector<int32_t> & base, llama_ridgefill_certificate_result & result) {
+    const int32_t prefix = upper.size();
+    if (!std::isfinite(result.tau) || result.tau < 0 || result.tau > 1 ||
+            !std::isfinite(result.cap) || result.cap < 0 || result.cap > 1) {
+        throw std::runtime_error("RidgeFill certificate: tau and cap must be in [0, 1]");
+    }
+    result.row_cap = int32_t(std::floor(result.cap*prefix));
+    if (!std::is_sorted(base.begin(), base.end()) || std::adjacent_find(base.begin(), base.end()) != base.end() ||
+            (!base.empty() && (base.front() < 0 || base.back() >= prefix)) || base.size() > size_t(result.row_cap)) {
+        throw std::runtime_error("RidgeFill certificate: existing exact rows exceed the total cap or are invalid");
+    }
+    result.flagged = 0; result.dropped = 0; result.capped = false; result.added.clear();
+    std::vector<int32_t> candidates;
+    for (int32_t i = 0; i < prefix; ++i) {
+        if (!std::isfinite(upper[i]) || upper[i] < 0 || upper[i] > 1) {
+            throw std::runtime_error("RidgeFill certificate: non-finite or invalid probability bound");
+        }
+        if (upper[i] > result.tau) {
+            ++result.flagged;
+            if (!std::binary_search(base.begin(), base.end(), i)) { candidates.push_back(i); }
+        }
+    }
+    std::sort(candidates.begin(), candidates.end(), [&](int32_t a, int32_t b) {
+        return upper[a] > upper[b] || (upper[a] == upper[b] && a < b);
+    });
+    const size_t count = std::min(candidates.size(), size_t(result.row_cap) - base.size());
+    result.dropped = candidates.size() - count;
+    result.capped = result.dropped != 0;
+    result.added.assign(candidates.begin(), candidates.begin() + count);
+    std::sort(result.added.begin(), result.added.end());
+    std::vector<int32_t> rows;
+    std::set_union(base.begin(), base.end(), result.added.begin(), result.added.end(), std::back_inserter(rows));
+    return rows;
+}
+
+std::vector<double> llama_ridgefill_sweep_certificate(llama_context & ctx, int32_t seq,
+        int32_t n_tokens, int32_t prefix, llama_ridgefill_certificate_result & result) {
+    const auto start = ggml_time_us();
+    ctx.synchronize();
+    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(ctx.get_memory());
+    const auto & calibration = ctx.ridgefill_certificate_data(seq);
+    if (!hybrid || calibration.empty() || prefix <= 0 || prefix >= n_tokens) {
+        throw std::runtime_error("RidgeFill certificate: invalid hybrid cache, calibration or prefix");
+    }
+    auto & cache = *hybrid->get_mem_attn();
+    const auto cells = llama_ridgefill_sweep_key_rows(cache, seq, n_tokens);
+    const auto & hp = ctx.get_model().hparams;
+    std::vector<ggml_backend_t> backends;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(ctx.get_sched()); ++i) {
+        backends.push_back(ggml_backend_sched_get_backend(ctx.get_sched(), i));
+    }
+    std::vector<double> upper(prefix, 0.0);
+    const size_t index = result.layers.size();
+    if (index >= calibration.size()) { throw std::runtime_error("RidgeFill certificate: every late layer is already complete"); }
+    if (index == 0) { result.beta.clear(); result.macs = 0; result.compute_bytes = 0; result.seconds = 0; }
+    { // one late layer per scheduling iteration
+        const auto & c = calibration[index];
+        const int32_t rep = c.heads / c.kv_heads;
+        result.probe_rows = c.rows;
+        result.layers.push_back(c.layer); result.beta.push_back(c.beta);
+        const int32_t end = c.begin + c.rows;
+        const int32_t begin = end - c.rows;
+        const int64_t qb = llama_ridgefill_query_block(n_tokens, c.rows, LLAMA_RIDGEFILL_QMASS_BLOCK);
+        const size_t graph_size = 128 + size_t(rep)*((c.rows + qb - 1)/qb)*32;
+        llm_graph_result graph(graph_size);
+        ggml_context * gc = graph.get_ctx();
+        ggml_cgraph * gf = graph.get_gf();
+        auto * qi = ggml_new_tensor_3d(gc, GGML_TYPE_F32, c.dim, c.rows, rep);
+        auto * ri = ggml_new_tensor_1d(gc, GGML_TYPE_I32, n_tokens);
+        auto * bi = ggml_new_tensor_1d(gc, GGML_TYPE_F32, 1);
+        auto * uncertain = ggml_new_tensor_1d(gc, GGML_TYPE_F32, n_tokens);
+        auto * mask = ggml_new_tensor_2d(gc, GGML_TYPE_F32, n_tokens, 1);
+        for (auto * input : {qi, ri, bi, uncertain, mask}) { ggml_set_input(input); }
+        ggml_tensor * storage = cache.get_k_storage(c.layer);
+        auto * stream = ggml_view_2d(gc, storage, storage->ne[0], storage->ne[1], storage->nb[1], cache.get_stream(seq)*storage->nb[2]);
+        if (!ggml_is_contiguous(stream) || stream->ne[0] != int64_t(c.dim)*c.kv_heads ||
+                stream->ne[1] > std::numeric_limits<int32_t>::max()/c.kv_heads) {
+            throw std::runtime_error("RidgeFill certificate: unsupported key storage layout");
+        }
+        stream = ggml_reshape_2d(gc, stream, c.dim, stream->ne[1]*c.kv_heads);
+        auto * keys = ggml_get_rows(gc, stream, ri); // one KV head, prompt order
+        std::vector<ggml_tensor *> outputs;
+        ggml_tensor * dep = nullptr;
+        const float scale = hp.f_attention_scale == 0.0f ? 1.0f/std::sqrt(float(c.dim)) : hp.f_attention_scale;
+        for (int32_t h = 0; h < rep; ++h) {
+            for (int32_t q0 = 0; q0 < c.rows; q0 += qb) {
+                const int32_t nq = std::min<int64_t>(qb, c.rows - q0);
+                auto * q = ggml_view_2d(gc, qi, c.dim, nq, qi->nb[1], h*qi->nb[2] + q0*qi->nb[1]);
+                q = llama_ridgefill_follow(gc, q, dep);
+                auto * scores = ggml_mul_mat(gc, keys, q);
+                ggml_prec_set_acc(scores, GGML_PREC_F32);
+                scores = ggml_diag_mask_inf(gc, ggml_scale(gc, scores, scale), begin + q0);
+                auto * norm = ggml_sqrt(gc, ggml_sum_rows(gc, ggml_sqr(gc, q)));
+                auto * delta = ggml_scale(gc, ggml_mul(gc, norm, bi), scale);
+                auto * u = llama_ridgefill_interval_upper(gc, scores, delta, uncertain, mask);
+                auto * maximum = ggml_pool_1d(gc, ggml_cont(gc, ggml_transpose(gc, u)), GGML_OP_POOL_MAX, nq, nq, 0);
+                maximum = ggml_reshape_1d(gc, maximum, n_tokens);
+                ggml_set_output(maximum);
+                ggml_build_forward_expand(gf, maximum);
+                outputs.push_back(maximum);
+                dep = maximum;
+            }
+        }
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(), nullptr, backends.size(), graph_size, false, true));
+        if (!sched || !ggml_backend_sched_alloc_graph(sched.get(), gf)) {
+            throw std::runtime_error("RidgeFill certificate: bound graph allocation failed");
+        }
+        size_t bytes = 0;
+        for (auto * backend : backends) { bytes += ggml_backend_sched_get_buffer_size(sched.get(), backend); }
+        result.compute_bytes = std::max(result.compute_bytes, bytes);
+        LLAMA_LOG_INFO("%s: layer %d certificate compute buffer %.4f MiB\n", __func__, c.layer, bytes/(1024.0*1024.0));
+        std::vector<float> uncertainty(n_tokens, 0.0f), visibility(n_tokens, -INFINITY);
+        for (int32_t i = 0; i < prefix; ++i) { uncertainty[i] = 1.0f; visibility[i] = 0.0f; }
+        for (int32_t i = begin; i < end; ++i) { visibility[i] = 0.0f; }
+        ggml_backend_tensor_set(uncertain, uncertainty.data(), 0, n_tokens*sizeof(float));
+        ggml_backend_tensor_set(mask, visibility.data(), 0, n_tokens*sizeof(float));
+        std::vector<int32_t> indices(n_tokens);
+        std::vector<float> queries(size_t(c.dim)*c.rows*rep);
+        for (int32_t kh = 0; kh < c.kv_heads; ++kh) {
+            for (int32_t i = 0; i < n_tokens; ++i) { indices[i] = cells[i]*c.kv_heads + kh; }
+            for (int32_t h = 0; h < rep; ++h) {
+                for (int32_t t = 0; t < c.rows; ++t) {
+                    const auto * src = c.queries.data() + (size_t(t)*c.heads + kh*rep + h)*c.dim;
+                    std::copy_n(src, c.dim, queries.data() + (size_t(h)*c.rows + t)*c.dim);
+                }
+            }
+            ggml_backend_tensor_set(qi, queries.data(), 0, queries.size()*sizeof(float));
+            ggml_backend_tensor_set(ri, indices.data(), 0, n_tokens*sizeof(int32_t));
+            ggml_backend_tensor_set(bi, &c.beta[kh], 0, sizeof(float));
+            if (ggml_backend_sched_graph_compute(sched.get(), gf) != GGML_STATUS_SUCCESS) {
+                throw std::runtime_error("RidgeFill certificate: bound graph execution failed");
+            }
+            for (auto * output : outputs) {
+                std::vector<float> values(n_tokens);
+                ggml_backend_tensor_get(output, values.data(), 0, n_tokens*sizeof(float));
+                for (int32_t i = 0; i < prefix; ++i) {
+                    if (!std::isfinite(values[i]) || values[i] < 0 || values[i] > 1) {
+                        throw std::runtime_error("RidgeFill certificate: invalid interval-softmax output");
+                    }
+                    upper[i] = std::max(upper[i], double(values[i]));
+                }
+            }
+        }
+        result.macs += double(c.rows)*hp.n_embd*(hp.n_embd + c.dim*c.kv_heads);
+        result.macs += double(c.heads)*c.rows*c.dim*n_tokens;
+    }
+    result.seconds += (ggml_time_us() - start)*1e-6;
+    return upper;
+}

@@ -120,6 +120,25 @@ class EvaluationTests(unittest.TestCase):
         with self.assertRaises(evaluation.EvalError):
             evaluation.validate_ridgefill_report(bad, 700, "quality+qattn")
 
+    def test_certificate_reporting_and_refusals(self):
+        report = dict(n_prompt=700, n_prefix=100, n_filled=97, n_exact_prefix=3, n_cached_exact_prefix=0, n_exact_tail=600,
+                      n_exact_prefix_by_source=dict.fromkeys(("class", "digit", "special", "header", "qattn"), 0),
+                      tokens_skipped=97/700, macs_exact=100, macs_ridgefill=80, mac_share_skipped=0.2,
+                      s1=dict(window=[650, 700], macs_fill=10, macs_probe=20, probe_kv_pairs=35000, fill_recomputed=True))
+        report["n_exact_prefix_by_source"].update(s1=2, certificate=1)
+        report["certificate"] = dict(enabled=True, tau=0.01, cap=0.23, row_cap=23, flagged=5, n_added=1,
+                                     added=[12], dropped=0, capped=False, complete=True, probe_rows=50,
+                                     compute_bytes=1024, layers=[7], beta=[[1.2, 0.9]], macs=20, seconds=0.01)
+        evaluation.validate_ridgefill_report(report, 700, "quality+qattn")
+        total = evaluation.reporting_summary([dict(candidate=dict(ridgefill=report))], "candidate")
+        self.assertEqual(total["n_exact_prefix_by_source"]["certificate"], 1)
+        for change in ({"row_cap": 22}, {"flagged": 101}, {"beta": [[float("nan")]]}, {"added": [100]},
+                       {"capped": True}, {"n_added": 2}, {"cap": -1}, {"probe_rows": 51}, {"dropped": 5}):
+            bad = copy.deepcopy(report)
+            bad["certificate"].update(change)
+            with self.assertRaises(evaluation.EvalError):
+                evaluation.validate_ridgefill_report(bad, 700, "quality+qattn")
+
     def test_scored_rows_never_filled(self):
         with self.assertRaisesRegex(evaluation.EvalError, "tail-512"):
             evaluation.score_nll(FakeClient(), list(range(700)), "speed", 200, 1, 1)
