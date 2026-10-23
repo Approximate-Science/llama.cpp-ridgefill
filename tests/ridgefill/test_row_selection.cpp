@@ -111,64 +111,42 @@ int main(int argc, char ** argv) {
         check(select(tokens, "off").empty());
         params.ridgefill_qattn_window_mode = "last";
         const auto * vocab = llama_model_get_vocab(model.get());
-        std::vector<llama_token> lexical_tokens(4000, 3 + '~');
+        std::vector<llama_token> lexical_tokens(4000, 3 + ' ');
         auto put = [&](int32_t pos, const std::string & text) {
             for (unsigned char c : text) { lexical_tokens.at(pos++) = 3 + c; }
         };
-        std::fill(lexical_tokens.begin() + 3000, lexical_tokens.end(), 3 + '^');
-        put(100, "ZXQvBlue9");
-        put(400, "DISTRACT7");
-        for (int32_t pos : {700, 900, 1100}) { put(pos, "BOILERKEY"); }
-        put(3900, "asked: zxqvblue9 and boilerkey");
-        auto net = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), lexical_tokens.size(), 3000);
-        check(net.window_begin == 3744 && net.window_end == 4000 && net.row_cap == 150);
-        check(net.matches == std::vector<std::array<int32_t, 2>>({{100, 109}}));
-        check(net.rows.size() == 41 && !net.capped);
-        for (int32_t i = 100; i < 141; ++i) { check(std::binary_search(net.rows.begin(), net.rows.end(), i)); }
-        for (int32_t i : {99, 141, 400, 700, 900, 1100}) { check(!std::binary_search(net.rows.begin(), net.rows.end(), i)); }
+        const std::string needle = "One of the special magic UUIDS for amber-finch is: 1234.";
+        put(100, needle + "\n");
+        put(400, "One of the special magic UUIDS for other-bird is: 5678.\n");
+        put(700, "One of the special magic UUIDS for third-bird is: 9012.\n");
+        put(3960, "the special magic uuid for amber finch");
+        const auto net = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 4000, 3000);
+        check(net.window_begin == 3936 && net.window_end == 4000 && net.row_cap == 150);
+        check(net.rows.size() == needle.size() && !net.capped && net.spans.size() == 1);
+        check(net.rows.front() == 100 && net.rows.back() == 100 + int32_t(needle.size()) - 1);
+        check(net.matches == std::vector<std::array<int32_t, 2>>({{107, 146}}));
         common_params lexical_params;
         lexical_params.ridgefill_mode = "quality+qattn";
         lexical_params.ridgefill_share = 0; lexical_params.ridgefill_digits = 0; lexical_params.ridgefill_alpha = 0;
         lexical_params.ridgefill_qattn_share = 0.2f; lexical_params.ridgefill_lexical = true;
-        auto report = common_ridgefill_get_report(model.get(), rf.get(), lexical_params, lexical_tokens.data(), 4000, 3000,
-                net.rows, lexical_params.ridgefill_mode, 3744, 4000, 0, -1, nullptr, &net);
-        check(report.n_exact_prefix == 41 && report.exact_by_source[6] == 41);
-        check(report.to_json().dump().find("\"n_rows\":41") != std::string::npos);
+        const auto report = common_ridgefill_get_report(model.get(), rf.get(), lexical_params, lexical_tokens.data(), 4000, 3000,
+                net.rows, lexical_params.ridgefill_mode, 3936, 4000, 0, -1, nullptr, &net);
+        check(report.n_exact_prefix == int32_t(needle.size()) && report.exact_by_source[6] == int32_t(needle.size()));
+        check(report.to_json().dump().find("\"span_rows\":80") != std::string::npos);
         refused([&]() { common_ridgefill_get_report(model.get(), rf.get(), lexical_params, lexical_tokens.data(), 4000, 3000,
-                {}, lexical_params.ridgefill_mode, 3744, 4000, 0, -1, nullptr, &net); }, "lexical rows must be exact");
+                {}, lexical_params.ridgefill_mode, 3936, 4000, 0, -1, nullptr, &net); }, "lexical rows must be exact");
         check(common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 4000, 3000, 3800).rows.empty());
-        put(99, " ");
-        const auto spaced = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 4000, 3000);
-        check(spaced.rows.size() == 42 && spaced.rows.front() == 99 && spaced.rows.back() == 140);
-        put(99, "~");
-        put(900, "OTHERKEY!");
-        net = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), lexical_tokens.size(), 3000);
-        check(net.matches.size() == 3 && net.rows.size() == 123);
-        put(900, "BOILERKEY");
-        put(3900, "asked: zXqVbLuE9 and boilerkey");
-        check(common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 4000, 3000).rows == std::vector<llama_pos>(net.rows.begin(), net.rows.begin() + 41));
         const auto user_header = common_tokenize(vocab, "<|im_start|>user\n", false, true);
         const auto turn_end = common_tokenize(vocab, "<|im_end|>", false, true);
-        const int32_t user_begin = 3600 + user_header.size();
+        const std::string query = "the special magic uuid for amber finch";
         std::copy(user_header.begin(), user_header.end(), lexical_tokens.begin() + 3600);
-        put(user_begin, "ZXQvBlue9");
-        std::copy(turn_end.begin(), turn_end.end(), lexical_tokens.begin() + user_begin + 9);
-        put(user_begin + 9 + turn_end.size(), "<|im_start|>assistant\nDISTRACT7");
-        net = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 4000, 3000);
-        check(net.window_end == user_begin + 9 && net.window_begin == user_begin);
-        check(net.rows.size() == 41 && net.matches[0][0] == 100);
+        const int32_t user_begin = 3600 + user_header.size(), user_end = user_begin + query.size();
+        put(user_begin, query);
+        std::copy(turn_end.begin(), turn_end.end(), lexical_tokens.begin() + user_end);
+        put(user_end + turn_end.size(), "<|im_start|>assistant\nother bird");
+        const auto chat = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 4000, 3000);
+        check(chat.window_begin == user_begin && chat.window_end == user_end && chat.rows == net.rows);
         refused([&]() { common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 4000, 3000, 2999); }, "selector bounds");
-        lexical_tokens.assign(2000, 3 + '~');
-        std::fill(lexical_tokens.begin() + 1600, lexical_tokens.end(), 3 + '^');
-        const std::string longest = "abcdefghij_klmnopqrst_uvwxyz_0123456789";
-        put(100, longest); put(500, "shortkey");
-        put(1900, longest + " and shortkey");
-        net = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 2000, 1600);
-        check(net.capped && net.rows.size() <= 80 && net.matches.size() == 1);
-        check(net.matches[0] == std::array<int32_t, 2>({100, 100 + int32_t(longest.size())}));
-        check(!std::binary_search(net.rows.begin(), net.rows.end(), 500));
-        net = common_ridgefill_lexical_rows(vocab, lexical_tokens.data(), 2000, 160);
-        check(net.capped && net.rows.empty() && net.row_cap == 8);
         std::vector<double> mass(100, 1.0);
         const std::vector<int32_t> forced = {90, 91, 92, 93, 94};
         check(llama_ridgefill_sweep_top_k(mass, 100, 10, forced) == std::vector<int32_t>({0, 1, 2, 3, 4, 90, 91, 92, 93, 94}));

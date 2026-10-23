@@ -156,7 +156,11 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-mode MODE` | speed with a projector | off, speed, quality, quality+qattn; availability above |
 | `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in [0,1] |
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
-| `--ridgefill-lexical on\|off` | off | quality+qattn server/scorer: reserve rare question-matching prefix spans and 32 following rows, within a 5% prefix cap |
+| `--ridgefill-lexical on\|off` | off | quality+qattn server/scorer: reserve rare question-matching word phrases and their containing units, within a 5% prefix cap |
+| `--ridgefill-lexical-window N` | 64 | Last content-token window, clipped to the exact tail and selector endpoint (1..4096) |
+| `--ridgefill-lexical-min-words N` | 4 | Minimum consecutive normalized words in one unit (2..4096) |
+| `--ridgefill-lexical-span-rows N` | 80 | Maximum rows from the containing unit's start (1..4096) |
+| `--ridgefill-lexical-max-occurrences N` | 2 | Maximum prefix occurrences of a rare unigram anchor (1..4096) |
 | `--ridgefill-special-exact on\|off` | off | keep unknown/control/user-defined token rows exact in quality modes |
 | `--ridgefill-header-rows K` | 0 | keep the next K prefix rows after each special token exact, independently of special-exact |
 | `--ridgefill-qattn-window-mode last\|turn` | last | last uses the fixed query window; turn uses rows after the last complete user header |
@@ -468,9 +472,15 @@ The server runs one sweep step per scheduling iteration beside compatible genera
 
 ### Experimental lexical net
 
-`--ridgefill-lexical on` (HTTP `ridgefill_lexical: true`) reserves prefix spans whose decoded, ASCII-case-folded, whitespace-collapsed text occurs in the question. A match has at least eight prefix tokens; different BPE token boundaries and leading spaces compare as decoded text. The question is the last 256 content tokens, clipped to the exact tail. For ChatML it ends at the last user turn's end, before the assistant header; template/special tokens cannot form a match. The native scorer honors its selector endpoint and defaults to N-K when lexical selection is enabled.
+`--ridgefill-lexical on` (HTTP `ridgefill_lexical: true`) enables the word/unigram/unit-left selector. The default is four consecutive normalized words in the final 64 content tokens, clipped to the exact tail. For ChatML, the window ends before the last user turn's closing marker and assistant header. The scorer honors its selector endpoint and defaults to N-K so scored targets cannot affect words or boundaries. Control, user-defined, unknown and unused token bytes are NUL barriers; invalid UTF-8 bytes separate words.
 
-An n-gram occurring more than twice in the normalized prefix is ignored. Complete match-plus-32-row spans are admitted longest first (ties by earlier prefix position), with their union limited to floor(prefix/20) rows. A span that does not fit is skipped, and `lexical.capped` reports this. `lexical.rows`, `lexical.matches` (half-open spans before the forward extension), counts and window bounds are included in the RidgeFill report. Lexical rows have first attribution in the disjoint source counts and count as exact in token and MAC totals.
+Words contain only Unicode 16 Letter/Number codepoints. Punctuation, underscores and combining marks separate words. ASCII A-Z fold to lowercase; other case and Unicode forms stay unchanged. Exactly one final ASCII s is removed from words of at least four codepoints unless the word ends in ss. Units end at NUL, CR/LF, ASCII .!? followed by Unicode whitespace/end, or U+3002/U+FF01/U+FF1F; surrounding Unicode whitespace is trimmed. Phrases never cross units. Window-edge partial words and prefix-edge partial words are excluded.
+
+For each prefix word start, extend equal window phrases as far as possible within their units. A phrase must contain a normalized unigram occurring at most twice in the eligible prefix. Deduplicate matched core row spans, then admit longer cores first, breaking ties by earlier position. Reserve the containing unit from its start, up to 80 rows, clipped to the prefix. A core outside this left-anchored span is skipped; the span never slides. Admit whole spans only, with their union limited to floor(prefix/20). This retains the full key/value unit when it fits; long units can still lose protection.
+
+The common CLI, server HTTP and native scorer expose `ridgefill_lexical_window`, `ridgefill_lexical_min_words`, `ridgefill_lexical_span_rows` and `ridgefill_lexical_max_occurrences` (CLI uses hyphens). The defaults are 64, 4, 80 and 2. Window/span/rarity accept integers 1..4096; minimum words accepts 2..4096. Unigram anchors and the 5% prefix cap are fixed. Only the recommended defaults have the frozen Q6 coverage result; other settings need a quality screen.
+
+The report records the resolved rule/Unicode version/parameters, window, sorted rows, matched cores, reserved unit spans, rare anchors and occurrence counts, candidates, cap and clipped/oversize counters. `capped` means a whole span was refused by the 5% cap. `clipped` counts unit truncations; `oversize_skipped` counts cores lost by truncation. Lexical rows have first attribution in disjoint source counts and count as exact in token and MAC totals. The production selector must match all 68 frozen Q6 expected-row fixtures before an engine smoke; these CPU fixtures establish selector parity, not inference quality.
 
 The net requires quality+qattn with positive qattn share. It reserves rows within the existing base/S1 row budget instead of adding rows above it. A budget smaller than the lexical set (or the base/lexical union in ordinary qattn) is refused by name; S1 retains its existing special-row union. Lexical off keeps the previous selection and report shape. This change has no decode-path or GPU-kernel changes; quality remains subject to lane Q's separate screen.
 

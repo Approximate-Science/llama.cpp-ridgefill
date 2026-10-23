@@ -453,6 +453,13 @@ struct lr_opt {
 
 struct ggml_opt_optimizer_params common_opt_lr_pars(void * userdata);
 
+struct common_ridgefill_lexical_params {
+    int32_t window_tokens = 64;
+    int32_t minimum_words = 4;
+    int32_t span_rows = 80;
+    int32_t maximum_occurrences = 2;
+};
+
 struct common_params {
     int32_t n_predict             =    -1; // max. number of new tokens to predict, -1 == no limit
     int32_t n_ctx                 =     0; // context size, 0 == context the model was trained with
@@ -551,6 +558,10 @@ struct common_params {
     bool        ridgefill_qattn_blind = false;
     bool        ridgefill_special_exact = false;
     bool        ridgefill_lexical = false;
+    int32_t     ridgefill_lexical_window = 64;
+    int32_t     ridgefill_lexical_min_words = 4;
+    int32_t     ridgefill_lexical_span_rows = 80;
+    int32_t     ridgefill_lexical_max_occurrences = 2;
     int32_t     ridgefill_header_rows = 0;
     std::string ridgefill_qattn_window_mode = "last";
     int32_t ridgefill_qattn_turn_cap = 256;
@@ -1058,18 +1069,29 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
 
 class common_json;
 
+struct common_ridgefill_lexical_anchor {
+    std::string word;
+    int32_t count = 0;
+};
+
 struct common_ridgefill_lexical_result {
+    common_ridgefill_lexical_params params;
     int32_t window_begin = -1;
     int32_t window_end = -1;
     int32_t row_cap = 0;
     int32_t candidates = 0;
     bool capped = false;
+    int32_t clipped = 0;
+    int32_t oversize_skipped = 0;
     std::vector<llama_pos> rows;
-    std::vector<std::array<int32_t, 2>> matches; // half-open prefix spans, without the forward rows
+    std::vector<std::array<int32_t, 2>> matches; // half-open matched cores
+    std::vector<std::array<int32_t, 2>> spans;   // admitted containing units
+    std::vector<std::vector<common_ridgefill_lexical_anchor>> anchors;
 };
 
 common_ridgefill_lexical_result common_ridgefill_lexical_rows(const llama_vocab * vocab,
-        const llama_token * tokens, int32_t n_prompt, int32_t n_prefix, int32_t selector_end = -1);
+        const llama_token * tokens, int32_t n_prompt, int32_t n_prefix, int32_t selector_end = -1,
+        const common_ridgefill_lexical_params & params = {});
 
 struct common_ridgefill_report {
     bool enabled = false;

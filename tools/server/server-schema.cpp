@@ -137,6 +137,34 @@ std::vector<std::unique_ptr<field>> make_llama_cmpl_schema(const common_params &
                 else { ctx.params.ridgefill_certificate_cap = number; }
             }));
     }
+    add((new field_num("ridgefill_lexical_window", params.ridgefill_lexical_window))
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto & value = data.at("ridgefill_lexical_window");
+            const double count = value.is_number_integer() ? value.get<double>() : -1.0;
+            if (count < 1 || count > 4096) { throw std::invalid_argument("ridgefill_lexical_window must be an integer in [1, 4096]"); }
+            ctx.params.ridgefill_lexical_window = int32_t(count);
+        }));
+    add((new field_num("ridgefill_lexical_min_words", params.ridgefill_lexical_min_words))
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto & value = data.at("ridgefill_lexical_min_words");
+            const double count = value.is_number_integer() ? value.get<double>() : -1.0;
+            if (count < 2 || count > 4096) { throw std::invalid_argument("ridgefill_lexical_min_words must be an integer in [2, 4096]"); }
+            ctx.params.ridgefill_lexical_min_words = int32_t(count);
+        }));
+    add((new field_num("ridgefill_lexical_span_rows", params.ridgefill_lexical_span_rows))
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto & value = data.at("ridgefill_lexical_span_rows");
+            const double count = value.is_number_integer() ? value.get<double>() : -1.0;
+            if (count < 1 || count > 4096) { throw std::invalid_argument("ridgefill_lexical_span_rows must be an integer in [1, 4096]"); }
+            ctx.params.ridgefill_lexical_span_rows = int32_t(count);
+        }));
+    add((new field_num("ridgefill_lexical_max_occurrences", params.ridgefill_lexical_max_occurrences))
+        ->set_handler([](field_eval_context & ctx, const json & data) {
+            const auto & value = data.at("ridgefill_lexical_max_occurrences");
+            const double count = value.is_number_integer() ? value.get<double>() : -1.0;
+            if (count < 1 || count > 4096) { throw std::invalid_argument("ridgefill_lexical_max_occurrences must be an integer in [1, 4096]"); }
+            ctx.params.ridgefill_lexical_max_occurrences = int32_t(count);
+        }));
     add((new field_bool("ridgefill_lexical", params.ridgefill_lexical))
         ->set_desc("RidgeFill: reserve rare question-matching prefix spans"));
     add((new field_bool("ridgefill_special_exact", params.ridgefill_special_exact))
@@ -590,6 +618,10 @@ task_params eval_llama_cmpl_schema(
     params.ridgefill_share = params_base.ridgefill_share;
     params.ridgefill_special_exact = params_base.ridgefill_special_exact;
     params.ridgefill_lexical = params_base.ridgefill_lexical;
+    params.ridgefill_lexical_window = params_base.ridgefill_lexical_window;
+    params.ridgefill_lexical_min_words = params_base.ridgefill_lexical_min_words;
+    params.ridgefill_lexical_span_rows = params_base.ridgefill_lexical_span_rows;
+    params.ridgefill_lexical_max_occurrences = params_base.ridgefill_lexical_max_occurrences;
     params.ridgefill_header_rows = params_base.ridgefill_header_rows;
     params.ridgefill_qattn_window_mode = params_base.ridgefill_qattn_window_mode;
     params.ridgefill_qattn_turn_cap = params_base.ridgefill_qattn_turn_cap;
@@ -639,6 +671,10 @@ task_params eval_llama_cmpl_schema(
         selection.ridgefill_share = params.ridgefill_share;
         selection.ridgefill_special_exact = params.ridgefill_special_exact;
         selection.ridgefill_lexical = params.ridgefill_lexical;
+        selection.ridgefill_lexical_window = params.ridgefill_lexical_window;
+        selection.ridgefill_lexical_min_words = params.ridgefill_lexical_min_words;
+        selection.ridgefill_lexical_span_rows = params.ridgefill_lexical_span_rows;
+        selection.ridgefill_lexical_max_occurrences = params.ridgefill_lexical_max_occurrences;
         selection.ridgefill_header_rows = params.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = params.ridgefill_qattn_window_mode;
         selection.ridgefill_qattn_turn_cap = params.ridgefill_qattn_turn_cap;

@@ -211,3 +211,15 @@ python3 tests/ridgefill/check_certificate.py --bin-dir build-cpu/bin --parent-bi
 ```
 
 The short native/HTTP driver checks accepted-parent byte identity (including full-vocabulary generated probabilities), tau=1 as a no-flag/no-output-change control, tau=0 as a forced/capped positive control, multi-ubatch calibration, per-head beta, source counts, invalid parameters and request-state cleanup. The synthetic input has 2000 tiny-model tokens; the lexical fixture from A1 is suitable. NLL-path controls exclude the scored target from selection. A separate HTTP parity control explicitly uses the full document endpoint to match the server; it does not measure NLL quality. These checks do not establish beta transfer or full-model quality. Run full-model GPU smoke only through the worker's bridge and leave benchmark screens to lane Q.
+
+### Lexical v2 selector controls
+
+Build `lexical_rows.cpp` against the CPU common/llama libraries. It loads only the GGUF vocabulary, checks decoded pieces/barriers against the frozen input, runs the production selector, and poisons unavailable suffix IDs to check target independence. The Python wrapper requires Unicode 16 (Python 3.14), compares all 68 Q6 results exactly, checks 27 synthetic boundary/rarity controls, and checks the local Unicode category supplement over all codepoints. The expected JSONL is copied unchanged from Q6 and hash-pinned; provide Q5's immutable `tokenized.jsonl` as an argument. No model inference or benchmark set runs in this selector test.
+
+```sh
+c++ -std=c++17 -O2 -Icommon -Iinclude -Isrc -Iggml/include -Ivendor tests/ridgefill/lexical_rows.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama-common -lllama -lggml -lggml-base -o build-cpu/lexical-rows
+python3 tests/ridgefill/check_lexical_v2.py --binary build-cpu/lexical-rows --model /path/to/model.gguf --tiny-model /path/to/tiny-qwen35-f32.gguf --tokenized /path/to/q5/tokenized.jsonl --out out/lexical-unit
+python3 tests/ridgefill/check_lexical_http.py --bin-dir build-cpu/bin --model /path/to/tiny-qwen35-f32.gguf --projector /path/to/projector-s4-f32.gguf --out out/lexical-http
+```
+
+The short tiny-model native/HTTP check verifies parameter inheritance and request overrides, strict integer bounds, mandatory rows within the existing budget, report/anchor parity, whole-span cap and oversize reporting, and no-op/next-request byte identity. These random-weight model checks establish implementation behavior, not model quality.

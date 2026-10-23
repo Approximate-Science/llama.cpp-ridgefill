@@ -148,3 +148,5 @@ python3 tools/ridgefill/check_s1_score.py \
 ```
 
 Without C API v2 the gate checks defaults and named refusals, reports the feature and cost checks as SKIPPED, and exits 77. This is not a passing S1 gate. The release remains on hold.
+
+Lexical selection is off by default. `--ridgefill-lexical on` uses the final 64 content tokens before the selector endpoint, matches at least four normalized words with a rare unigram anchor, and reserves the containing unit from its start, up to 80 rows, under a 5% prefix cap. Tune with `--ridgefill-lexical-window`, `--ridgefill-lexical-min-words`, `--ridgefill-lexical-span-rows` and `--ridgefill-lexical-max-occurrences` (defaults 64, 4, 80 and 2). Counts are bounded to 1..4096, with minimum words at least 2. The report includes the resolved settings, cores, unit spans, rows, rare anchor counts and capped/clipped/oversize status. The default endpoint excludes the scored target suffix. See [RIDGEFILL.md](../../RIDGEFILL.md#experimental-lexical-net) for the exact normalization and boundary rules.

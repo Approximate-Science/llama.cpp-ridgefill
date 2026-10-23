@@ -32,6 +32,7 @@ struct server_ridgefill_sweep_params {
     const llama_ridgefill * projector = nullptr;
     bool special_exact = false;
     bool lexical = false;
+    common_ridgefill_lexical_params lexical_options;
     bool vtail = false;
     int32_t vtail_rows = 512;
     bool all_tail_logits = false;

@@ -80,6 +80,10 @@ struct task_params {
     float ridgefill_share = -1;
     bool ridgefill_special_exact = false;
     bool ridgefill_lexical = false;
+    int32_t ridgefill_lexical_window = 64;
+    int32_t ridgefill_lexical_min_words = 4;
+    int32_t ridgefill_lexical_span_rows = 80;
+    int32_t ridgefill_lexical_max_occurrences = 2;
     int32_t ridgefill_header_rows = 0;
     std::string ridgefill_qattn_window_mode = "last";
     int32_t ridgefill_qattn_turn_cap = 256;

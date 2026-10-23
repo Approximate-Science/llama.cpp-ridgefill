@@ -197,7 +197,7 @@ void server_ridgefill_sweep::select_rows(llama_context * ctx, const llama_token 
     n_base = rows.size();
     if (params.lexical) {
         lexical = common_ridgefill_lexical_rows(llama_model_get_vocab(llama_get_model(ctx)), tokens,
-                params.n_tokens, params.n_prefix, params.qattn_end);
+                params.n_tokens, params.n_prefix, params.qattn_end, params.lexical_options);
         if (!params.s1) {
             std::vector<llama_pos> forced;
             std::set_union(base_rows.begin(), base_rows.end(), lexical.rows.begin(), lexical.rows.end(), std::back_inserter(forced));

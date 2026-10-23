@@ -3505,6 +3505,10 @@ private:
         selection.ridgefill_share = tparams.ridgefill_share;
         selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
         selection.ridgefill_lexical = tparams.ridgefill_lexical;
+        selection.ridgefill_lexical_window = tparams.ridgefill_lexical_window;
+        selection.ridgefill_lexical_min_words = tparams.ridgefill_lexical_min_words;
+        selection.ridgefill_lexical_span_rows = tparams.ridgefill_lexical_span_rows;
+        selection.ridgefill_lexical_max_occurrences = tparams.ridgefill_lexical_max_occurrences;
         selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
         selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
         selection.ridgefill_qattn_turn_cap = tparams.ridgefill_qattn_turn_cap;
@@ -4211,6 +4215,10 @@ private:
                                     selection.ridgefill_share = tparams.ridgefill_share;
                                     selection.ridgefill_special_exact = tparams.ridgefill_special_exact;
                                     selection.ridgefill_lexical = tparams.ridgefill_lexical;
+                                    selection.ridgefill_lexical_window = tparams.ridgefill_lexical_window;
+                                    selection.ridgefill_lexical_min_words = tparams.ridgefill_lexical_min_words;
+                                    selection.ridgefill_lexical_span_rows = tparams.ridgefill_lexical_span_rows;
+                                    selection.ridgefill_lexical_max_occurrences = tparams.ridgefill_lexical_max_occurrences;
                                     selection.ridgefill_header_rows = tparams.ridgefill_header_rows;
                                     selection.ridgefill_qattn_window_mode = tparams.ridgefill_qattn_window_mode;
                                     selection.ridgefill_qattn_turn_cap = tparams.ridgefill_qattn_turn_cap;
@@ -4241,6 +4249,8 @@ private:
                                 sweep_params.projector = rf;
                                 sweep_params.special_exact = tparams.ridgefill_special_exact;
                                 sweep_params.lexical = tparams.ridgefill_lexical;
+                                sweep_params.lexical_options = {tparams.ridgefill_lexical_window, tparams.ridgefill_lexical_min_words,
+                                        tparams.ridgefill_lexical_span_rows, tparams.ridgefill_lexical_max_occurrences};
                                 sweep_params.vtail = tparams.ridgefill_vtail;
                                 sweep_params.vtail_rows = tparams.ridgefill_vtail_rows;
                                 sweep_params.qattn_share = params_base.ridgefill_qattn_share;
@@ -5682,6 +5692,10 @@ static json get_res_props(const server_context_meta & meta, const common_params 
             { "qattn_share", params.ridgefill_qattn_share }, { "qattn_window", params.ridgefill_qattn_window },
             { "qattn_blind", params.ridgefill_qattn_blind },
             { "lexical", params.ridgefill_lexical },
+            { "lexical_window", params.ridgefill_lexical_window },
+            { "lexical_min_words", params.ridgefill_lexical_min_words },
+            { "lexical_span_rows", params.ridgefill_lexical_span_rows },
+            { "lexical_max_occurrences", params.ridgefill_lexical_max_occurrences },
             { "special_exact", params.ridgefill_special_exact }, { "header_rows", params.ridgefill_header_rows },
             { "qattn_window_mode", params.ridgefill_qattn_window_mode }, { "qattn_turn_cap", params.ridgefill_qattn_turn_cap },
             { "certificate", params.ridgefill_certificate },

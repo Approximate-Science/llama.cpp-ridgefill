@@ -101,6 +101,44 @@ int main() {
         }
         check(refused);
     }
+    check(!params.ridgefill_lexical && params.ridgefill_lexical_window == 64 && params.ridgefill_lexical_min_words == 4 &&
+            params.ridgefill_lexical_span_rows == 80 && params.ridgefill_lexical_max_occurrences == 2);
+    common_ridgefill_set_option(params, "--ridgefill-lexical-window", "128");
+    check(params.ridgefill_lexical_window == 128);
+    for (const auto & bad : {"0", "-1", "1.5", "4097", "9999999999999", "2bad"}) {
+        bool caught = false;
+        try { common_ridgefill_set_option(params, "--ridgefill-lexical-window", bad); }
+        catch (const std::invalid_argument &) { caught = true; }
+        check(caught);
+    }
+    common_ridgefill_set_option(params, "--ridgefill-lexical-min-words", "128");
+    check(params.ridgefill_lexical_min_words == 128);
+    for (const auto & bad : {"0", "-1", "1.5", "4097", "9999999999999", "2bad"}) {
+        bool caught = false;
+        try { common_ridgefill_set_option(params, "--ridgefill-lexical-min-words", bad); }
+        catch (const std::invalid_argument &) { caught = true; }
+        check(caught);
+    }
+    common_ridgefill_set_option(params, "--ridgefill-lexical-span-rows", "128");
+    check(params.ridgefill_lexical_span_rows == 128);
+    for (const auto & bad : {"0", "-1", "1.5", "4097", "9999999999999", "2bad"}) {
+        bool caught = false;
+        try { common_ridgefill_set_option(params, "--ridgefill-lexical-span-rows", bad); }
+        catch (const std::invalid_argument &) { caught = true; }
+        check(caught);
+    }
+    common_ridgefill_set_option(params, "--ridgefill-lexical-max-occurrences", "128");
+    check(params.ridgefill_lexical_max_occurrences == 128);
+    for (const auto & bad : {"0", "-1", "1.5", "4097", "9999999999999", "2bad"}) {
+        bool caught = false;
+        try { common_ridgefill_set_option(params, "--ridgefill-lexical-max-occurrences", bad); }
+        catch (const std::invalid_argument &) { caught = true; }
+        check(caught);
+    }
+    bool minimum_refused = false;
+    try { common_ridgefill_set_option(params, "--ridgefill-lexical-min-words", "1"); }
+    catch (const std::invalid_argument &) { minimum_refused = true; }
+    check(minimum_refused);
     params.ridgefill_tail = 0;
     bool refused = false;
     try { common_ridgefill_p_end(params, 16384); }

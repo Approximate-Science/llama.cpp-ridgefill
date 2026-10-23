@@ -6,6 +6,7 @@
 #include "common.h"
 
 #include "../src/llama-ext.h"
+#include "../src/unicode.h"
 #include "../src/llama-model.h"
 #include "json.h"
 
@@ -1828,6 +1829,19 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         } else {
             params.ridgefill_qattn_blind = value == "on";
         }
+    } else if (option == "--ridgefill-lexical-window" || option == "--ridgefill-lexical-min-words" ||
+            option == "--ridgefill-lexical-span-rows" || option == "--ridgefill-lexical-max-occurrences") {
+        size_t end = 0;
+        int result = 0;
+        try { result = std::stoi(value, &end); }
+        catch (const std::exception &) { throw std::invalid_argument(option + " must be an integer in [1, 4096] (minimum words >= 2)"); }
+        if (end != value.size() || result < (option == "--ridgefill-lexical-min-words" ? 2 : 1) || result > 4096) {
+            throw std::invalid_argument(option + " must be an integer in [1, 4096] (minimum words >= 2)");
+        }
+        if (option == "--ridgefill-lexical-window") { params.ridgefill_lexical_window = result; }
+        if (option == "--ridgefill-lexical-min-words") { params.ridgefill_lexical_min_words = result; }
+        if (option == "--ridgefill-lexical-span-rows") { params.ridgefill_lexical_span_rows = result; }
+        if (option == "--ridgefill-lexical-max-occurrences") { params.ridgefill_lexical_max_occurrences = result; }
     } else if (option == "--ridgefill-qattn-window" || option == "--ridgefill-tail" || option == "--ridgefill-qattn-turn-cap" || option == "--qattn-turn-cap") {
         size_t end = 0;
         int result;
@@ -1855,7 +1869,11 @@ static void common_ridgefill_check_quality_alpha(const common_params & params, c
     }
 }
 
+static void common_ridgefill_lexical_validate(const common_ridgefill_lexical_params & params);
+
 void common_ridgefill_validate_options(const common_params & params, const std::string & mode) {
+    common_ridgefill_lexical_validate({params.ridgefill_lexical_window, params.ridgefill_lexical_min_words,
+            params.ridgefill_lexical_span_rows, params.ridgefill_lexical_max_occurrences});
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
     if (!common_ridgefill_mode_valid(selected_mode)) { throw std::invalid_argument("RidgeFill: invalid mode " + selected_mode); }
     if (params.ridgefill_lexical && selected_mode != "off" && selected_mode != "quality+qattn") {
@@ -1987,18 +2005,46 @@ std::vector<llama_pos> common_ridgefill_rows(const common_params & params, const
     return rows;
 }
 
+static void common_ridgefill_lexical_validate(const common_ridgefill_lexical_params & params) {
+    if (params.window_tokens < 1 || params.window_tokens > 4096 || params.minimum_words < 2 || params.minimum_words > 4096 ||
+            params.span_rows < 1 || params.span_rows > 4096 || params.maximum_occurrences < 1 || params.maximum_occurrences > 4096) {
+        throw std::invalid_argument("RidgeFill lexical: window, span rows and maximum occurrences must be in [1, 4096]; minimum words in [2, 4096]");
+    }
+}
+
+static bool common_ridgefill_lexical_space(uint32_t c) {
+    return (c >= 0x09 && c <= 0x0d) || (c >= 0x1c && c <= 0x20) || c == 0x85 || c == 0xa0 || c == 0x1680 ||
+            (c >= 0x2000 && c <= 0x200a) || c == 0x2028 || c == 0x2029 || c == 0x202f || c == 0x205f || c == 0x3000;
+}
+
+static bool common_ridgefill_lexical_word(uint32_t c) {
+    const auto flags = unicode_cpt_flags_from_cpt(c);
+    if (flags.is_letter || flags.is_number) { return true; }
+    // Unicode 16 Letter/Number additions to the tokenizer's older category table.
+    static const std::array<uint32_t, 2> added[] = {
+        {0x1c89, 0x1c8a}, {0xa7cb, 0xa7cd}, {0xa7da, 0xa7dc}, {0x105c0, 0x105f3},
+        {0x10d40, 0x10d65}, {0x10d6f, 0x10d85}, {0x10ec2, 0x10ec4}, {0x11380, 0x11389},
+        {0x1138b, 0x1138b}, {0x1138e, 0x1138e}, {0x11390, 0x113b5}, {0x113b7, 0x113b7},
+        {0x113d1, 0x113d1}, {0x113d3, 0x113d3}, {0x116d0, 0x116e3}, {0x11bc0, 0x11be0},
+        {0x11bf0, 0x11bf9}, {0x13460, 0x143fa}, {0x16100, 0x1611d}, {0x16130, 0x16139},
+        {0x16d40, 0x16d6c}, {0x16d70, 0x16d79}, {0x18cff, 0x18cff}, {0x1ccf0, 0x1ccf9},
+        {0x1e5d0, 0x1e5ed}, {0x1e5f0, 0x1e5fa},
+    };
+    const auto * range = std::lower_bound(std::begin(added), std::end(added), c,
+            [](const auto & r, uint32_t value) { return r[1] < value; });
+    return range != std::end(added) && (*range)[0] <= c;
+}
+
 common_ridgefill_lexical_result common_ridgefill_lexical_rows(const llama_vocab * vocab,
-        const llama_token * tokens, int32_t n_prompt, int32_t n_prefix, int32_t selector_end) {
+        const llama_token * tokens, int32_t n_prompt, int32_t n_prefix, int32_t selector_end,
+        const common_ridgefill_lexical_params & params) {
+    common_ridgefill_lexical_validate(params);
     if (selector_end == -1) { selector_end = n_prompt; }
     if (!vocab || !tokens || n_prompt < 0 || n_prefix < 0 || n_prefix > n_prompt || selector_end < n_prefix || selector_end > n_prompt) {
         throw std::invalid_argument("RidgeFill lexical: invalid prompt or selector bounds");
     }
-    for (int32_t i = 0; i < n_prompt; ++i) {
-        if (tokens[i] < 0 || tokens[i] >= llama_vocab_n_tokens(vocab)) {
-            throw std::invalid_argument("RidgeFill lexical: token outside the vocabulary");
-        }
-    }
     common_ridgefill_lexical_result result;
+    result.params = params;
     result.row_cap = n_prefix / 20;
     const auto header = common_tokenize(vocab, "<|im_start|>user\n", false, true);
     const int32_t user = llama_ridgefill_last_marker(tokens, selector_end, header.data(), header.size());
@@ -2013,78 +2059,156 @@ common_ridgefill_lexical_result common_ridgefill_lexical_rows(const llama_vocab 
         }
     }
     result.window_end = std::max(n_prefix, content_end);
-    result.window_begin = std::max({n_prefix, content_begin, result.window_end - 256});
-    if (result.window_begin >= result.window_end || n_prefix < 8) { return result; }
+    result.window_begin = std::max({n_prefix, content_begin, result.window_end - params.window_tokens});
+    if (result.window_begin >= result.window_end || n_prefix == 0) { return result; }
 
-    // Decode first: BPE space markers and different token boundaries must compare as text.
-    auto normalize = [&](int32_t begin, int32_t end, std::vector<size_t> & offsets) {
-        std::string text;
-        const int excluded = LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_UNUSED;
-        for (int32_t i = begin; i < end; ++i) {
-            offsets.push_back(text.size());
-            if (llama_vocab_get_attr(vocab, tokens[i]) & excluded) {
-                text += '\0'; // do not match across template or special tokens
-                continue;
-            }
-            for (unsigned char c : common_token_to_piece(vocab, tokens[i])) {
-                if (c == ' ' || (c >= '\t' && c <= '\r')) {
-                    if (text.empty() || text.back() != ' ') { text += ' '; }
-                } else {
-                    text += c >= 'A' && c <= 'Z' ? c + ('a' - 'A') : c;
-                }
-            }
+    std::string text;
+    std::vector<size_t> offsets = {0};
+    std::vector<size_t> empty_barriers;
+    const int excluded = LLAMA_TOKEN_ATTR_CONTROL | LLAMA_TOKEN_ATTR_USER_DEFINED | LLAMA_TOKEN_ATTR_UNKNOWN | LLAMA_TOKEN_ATTR_UNUSED;
+    for (int32_t i = 0; i < selector_end; ++i) {
+        if (tokens[i] < 0 || tokens[i] >= llama_vocab_n_tokens(vocab)) {
+            throw std::invalid_argument("RidgeFill lexical: token outside the vocabulary");
+        }
+        const auto piece = common_token_to_piece(vocab, tokens[i]);
+        if (llama_vocab_get_attr(vocab, tokens[i]) & excluded) {
+            text.append(piece.size(), '\0');
+            if (piece.empty()) { empty_barriers.push_back(text.size()); }
+        } else {
+            text += piece;
         }
         offsets.push_back(text.size());
-        return text;
-    };
-    std::vector<size_t> offsets, question_offsets;
-    const std::string prefix = normalize(0, n_prefix, offsets);
-    const std::string question = normalize(result.window_begin, result.window_end, question_offsets);
-    std::vector<std::array<int32_t, 2>> matches;
-    std::unordered_map<std::string, int32_t> frequency;
-    for (int32_t i = 0; i <= n_prefix - 8; ++i) {
-        size_t begin = offsets[i], end = offsets[i + 8];
-        while (begin < end && prefix[begin] == ' ') { ++begin; }
-        while (end > begin && prefix[end - 1] == ' ') { --end; }
-        if (begin == end || end - begin > question.size()) { continue; }
-        std::string pattern = prefix.substr(begin, end - begin);
-        if (pattern.find('\0') != std::string::npos || question.find(pattern) == std::string::npos) { continue; }
-        int32_t match_end = i + 8;
-        for (int32_t j = match_end; j < n_prefix; ++j) {
-            size_t next = offsets[j + 1];
-            while (next > begin && prefix[next - 1] == ' ') { --next; }
-            if (next - begin > question.size()) { break; }
-            const std::string longer = prefix.substr(begin, next - begin);
-            if (longer.find('\0') != std::string::npos || question.find(longer) == std::string::npos) { break; }
-            pattern = longer;
-            match_end = j + 1;
-        }
-        auto found = frequency.find(pattern);
-        if (found == frequency.end()) {
-            int32_t count = 0;
-            for (size_t pos = prefix.find(pattern); pos != std::string::npos && count < 3; pos = prefix.find(pattern, pos + 1)) { ++count; }
-            found = frequency.emplace(pattern, count).first;
-        }
-        if (found->second <= 2) { matches.push_back({i, match_end}); }
     }
-    std::sort(matches.begin(), matches.end(), [](const auto & a, const auto & b) {
-        const int32_t na = a[1] - a[0], nb = b[1] - b[0];
-        return na > nb || (na == nb && a[0] < b[0]);
+    struct character { uint32_t value; size_t begin, end; };
+    std::vector<character> chars;
+    size_t empty = 0;
+    for (size_t pos = 0; pos < text.size();) {
+        while (empty < empty_barriers.size() && empty_barriers[empty] <= pos) {
+            chars.push_back({0, empty_barriers[empty], empty_barriers[empty]});
+            ++empty;
+        }
+        const size_t begin = pos;
+        uint32_t c;
+        try {
+            c = unicode_cpt_from_utf8(text, pos);
+            if (c >= 0xd800 && c <= 0xdfff) { throw std::invalid_argument("surrogate"); }
+            // An empty special piece also separates UTF-8 bytes inside a codepoint.
+            if (empty < empty_barriers.size() && empty_barriers[empty] < pos) { throw std::invalid_argument("barrier"); }
+        } catch (const std::invalid_argument &) {
+            pos = begin + 1;
+            c = 0xfffd;
+        }
+        chars.push_back({c, begin, pos});
+    }
+    auto token_span = [&](size_t begin, size_t end) {
+        return std::array<int32_t, 2> {int32_t(std::upper_bound(offsets.begin(), offsets.end(), begin) - offsets.begin() - 1),
+                int32_t(std::lower_bound(offsets.begin(), offsets.end(), end) - offsets.begin())};
+    };
+    struct word { std::string value; size_t begin, end; int32_t unit; };
+    std::vector<word> words;
+    std::vector<std::array<int32_t, 2>> units;
+    auto add_unit = [&](size_t begin, size_t end) {
+        while (begin < end && common_ridgefill_lexical_space(chars[begin].value)) { ++begin; }
+        while (end > begin && common_ridgefill_lexical_space(chars[end - 1].value)) { --end; }
+        if (begin == end) { return; }
+        const int32_t unit = units.size();
+        units.push_back(token_span(chars[begin].begin, chars[end - 1].end));
+        for (size_t i = begin; i < end;) {
+            if (!common_ridgefill_lexical_word(chars[i].value)) { ++i; continue; }
+            const size_t start = i;
+            std::string value;
+            while (i < end && common_ridgefill_lexical_word(chars[i].value)) {
+                uint32_t c = chars[i++].value;
+                if (c >= 'A' && c <= 'Z') { c += 'a' - 'A'; }
+                value += unicode_cpt_to_utf8(c);
+            }
+            if (i - start >= 4 && value.back() == 's' && value[value.size() - 2] != 's') { value.pop_back(); }
+            words.push_back({std::move(value), chars[start].begin, chars[i - 1].end, unit});
+        }
+    };
+    size_t unit_begin = 0;
+    for (size_t i = 0; i < chars.size(); ++i) {
+        const uint32_t c = chars[i].value;
+        const bool barrier = c == 0 || c == '\r' || c == '\n';
+        const bool sentence = ((c == '.' || c == '!' || c == '?') &&
+                (i + 1 == chars.size() || common_ridgefill_lexical_space(chars[i + 1].value))) ||
+                c == 0x3002 || c == 0xff01 || c == 0xff1f;
+        if (barrier || sentence) {
+            add_unit(unit_begin, i + (barrier ? 0 : 1));
+            unit_begin = i + 1;
+        }
+    }
+    add_unit(unit_begin, chars.size());
+    std::vector<const word *> prefix, question;
+    std::unordered_map<std::string, int32_t> frequency;
+    for (const auto & w : words) {
+        if (w.end <= offsets[n_prefix]) { prefix.push_back(&w); ++frequency[w.value]; }
+        if (w.begin >= offsets[result.window_begin] && w.end <= offsets[result.window_end]) { question.push_back(&w); }
+    }
+    const size_t minimum = params.minimum_words;
+    if (prefix.size() < minimum || question.size() < minimum) { return result; }
+    auto phrase = [&](const std::vector<const word *> & stream, size_t start) {
+        std::string key;
+        for (size_t i = start; i < start + minimum; ++i) { key += stream[i]->value; key += '\0'; }
+        return key;
+    };
+    std::unordered_map<std::string, std::vector<size_t>> index;
+    for (size_t j = 0; j + minimum <= question.size(); ++j) {
+        if (question[j]->unit == question[j + minimum - 1]->unit) { index[phrase(question, j)].push_back(j); }
+    }
+    struct candidate {
+        std::array<int32_t, 2> core;
+        int32_t unit;
+        std::vector<common_ridgefill_lexical_anchor> anchors;
+    };
+    std::map<std::array<int32_t, 2>, candidate> unique;
+    for (size_t i = 0; i + minimum <= prefix.size(); ++i) {
+        if (prefix[i]->unit != prefix[i + minimum - 1]->unit) { continue; }
+        const auto found = index.find(phrase(prefix, i));
+        if (found == index.end()) { continue; }
+        size_t longest = minimum;
+        for (size_t j : found->second) {
+            size_t count = minimum;
+            while (i + count < prefix.size() && j + count < question.size() &&
+                    prefix[i + count]->unit == prefix[i]->unit && question[j + count]->unit == question[j]->unit &&
+                    prefix[i + count]->value == question[j + count]->value) { ++count; }
+            longest = std::max(longest, count);
+        }
+        std::vector<common_ridgefill_lexical_anchor> anchors;
+        for (size_t k = i; k < i + longest; ++k) {
+            const auto & value = prefix[k]->value;
+            if (frequency.at(value) <= params.maximum_occurrences) { anchors.push_back({value, frequency.at(value)}); }
+        }
+        if (anchors.empty()) { continue; }
+        const auto core = token_span(prefix[i]->begin, prefix[i + longest - 1]->end);
+        unique[core] = {core, prefix[i]->unit, std::move(anchors)};
+    }
+    std::vector<candidate> candidates;
+    for (auto & entry : unique) { candidates.push_back(std::move(entry.second)); }
+    std::sort(candidates.begin(), candidates.end(), [](const auto & a, const auto & b) {
+        const int32_t na = a.core[1] - a.core[0], nb = b.core[1] - b.core[0];
+        return na > nb || (na == nb && a.core[0] < b.core[0]);
     });
     std::vector<uint8_t> selected(n_prefix, 0);
     int32_t count = 0;
-    for (const auto & match : matches) {
+    for (const auto & candidate : candidates) {
+        const auto & core = candidate.core;
         if (std::any_of(result.matches.begin(), result.matches.end(), [&](const auto & kept) {
-                return kept[0] <= match[0] && kept[1] >= match[1];
+                return kept[0] <= core[0] && kept[1] >= core[1];
             })) { continue; }
         ++result.candidates;
-        const int32_t end = match[1] + std::min(32, n_prefix - match[1]);
+        auto span = units[candidate.unit];
+        span[1] = std::min(span[1], n_prefix);
+        if (span[1] - span[0] > params.span_rows) { ++result.clipped; span[1] = span[0] + params.span_rows; }
+        if (span[0] > core[0] || span[1] < core[1]) { ++result.oversize_skipped; continue; }
         int32_t extra = 0;
-        for (int32_t i = match[0]; i < end; ++i) { extra += !selected[i]; }
+        for (int32_t i = span[0]; i < span[1]; ++i) { extra += !selected[i]; }
         if (extra > result.row_cap - count) { result.capped = true; continue; }
-        result.matches.push_back(match);
+        result.matches.push_back(core);
+        result.spans.push_back(span);
+        result.anchors.push_back(candidate.anchors);
         count += extra;
-        for (int32_t i = match[0]; i < end; ++i) { selected[i] = 1; }
+        for (int32_t i = span[0]; i < span[1]; ++i) { selected[i] = 1; }
     }
     for (int32_t i = 0; i < n_prefix; ++i) {
         if (selected[i]) { result.rows.push_back(i); }
@@ -2114,9 +2238,24 @@ common_json common_ridgefill_report::to_json() const {
     if (lexical_enabled) {
         result["n_exact_prefix_by_source"]["lexical"] = exact_by_source[6];
         result["lexical"] = common_json {{"enabled", true}, {"window", std::vector<int32_t>{lexical.window_begin, lexical.window_end}},
-            {"rows", lexical.rows}, {"matches", common_json::array()}, {"n_rows", lexical.rows.size()}, {"n_matches", lexical.matches.size()},
-            {"candidates", lexical.candidates}, {"row_cap", lexical.row_cap}, {"capped", lexical.capped}};
-        for (const auto & match : lexical.matches) { result["lexical"]["matches"].push_back(std::vector<int32_t>{match[0], match[1]}); }
+            {"rule", "word" + std::to_string(lexical.params.minimum_words) + "-w" + std::to_string(lexical.params.window_tokens) +
+                "-a1-unit-left" + std::to_string(lexical.params.span_rows)}, {"unicode", "16.0.0"},
+            {"window_tokens", lexical.params.window_tokens}, {"minimum_words", lexical.params.minimum_words},
+            {"anchor_words", 1}, {"maximum_occurrences", lexical.params.maximum_occurrences}, {"span_rows", lexical.params.span_rows},
+            {"rows", lexical.rows}, {"matches", common_json::array()}, {"spans", common_json::array()}, {"anchors", common_json::array()}, {"n_rows", lexical.rows.size()}, {"n_matches", lexical.matches.size()},
+            {"candidates", lexical.candidates}, {"row_cap", lexical.row_cap}, {"capped", lexical.capped},
+            {"clipped", lexical.clipped}, {"oversize_skipped", lexical.oversize_skipped}};
+        for (size_t i = 0; i < lexical.matches.size(); ++i) {
+            const auto & match = lexical.matches[i];
+            const std::vector<int32_t> core = {match[0], match[1]};
+            result["lexical"]["matches"].push_back(core);
+            result["lexical"]["spans"].push_back(std::vector<int32_t>{lexical.spans[i][0], lexical.spans[i][1]});
+            common_json anchors = common_json::array();
+            for (const auto & anchor : lexical.anchors[i]) {
+                anchors.push_back(common_json {{"words", std::vector<std::string>{anchor.word}}, {"count", anchor.count}});
+            }
+            result["lexical"]["anchors"].push_back(common_json {{"match", core}, {"anchors", anchors}});
+        }
     }
     if (s1_begin >= 0 || vtail_rows > 0) {
         result["mac_model"] = "kva cold prefill + S1 dense probe pairs and recomputed prefix projector/KV + vtail projector and two V projections";
@@ -2171,6 +2310,8 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
     report.n_prefix = n_prefix;
     report.n_exact_prefix = rows.size();
     report.lexical_enabled = params.ridgefill_lexical;
+    report.lexical.params = {params.ridgefill_lexical_window, params.ridgefill_lexical_min_words,
+            params.ridgefill_lexical_span_rows, params.ridgefill_lexical_max_occurrences};
     if (params.ridgefill_lexical && n_prefix > 0) {
         require(lexical != nullptr, "lexical net needs completed selection metadata");
         report.lexical = *lexical;

@@ -38,6 +38,7 @@ struct options {
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
     bool digits = true, special_exact = false, diagnostics = false, lexical = false;
     bool vtail = false, explicit_window_end = false;
+    common_ridgefill_lexical_params lexical_options;
     int32_t s1_window = 0, vtail_rows = 512;
     double s1_factor = 1.0;
     bool certificate = false;
@@ -104,6 +105,15 @@ static options parse(int argc, char ** argv) {
             if (key == "--ridgefill-certificate-tau") { o.certificate_tau = selection.ridgefill_certificate_tau; }
             if (key == "--ridgefill-certificate-cap") { o.certificate_cap = selection.ridgefill_certificate_cap; }
         }
+        else if (key == "--ridgefill-lexical-window" || key == "--ridgefill-lexical-min-words" ||
+                 key == "--ridgefill-lexical-span-rows" || key == "--ridgefill-lexical-max-occurrences") {
+            common_params selection;
+            common_ridgefill_set_option(selection, key, value);
+            if (key == "--ridgefill-lexical-window") { o.lexical_options.window_tokens = selection.ridgefill_lexical_window; }
+            if (key == "--ridgefill-lexical-min-words") { o.lexical_options.minimum_words = selection.ridgefill_lexical_min_words; }
+            if (key == "--ridgefill-lexical-span-rows") { o.lexical_options.span_rows = selection.ridgefill_lexical_span_rows; }
+            if (key == "--ridgefill-lexical-max-occurrences") { o.lexical_options.maximum_occurrences = selection.ridgefill_lexical_max_occurrences; }
+        }
         else if (key == "--ridgefill-lexical") {
             require(value == "on" || value == "off", "--ridgefill-lexical must be on or off"); o.lexical = value == "on";
         }
@@ -152,6 +162,10 @@ static options parse(int argc, char ** argv) {
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_lexical = o.lexical;
+    selection.ridgefill_lexical_window = o.lexical_options.window_tokens;
+    selection.ridgefill_lexical_min_words = o.lexical_options.minimum_words;
+    selection.ridgefill_lexical_span_rows = o.lexical_options.span_rows;
+    selection.ridgefill_lexical_max_occurrences = o.lexical_options.maximum_occurrences;
     selection.ridgefill_special_exact = o.special_exact;
     selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
@@ -232,6 +246,10 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_lexical = o.lexical;
+    selection.ridgefill_lexical_window = o.lexical_options.window_tokens;
+    selection.ridgefill_lexical_min_words = o.lexical_options.minimum_words;
+    selection.ridgefill_lexical_span_rows = o.lexical_options.span_rows;
+    selection.ridgefill_lexical_max_occurrences = o.lexical_options.maximum_occurrences;
     selection.ridgefill_special_exact = o.special_exact; selection.ridgefill_header_rows = o.header_rows;
     selection.ridgefill_qattn_window_mode = o.window_mode;
     selection.ridgefill_qattn_turn_cap = o.turn_cap;
@@ -273,7 +291,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         p.qattn_end = window_end; p.logits_begin = begin; p.logits_end = end; p.type = tensor_type(o.hidden);
         p.s1 = s1; p.s1_window = o.s1_window; p.s1_factor = o.s1_factor; p.projector = rf; p.special_exact = o.special_exact;
         p.certificate = o.certificate; p.certificate_tau = o.certificate_tau; p.certificate_cap = o.certificate_cap;
-        p.vtail = vtail; p.vtail_rows = o.vtail_rows; p.lexical = o.lexical;
+        p.vtail = vtail; p.vtail_rows = o.vtail_rows; p.lexical = o.lexical; p.lexical_options = o.lexical_options;
         try {
             while (true) {
                 const auto result = server_ridgefill_sweep_step(sweep, ctx, 0, doc.ids.data(), rows, p);
@@ -336,7 +354,11 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         result["parameters"]["vtail"] = o.vtail;
         result["parameters"]["vtail_rows"] = o.vtail_rows;
     }
-    if (o.lexical) { result["parameters"]["lexical"] = true; }
+    if (o.lexical) {
+        result["parameters"].update({{"lexical", true}, {"lexical_window", o.lexical_options.window_tokens},
+            {"lexical_min_words", o.lexical_options.minimum_words}, {"lexical_span_rows", o.lexical_options.span_rows},
+            {"lexical_max_occurrences", o.lexical_options.maximum_occurrences}});
+    }
     if (o.certificate) {
         result["parameters"].update({{"certificate", true}, {"certificate_tau", o.certificate_tau}, {"certificate_cap", o.certificate_cap}});
     }
@@ -374,7 +396,8 @@ int main(int argc, char ** argv) {
                 "Chat: --special-exact off --header-rows 0 --qattn-window-mode last --qattn-turn-cap 256\n"
                 "turn uses [max(after_last_user_header,END-cap),END), searching only before END; missing/empty turns are refused.\n"
                 "Certificate: --ridgefill-certificate on|off, --ridgefill-certificate-tau 0.01, --ridgefill-certificate-cap 0.23 (requires S1).\n"
-                "Lexical: --ridgefill-lexical on|off (default off; quality+qattn, endpoint N-K).\n"
+                "Lexical: --ridgefill-lexical on|off (default off; quality+qattn, endpoint N-K), --ridgefill-lexical-window 64,\n"
+                "         --ridgefill-lexical-min-words 4, --ridgefill-lexical-span-rows 80, --ridgefill-lexical-max-occurrences 2.\n"
                 "S1/vtail (C API v2): --ridgefill-s1-window 0 (use 256 to enable) --ridgefill-s1-factor 1 --ridgefill-vtail off --ridgefill-vtail-rows 512\n"
                 "S1/vtail default to endpoint N-K in this scorer; vtail calibration must precede scored targets.\n"
                 "Runtime: --gpu-layers 0 --threads 4 --batch 512 --ubatch 512 --ctx-size 0 --cache-type f16 --h-type f16 --flash-attn auto\n"
