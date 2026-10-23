@@ -3532,46 +3532,56 @@ private:
 
     bool ridgefill_sweep_prompt(server_slot & slot, int32_t & budget, int32_t capacity) {
         auto step_params = slot.ridgefill_sweep_params;
-        step_params.n_batch = std::min(step_params.n_batch, budget);
-        const int32_t needed = slot.ridgefill_sweep->next_tokens(ctx_tgt, step_params);
-        if (needed > capacity) {
-            send_error(slot, "RidgeFill vtail: calibration exceeds the prompt budget beside generating slots; reduce vtail rows or increase n_batch", ERROR_TYPE_SERVER);
-            slot.release();
-            return false;
-        }
-        if (needed > budget || budget == 0) {
-            return false;
-        }
-        const char * phase = slot.ridgefill_sweep->phase_name();
-        const int32_t cursor = slot.ridgefill_sweep->cursor();
-        const int32_t before = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
+        step_params.n_batch = std::min(step_params.n_batch, capacity);
         auto result = server_ridgefill_sweep_result::pending;
-        metrics_pre_decode();
-        try {
-            queue_tasks.yield_to_queue([&]() {
-                result = server_ridgefill_sweep_step(*slot.ridgefill_sweep, ctx_tgt, slot.id,
-                        slot.task->tokens.get_tokens().data(), slot.prompt.ridgefill_rows, step_params);
-            });
-        } catch (const std::exception & error) {
-            send_error(slot, error.what(), ERROR_TYPE_SERVER);
-            slot.release();
-            return false;
-        }
-        const int32_t after = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
-        metrics_queue_prompt(after - before);
-        slot.stats.n_prompt_processed += after - before;
-        slot.stats.update_prompt_last();
-        const int32_t charged = needed > 0 ? slot.ridgefill_sweep->step_tokens() :
-                result == server_ridgefill_sweep_result::ready ? 0 : budget;
-        GGML_ASSERT(charged <= budget);
-        budget -= charged;
-        SLT_DBG(slot, "RidgeFill step iteration=%" PRIu64 " phase=%s cursor=%d next=%s cursor_next=%d rows=%d charged=%d remaining=%d\n",
-                ridgefill_iteration, phase, cursor, slot.ridgefill_sweep->phase_name(), slot.ridgefill_sweep->cursor(),
-                slot.ridgefill_sweep->step_tokens(), charged, budget);
-        if (result != server_ridgefill_sweep_result::ready) {
-            if (slot.task->params.stream && slot.task->params.return_progress) {
-                send_partial_response(slot, {}, true);
+        const int32_t initial_budget = budget;
+        const char * initial_phase = slot.ridgefill_sweep->phase_name();
+        const int64_t started = ggml_time_us();
+        int32_t steps = 0, physical_rows = 0;
+        while (budget > 0) {
+            const int32_t needed = slot.ridgefill_sweep->next_tokens(ctx_tgt, step_params);
+            int32_t charged;
+            try {
+                charged = slot.ridgefill_sweep->next_work(ctx_tgt, slot.id, step_params);
+                if (needed > capacity || charged > capacity) {
+                    throw std::runtime_error("RidgeFill: sweep step exceeds the stock prompt chunk budget; reduce probe/vtail rows or increase n_batch");
+                }
+                if (charged > budget) { break; }
+                const char * phase = slot.ridgefill_sweep->phase_name();
+                const int32_t cursor = slot.ridgefill_sweep->cursor();
+                const int32_t before = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
+                metrics_pre_decode();
+                queue_tasks.yield_to_queue([&]() {
+                    result = server_ridgefill_sweep_step(*slot.ridgefill_sweep, ctx_tgt, slot.id,
+                            slot.task->tokens.get_tokens().data(), slot.prompt.ridgefill_rows, step_params);
+                });
+                const int32_t after = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
+                metrics_queue_prompt(after - before);
+                slot.stats.n_prompt_processed += after - before;
+                slot.stats.update_prompt_last();
+                budget -= charged;
+                ++steps;
+                physical_rows += slot.ridgefill_sweep->step_tokens();
+                if (result != server_ridgefill_sweep_result::pending && result != server_ridgefill_sweep_result::ready) {
+                    throw std::runtime_error("RidgeFill: unexpected non-deferred sweep result");
+                }
+                SLT_DBG(slot, "RidgeFill step iteration=%" PRIu64 " phase=%s cursor=%d next=%s cursor_next=%d rows=%d charged=%d remaining=%d\n",
+                        ridgefill_iteration, phase, cursor, slot.ridgefill_sweep->phase_name(), slot.ridgefill_sweep->cursor(),
+                        slot.ridgefill_sweep->step_tokens(), charged, budget);
+                if (result == server_ridgefill_sweep_result::ready) { break; }
+            } catch (const std::exception & error) {
+                send_error(slot, error.what(), ERROR_TYPE_SERVER);
+                slot.release();
+                return false;
             }
+        }
+        if (steps > 0) {
+            SLT_INF(slot, "RidgeFill chunk iteration=%" PRIu64 " steps=%d rows=%d charged=%d remaining=%d phase=%s next=%s elapsed_ms=%.3f\n",
+                    ridgefill_iteration, steps, physical_rows, initial_budget - budget, budget, initial_phase,
+                    slot.ridgefill_sweep->phase_name(), 1e-3 * (ggml_time_us() - started));
+        }
+        if (result != server_ridgefill_sweep_result::ready) {
+            if (slot.task->params.stream && slot.task->params.return_progress) { send_partial_response(slot, {}, true); }
             return false;
         }
 

@@ -4,9 +4,11 @@
 #include "../../src/llama-context.h"
 #include "../../src/llama-memory-hybrid.h"
 #include "../../src/llama-model.h"
+#include "../../src/llama-ridgefill.h"
 
 #include <algorithm>
 #include <cmath>
+#include <climits>
 #include <iterator>
 #include <stdexcept>
 
@@ -299,6 +301,107 @@ bool server_ridgefill_sweep::sweep_certificate(llama_context * ctx, llama_seq_id
     return false;
 }
 #endif
+
+int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) const {
+    if (next == phase::external || next == phase::done) { return 0; }
+    const auto & model = ctx->get_model();
+    const auto & hp = model.hparams;
+    const double h = hp.n_embd;
+    double keys = params.n_tokens;
+#if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
+    keys = std::max(keys, double(sweep_cache_rows(sweep_cache(ctx), seq)));
+#endif
+    const int32_t count = next_tokens(ctx, params);
+    int32_t exact = 0;
+    if (next == phase::prefix) {
+        exact = std::lower_bound(rows.begin(), rows.end(), position + count) - std::lower_bound(rows.begin(), rows.end(), position);
+    }
+    double stock = 0, lower = 0, late = 0, fill = 0, extra = 0, attn_fill = 0, certificate_work = 0;
+    double stock_bytes = 0, lower_bytes = 0, late_bytes = 0, fill_bytes = 0, extra_bytes = 0, attn_bytes = 0;
+    auto bytes = [](std::initializer_list<const ggml_tensor *> tensors) {
+        double total = 0;
+        for (const auto * tensor : tensors) { if (tensor) { total += ggml_nbytes(tensor); } }
+        return total;
+    };
+    for (uint32_t il = 0; il < hp.n_layer(); ++il) {
+        const double mlp = 3 * h * hp.n_ff(il);
+        double linear, bulk, attention = 0;
+        if (hp.is_recr(il)) {
+            if (!hp.ssm_dt_rank || hp.ssm_d_inner % hp.ssm_dt_rank) { throw std::runtime_error("RidgeFill budget: invalid GDN heads"); }
+            const double nk = hp.ssm_n_group, nv = hp.ssm_dt_rank, dk = hp.ssm_d_state, dv = hp.ssm_d_inner / hp.ssm_dt_rank;
+            const double conv = 2 * nk * dk + nv * dv;
+            const double inproj = h * conv + 2 * h * nv + conv * hp.ssm_d_conv;
+            linear = inproj + 2 * h * nv * dv + 4 * nv * dk * dv;
+            bulk = inproj + 3 * nv * dk * dv;
+        } else {
+            const double hq = hp.n_head(il), hkv = hp.n_head_kv(il), d = hp.n_embd_head_k(il);
+            bulk = 2 * h * hkv * d;
+            linear = 3 * h * hq * d + bulk;
+            attention = 2 * hq * d * keys;
+            if (il >= uint32_t(params.split)) {
+                attn_fill += h * h + bulk;
+                certificate_work = std::max(certificate_work,
+                        params.s1_window * (h * h + bulk + attention) + 2 * hkv * d * params.n_prefix);
+            }
+        }
+        const auto & layer = model.layers[il];
+        const double common = bytes({layer.attn_norm, layer.attn_post_norm, layer.attn_q_norm, layer.attn_k_norm, layer.ssm_norm});
+        const double ff = bytes({layer.ffn_gate, layer.ffn_up, layer.ffn_down});
+        const double mix = hp.is_recr(il) ? bytes({layer.wqkv, layer.ssm_conv1d, layer.ssm_beta, layer.ssm_alpha, layer.ssm_dt, layer.ssm_a}) :
+                bytes({layer.wk, layer.wv, layer.wqkv});
+        const double rest = hp.is_recr(il) ? bytes({layer.wqkv_gate, layer.ssm_out}) : bytes({layer.wq, layer.wo});
+        const double full_bytes = common + ff + mix + rest;
+        stock_bytes += full_bytes;
+        if (il < uint32_t(params.split)) {
+            lower_bytes += full_bytes;
+        } else {
+            const double map = params.projector ? bytes({params.projector->w.at(il), params.projector->b.at(il)}) : 4 * h * h;
+            late_bytes += full_bytes;
+            fill_bytes += map + common + mix;
+            extra_bytes += ff + rest;
+            if (!hp.is_recr(il)) { attn_bytes += map + common + mix; }
+        }
+        const double full = linear + mlp + attention;
+        stock += full;
+        if (il < uint32_t(params.split)) {
+            lower += full;
+        } else {
+            late += full;
+            // The current late graph projects every row, including exact rows.
+            fill += h * h + bulk;
+            extra += full - bulk;
+        }
+    }
+    double work = 0, traffic = 0;
+    switch (next) {
+        case phase::lower:       work = count * lower; traffic = lower_bytes; break;
+        case phase::s1_fill:     work = count * attn_fill; traffic = attn_bytes; break;
+        case phase::s1_probe:    work = count * late; traffic = late_bytes; break;
+        case phase::prefix:      work = count * fill + exact * extra; traffic = fill_bytes + (exact > 0 ? extra_bytes : 0); break;
+        case phase::tail:
+            work = count * late;
+            traffic = late_bytes;
+            if (params.vtail && position == params.n_prefix) { work += cost.vtail_rows * attn_fill; traffic += attn_bytes; }
+            break;
+        case phase::mass:
+            for (int32_t il : layers) {
+                const double q = hp.n_head(il) * hp.n_embd_head_k(il);
+                work += (win_end - win_begin) * (2 * h * q + q * params.n_tokens);
+                traffic += bytes({model.layers[il].wq, model.layers[il].attn_norm});
+            }
+            break;
+        case phase::certificate: work = certificate_work; break;
+        default: break;
+    }
+    // Charge compute and weight reads separately; sparse rows still read the full late FFN weights.
+    const double microbatch = std::min(llama_n_batch(ctx), llama_n_ubatch(ctx));
+    const double compute = work / stock;
+    const double weights = microbatch * traffic / stock_bytes;
+    // Keep a cheaper unchanged graph within its stock physical-row cost, including n_batch == n_ubatch.
+    const double charged = std::ceil(std::min(compute + weights, std::max({double(count), compute, weights})));
+    if (!std::isfinite(charged) || charged > INT32_MAX) { throw std::runtime_error("RidgeFill budget: invalid step cost"); }
+    return std::max(1, int32_t(charged));
+}
 
 void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {

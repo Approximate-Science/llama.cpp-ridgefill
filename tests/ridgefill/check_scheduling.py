@@ -141,7 +141,12 @@ def run(config, out):
     if config.get("expect_steps", True):
         assert steps, "no sweep steps in trace (enable --verbose)"
         iterations = [step["iteration"] for step in steps]
-        assert iterations == list(range(iterations[0], iterations[-1] + 1)), iterations
+        assert sorted(set(iterations)) == list(range(iterations[0], iterations[-1] + 1)), iterations
+        groups = [[step for step in steps if step["iteration"] == iteration] for iteration in sorted(set(iterations))]
+        assert all(sum(step["charged"] for step in group) <= config["batch"] - 2 for group in groups)
+        if config.get("expect_multi_step"):
+            assert any(len(group) > 1 for group in groups), "unused work budget: only one step per iteration"
+            assert any(sum(step["rows"] for step in group) > config["batch"] for group in groups), "cheap rows were not charged by cost"
         assert all(step["rows"] <= config["batch"] - 2 and step["charged"] <= config["batch"] - 2 for step in steps)
         assert all(step["next"] != step["phase"] or step["cursor_next"] > step["cursor"]
                    for step in steps if step["phase"] != "external")

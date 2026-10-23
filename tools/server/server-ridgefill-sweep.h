@@ -83,6 +83,8 @@ struct server_ridgefill_sweep {
     int32_t base_row_count() const { return n_base; }
     int32_t step_tokens() const { return n_step_tokens; }
     int32_t next_tokens(llama_context * ctx, const server_ridgefill_sweep_params & params) const;
+    // Estimated work of the next unchanged step, in full-model prompt row equivalents.
+    int32_t next_work(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) const;
     const char * phase_name() const;
     int32_t cursor() const { return next == phase::certificate ? int32_t(certificate.layers.size()) : position; }
     const std::vector<double> & get_s1_mass() const { return s1_mass; }
