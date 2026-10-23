@@ -142,6 +142,10 @@ struct llama_context {
     int32_t ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n);
     int32_t ridgefill_seq_set_part(llama_seq_id seq_id, const llama_ridgefill_part_params * params);
     void ridgefill_seq_stream_layer(llama_seq_id seq, int32_t layer, ggml_tensor * carry, int32_t end);
+    void ridgefill_seq_replace_hidden(llama_seq_id seq, ggml_tensor * host);
+    void ridgefill_seq_compact_hidden(llama_seq_id seq, ggml_tensor * compact, ggml_tensor * tail, int32_t keep_end,
+            const std::vector<int32_t> * indices);
+    void ridgefill_seq_stage_tail(llama_seq_id seq, int32_t begin, int32_t count);
     llama_ridgefill_stream * get_ridgefill_stream() const { return ridgefill_stream.get(); }
     void ridgefill_certificate_start(llama_seq_id seq);
     void ridgefill_certificate_clear(llama_seq_id seq);

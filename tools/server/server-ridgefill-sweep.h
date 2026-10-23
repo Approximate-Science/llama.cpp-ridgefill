@@ -112,6 +112,10 @@ private:
     bool vtail_enabled = false;
     std::unique_ptr<llama_ridgefill_sweep_buffer> hidden;
     std::unique_ptr<llama_ridgefill_sweep_buffer> stream_carry;
+    std::unique_ptr<llama_ridgefill_sweep_buffer> compact_hidden, tail_hidden;
+    std::vector<int32_t> hidden_indices;
+    int32_t hidden_keep_end = 0;
+    uint64_t hidden_upload_bytes = 0, hidden_download_bytes = 0;
     int32_t stream_layer = -1, stream_calib_rows = 0, stream_stride = 0, stream_split = 0;
     std::vector<double> mass;
     std::vector<double> s1_mass;
@@ -135,6 +139,7 @@ private:
     void sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void sweep_tail(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     bool advance_stream(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params, bool attn_only);
+    void compact_hidden_rows(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params);
     void decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, int32_t count, bool output_all, bool output_last,
             int32_t logits_begin = -1, int32_t logits_end = -1);
 

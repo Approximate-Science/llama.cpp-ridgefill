@@ -1,6 +1,8 @@
 #include "llama.h"
 #include "llama-ext.h"
 #include "llama-context.h"
+#include "llama-kv-cache.h"
+#include "llama-model.h"
 #include "server-ridgefill-sweep.h"
 #include "ggml-cpu.h"
 #include "nlohmann/json.hpp"
@@ -32,20 +34,78 @@ struct snapshot {
     size_t map_bytes = 0;
 };
 
-static std::vector<uint8_t> state(llama_context * ctx) {
-    std::vector<uint8_t> bytes(llama_state_seq_get_size(ctx, 0));
+static std::vector<uint8_t> state(llama_context * ctx, llama_seq_id seq = 0) {
+    std::vector<uint8_t> bytes(llama_state_seq_get_size(ctx, seq));
     require(!bytes.empty(), "empty sequence state");
-    require(llama_state_seq_get_data(ctx, bytes.data(), bytes.size(), 0) == bytes.size(), "incomplete sequence state");
+    require(llama_state_seq_get_data(ctx, bytes.data(), bytes.size(), seq) == bytes.size(), "incomplete sequence state");
     return bytes;
 }
 
+static int check_replay_lookup(const llama_model & model) {
+    auto hp = model.hparams;
+    hp.rope_type = LLAMA_ROPE_TYPE_NORM;
+    llama_kv_cache cache(model, hp, GGML_TYPE_F32, GGML_TYPE_F32, false, false, true,
+            64, 2, 1, 0, LLAMA_SWA_TYPE_NONE, nullptr, [](uint32_t) { return false; }, nullptr, nullptr);
+    std::vector<llama_pos> positions(32);
+    std::vector<int32_t> counts(32, 1);
+    llama_seq_id owner = 0, wrong = 1;
+    std::vector<llama_seq_id *> owners(32, &owner);
+    for (int i = 0; i < 32; ++i) { positions[i] = i; }
+    llama_ubatch batch = {};
+    batch.n_tokens = batch.n_seq_tokens = 32; batch.n_seqs = batch.n_seqs_unq = batch.n_pos = 1;
+    batch.pos = positions.data(); batch.n_seq_id = counts.data(); batch.seq_id = owners.data(); batch.seq_id_unq = &owner;
+    int checks = 0;
+    auto compare = [&]() {
+        std::vector<uint32_t> expected;
+        const auto & cells = cache.get_cells(owner);
+        for (uint32_t q = 0; q < batch.n_tokens; ++q) {
+            int64_t found = -1;
+            for (uint32_t i = 0; i < cells.size(); ++i) {
+                if (!cells.is_empty(i) && cells.seq_has(i, owner) && cells.pos_get(i) == positions[q]) { found = i; }
+            }
+            if (counts[q] != 1 || *owners[q] != owner || found < 0 || cells.seq_count(found) != 1) { expected.clear(); break; }
+            expected.push_back(found);
+        }
+        const auto actual = cache.find_slot_replay(batch);
+        require(expected.empty() ? actual.empty() : !actual.empty() && actual.strm == std::vector<llama_seq_id>{0} && actual.idxs[0] == expected,
+                "replay lookup differs from exhaustive cell lookup");
+        ++checks;
+    };
+    compare();
+    const auto slot = cache.find_slot(batch, false);
+    require(!slot.empty(), "cannot seed replay lookup fixture");
+    cache.apply_ubatch(slot, batch);
+    compare();
+    batch.n_tokens = batch.n_seq_tokens = 5;
+    const auto queries = {0, 8, 4, 8, 31};
+    std::copy(queries.begin(), queries.end(), positions.begin());
+    compare();
+    positions[0] = 40; compare();
+    positions[0] = -1; compare();
+    positions[0] = 0; owners[1] = &wrong; compare(); owners[1] = &owner;
+    cache.seq_cp(0, 1, 8, 9); compare();
+    cache.seq_rm(1, -1, -1);
+    cache.seq_rm(0, 3, 5); compare();
+    cache.seq_div(0, 0, 32, 2);
+    const auto repeated = {0, 4, 2, 4, 15};
+    std::copy(repeated.begin(), repeated.end(), positions.begin());
+    compare();
+    require(cache.find_slot_replay(batch).idxs[0] == std::vector<uint32_t>({1, 9, 5, 9, 31}), "duplicate positions did not select the highest cell");
+    ++checks;
+    cache.seq_add(0, 4, 6, 7);
+    positions[1] = 11; positions[3] = 12;
+    compare();
+    return checks;
+}
+
 static snapshot run(llama_model * model, const char * projector, const std::vector<llama_token> & ids,
-        bool streamed, bool stock, int window, bool vtail, int tau, bool cancel_first = false) {
+        bool streamed, bool stock, int window, bool vtail, int tau, bool cancel_first = false, ggml_type hidden_type = GGML_TYPE_F16, bool other_sequence = false) {
     std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(streamed ?
             llama_ridgefill_init_streamed(model, projector) : llama_ridgefill_init(model, projector), llama_ridgefill_free);
     require(bool(rf), "projector load failed");
     auto cp = llama_context_default_params();
-    cp.n_ctx = ids.size() + 256; cp.n_batch = cp.n_ubatch = 128; cp.n_seq_max = 1;
+    cp.n_ctx = (ids.size() + 256)*(other_sequence ? 2 : 1); cp.n_batch = cp.n_ubatch = 128; cp.n_seq_max = other_sequence ? 2 : 1;
+    cp.kv_unified = true;
     cp.n_threads = cp.n_threads_batch = 4; cp.type_k = cp.type_v = GGML_TYPE_F32;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
     std::unique_ptr<llama_context, decltype(&llama_free)> ctx(llama_init_from_model(model, cp), llama_free);
@@ -62,17 +122,19 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
     require(streamed ? single_rc < 0 : single_rc == 0, "single-pass storage guard or resident control failed");
     llama_memory_clear(llama_get_memory(ctx.get()), true);
     llama_ridgefill_seq_set(ctx.get(), 0, 0);
-    auto decode = [&](int begin, int count, bool output, const llama_token * tokens) {
+    auto decode = [&](int begin, int count, bool output, const llama_token * tokens, llama_seq_id seq = 0) {
         auto batch = llama_batch_init(count, 0, 1);
         batch.n_tokens = count;
         for (int i = 0; i < count; ++i) {
             batch.token[i] = tokens[i]; batch.pos[i] = begin + i;
-            batch.n_seq_id[i] = 1; batch.seq_id[i][0] = 0; batch.logits[i] = output && i + 1 == count;
+            batch.n_seq_id[i] = 1; batch.seq_id[i][0] = seq; batch.logits[i] = output && i + 1 == count;
         }
         const int rc = llama_decode(ctx.get(), batch);
         llama_batch_free(batch);
         require(rc == 0, "decode failed");
     };
+    if (other_sequence) { decode(0, 16, false, ids.data(), 1); }
+    const auto other_before = other_sequence ? state(ctx.get(), 1) : std::vector<uint8_t>();
     snapshot result;
     if (streamed) {
         result.map_bytes = ctx->get_ridgefill_stream()->buffer_bytes();
@@ -93,6 +155,7 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         server_ridgefill_sweep_params params;
         params.n_embd = llama_model_n_embd(model); params.n_tokens = ids.size(); params.n_prefix = ids.size() - 400;
         params.n_batch = 128; params.split = llama_ridgefill_split(rf.get()); params.qattn_share = 0.2f;
+        params.type = hidden_type;
         params.s1 = window > 0; params.s1_window = window; params.projector = rf.get();
         params.vtail = vtail; params.vtail_rows = 32; params.certificate = tau >= 0; params.certificate_tau = tau;
         llama_ridgefill_seq_set(ctx.get(), 0, params.n_prefix);
@@ -130,6 +193,7 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         result.beta = sweep.get_certificate().beta;
     }
     result.prefill = state(ctx.get());
+    if (other_sequence) { require(other_before == state(ctx.get(), 1), "prefill changed the other sequence state"); }
     const int vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     for (int i = 0; i < 5; ++i) {
         const auto * logits = llama_get_logits(ctx.get());
@@ -153,7 +217,7 @@ int main(int argc, char ** argv) {
         require(bool(model), "model load failed");
         const auto stock = run(model.get(), argv[2], ids, false, true, 0, false, -1);
         const auto stock_stream = run(model.get(), argv[2], ids, true, true, 0, false, -1);
-        int checks = 0;
+        int checks = check_replay_lookup(*model);
         auto check = [&](bool ok, const char * message) { require(ok, message); ++checks; };
         check(stock.prefill == stock_stream.prefill, "off prefill-state bytes differ");
         check(stock.final == stock_stream.final, "off final-state bytes differ");
@@ -192,6 +256,24 @@ int main(int argc, char ** argv) {
         check(same_logits(reference.logits, reused.logits), "cancel/reuse logit bytes differ");
         check(reference.rows == reused.rows && reference.mass == reused.mass && reference.beta == reused.beta && reference.scales == reused.scales,
                 "cancel/reuse selection or calibration leaked");
+        for (const auto type : {GGML_TYPE_BF16, GGML_TYPE_F32}) {
+            const auto a = run(model.get(), argv[2], ids, false, false, 64, true, -1, false, type);
+            const auto b = run(model.get(), argv[2], ids, true, false, 64, true, -1, false, type);
+            check(a.prefill == b.prefill, "compact alternate-type prefill bytes differ");
+            check(a.final == b.final, "compact alternate-type final bytes differ");
+            check(same_logits(a.logits, b.logits), "compact alternate-type logits differ");
+            check(a.rows == b.rows && a.mass == b.mass, "compact alternate-type selection differs");
+            check(a.beta == b.beta, "compact alternate-type beta differs");
+            check(a.scales == b.scales, "compact alternate-type vtail differs");
+        }
+        const auto background_a = run(model.get(), argv[2], ids, false, false, 64, true, 0, false, GGML_TYPE_F16, true);
+        const auto background_b = run(model.get(), argv[2], ids, true, false, 64, true, 0, false, GGML_TYPE_F16, true);
+        check(background_a.prefill == background_b.prefill, "other-layout prefill bytes differ");
+        check(background_a.final == background_b.final, "other-layout final bytes differ");
+        check(same_logits(background_a.logits, background_b.logits), "other-layout logits differ");
+        check(background_a.rows == background_b.rows && background_a.mass == background_b.mass, "other-layout selection differs");
+        check(background_a.beta == background_b.beta, "other-layout beta differs");
+        check(background_a.scales == background_b.scales, "other-layout vtail differs");
         std::ofstream output(argv[4]);
         require(bool(output), "cannot open result file");
         output << json({{"result", "PASS"}, {"checks", checks}, {"atomic_budget_regression", true}, {"cases", cases}}).dump(2) << '\n';

@@ -5,11 +5,13 @@
 #include "../../src/llama-memory-hybrid.h"
 #include "../../src/llama-model.h"
 #include "../../src/llama-ridgefill.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <cmath>
 #include <climits>
 #include <cinttypes>
+#include <cstring>
 #include <iterator>
 #include <stdexcept>
 
@@ -83,6 +85,10 @@ void server_ridgefill_sweep::prepare_cost(const llama_model & model, const serve
 
 void server_ridgefill_sweep::decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         int32_t count, bool output_all, bool output_last, int32_t logits_begin, int32_t logits_end) {
+    if (tail_hidden && position >= hidden_keep_end) {
+        ctx->ridgefill_seq_stage_tail(seq, position, count);
+        if (!ggml_backend_buffer_is_host(tail_hidden->tensor()->buffer)) { hidden_upload_bytes += size_t(count)*hidden->tensor()->nb[1]; }
+    }
     llama_batch batch = llama_batch_init(count, 0, 1);
     batch.n_tokens = count;
     n_outputs = 0;
@@ -469,8 +475,21 @@ void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq,
         if (maps) {
             stream_calib_rows = params.vtail ? std::max(cost.vtail_rows, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)),
                     params.n_tokens - params.n_prefix - int(params.defer_last_token)})) : 0;
+            compact_hidden_rows(ctx, seq, params);
             stream_carry = std::make_unique<llama_ridgefill_sweep_buffer>(ctx->get_model().select_buft(params.split), params.n_embd,
                     std::max<int32_t>(1, rows.size() + stream_calib_rows), GGML_TYPE_F32, params.max_bytes);
+            std::vector<float> seed(size_t(params.n_embd)*rows.size());
+            for (size_t i = 0; i < rows.size(); ++i) {
+                const auto * source = static_cast<const uint8_t *>(hidden->tensor()->data) + size_t(rows[i])*hidden->tensor()->nb[1];
+                float * target = seed.data() + i*params.n_embd;
+                if (params.type == GGML_TYPE_F16) { ggml_fp16_to_fp32_row(reinterpret_cast<const ggml_fp16_t *>(source), target, params.n_embd); }
+                else if (params.type == GGML_TYPE_BF16) { ggml_bf16_to_fp32_row(reinterpret_cast<const ggml_bf16_t *>(source), target, params.n_embd); }
+                else { std::memcpy(target, source, size_t(params.n_embd)*sizeof(float)); }
+            }
+            if (!seed.empty()) {
+                ggml_backend_tensor_set(stream_carry->tensor(), seed.data(), 0, seed.size()*sizeof(float));
+                if (!ggml_backend_buffer_is_host(stream_carry->tensor()->buffer)) { hidden_upload_bytes += seed.size()*sizeof(float); }
+            }
             stream_layer = params.split;
             ctx->ridgefill_seq_stream_layer(seq, stream_layer, stream_carry->tensor(), params.n_prefix + stream_calib_rows);
             LLAMA_LOG_INFO("%s: RidgeFill stream compact residual %.4f MiB (%zu exact + %d tail rows), maps %.4f MiB\n", __func__,
@@ -483,6 +502,39 @@ void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq,
         if (stream_calib_rows) { next = phase::stream_tail; }
         else { advance_stream(ctx, seq, params, false); }
     }
+}
+
+void server_ridgefill_sweep::compact_hidden_rows(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) {
+    ctx->synchronize();
+    auto host = std::make_unique<llama_ridgefill_sweep_buffer>(ggml_backend_cpu_buffer_type(), params.n_embd, params.n_tokens, params.type, params.max_bytes);
+    ggml_backend_tensor_get(hidden->tensor(), host->tensor()->data, 0, hidden->size_bytes());
+    if (!ggml_backend_buffer_is_host(hidden->tensor()->buffer)) { hidden_download_bytes += hidden->size_bytes(); }
+    ctx->ridgefill_seq_replace_hidden(seq, host->tensor());
+    hidden = std::move(host);
+    windows.clear();
+    hidden_keep_end = params.n_prefix + stream_calib_rows;
+    hidden_indices.assign(params.n_tokens, -1);
+    const int32_t n_compact = hidden_keep_end - rows.size() + 1;
+    const size_t row_bytes = hidden->tensor()->nb[1];
+    std::vector<uint8_t> packed(llama_ridgefill_sweep_buffer::required_bytes(params.n_embd, n_compact, params.type, params.max_bytes), 0);
+    size_t exact = 0;
+    int32_t target = 1;
+    for (int32_t pos = 0; pos < hidden_keep_end; ++pos) {
+        if (exact < rows.size() && rows[exact] == pos) { hidden_indices[pos] = 0; ++exact; }
+        else {
+            hidden_indices[pos] = target;
+            std::memcpy(packed.data() + size_t(target++)*row_bytes, static_cast<const uint8_t *>(hidden->tensor()->data) + size_t(pos)*row_bytes, row_bytes);
+        }
+    }
+    if (target != n_compact || exact != rows.size()) { throw std::runtime_error("RidgeFill compact: incomplete exact row coverage"); }
+    const auto buft = ctx->get_model().select_buft(params.split);
+    compact_hidden = std::make_unique<llama_ridgefill_sweep_buffer>(buft, params.n_embd, n_compact, params.type, params.max_bytes);
+    ggml_backend_tensor_set(compact_hidden->tensor(), packed.data(), 0, packed.size());
+    if (!ggml_backend_buffer_is_host(compact_hidden->tensor()->buffer)) { hidden_upload_bytes += packed.size(); }
+    tail_hidden = std::make_unique<llama_ridgefill_sweep_buffer>(buft, params.n_embd, llama_n_ubatch(ctx), params.type, params.max_bytes);
+    ctx->ridgefill_seq_compact_hidden(seq, compact_hidden->tensor(), tail_hidden->tensor(), hidden_keep_end, &hidden_indices);
+    LLAMA_LOG_INFO("%s: RidgeFill hS host %.4f MiB, compact %.4f MiB, tail staging %.4f MiB\n", __func__,
+            hidden->size_bytes()/1048576.0, compact_hidden->size_bytes()/1048576.0, tail_hidden->size_bytes()/1048576.0);
 }
 
 bool server_ridgefill_sweep::advance_stream(llama_context * ctx, llama_seq_id seq,
@@ -555,6 +607,7 @@ void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq
     llama_synchronize(ctx);
     if (auto * maps = ctx->get_ridgefill_stream()) {
         LLAMA_LOG_INFO("%s: RidgeFill context map uploads total %" PRIu64 " bytes\n", __func__, maps->uploaded_bytes());
+        LLAMA_LOG_INFO("%s: RidgeFill hS link uploaded %" PRIu64 " downloaded %" PRIu64 " bytes\n", __func__, hidden_upload_bytes, hidden_download_bytes);
     }
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
     if (vtail_enabled && llama_ridgefill_seq_set_vtail(ctx, seq, false, 1) < 0) {
@@ -568,6 +621,8 @@ void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq
     active = false;
     hidden.reset();
     stream_carry.reset();
+    compact_hidden.reset();
+    tail_hidden.reset();
     windows.clear();
     next = phase::done;
 }
@@ -712,6 +767,10 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
         case phase::tail:
             sweep.sweep_tail(ctx, seq, tokens, params);
             if (params.defer_last_token && sweep.position == params.n_tokens - 1) {
+                if (sweep.tail_hidden) {
+                    ctx->ridgefill_seq_stage_tail(seq, sweep.position, 1);
+                    if (!ggml_backend_buffer_is_host(sweep.tail_hidden->tensor()->buffer)) { sweep.hidden_upload_bytes += sweep.hidden->tensor()->nb[1]; }
+                }
                 sweep.next = phase::external;
                 return server_ridgefill_sweep_result::ready;
             }

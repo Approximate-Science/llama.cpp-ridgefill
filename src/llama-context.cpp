@@ -888,7 +888,10 @@ void llama_context::synchronize() {
         return;
     }
 
+    const bool rf_profile = ridgefill && ridgefill->profiling;
+    const int64_t rf_begin = rf_profile ? ggml_time_us() : 0;
     ggml_backend_sched_synchronize(sched.get());
+    if (rf_profile) { llama_ridgefill_profile(ridgefill, "synchronize", ridgefill_part[0].stream_layer, -1, rf_begin, ggml_time_us()); }
 
     // FIXME: if multiple single tokens are evaluated without a synchronization,
     // the stats will be added to the prompt evaluation stats
@@ -1901,6 +1904,50 @@ void llama_context::ridgefill_seq_stream_layer(llama_seq_id seq, int32_t layer, 
     ps.gen = ++ridgefill_part_gen;
 }
 
+void llama_context::ridgefill_seq_replace_hidden(llama_seq_id seq, ggml_tensor * host) {
+    if (!ridgefill_stream || seq < 0 || seq >= LLAMA_MAX_SEQ) { throw std::runtime_error("RidgeFill compact: invalid sequence"); }
+    auto & ps = ridgefill_part[seq];
+    if (ps.part != LLM_RIDGEFILL_PART_LATE || ps.stream_layer >= 0 || ps.late_end != 0 || !host || !host->buffer ||
+            !ggml_backend_buffer_is_host(host->buffer) || !ps.h_buf || !ggml_are_same_shape(host, ps.h_buf) ||
+            host->type != ps.h_buf->type || !ggml_is_contiguous(host)) {
+        throw std::runtime_error("RidgeFill compact: replace hidden storage before the late replay with an equal host buffer");
+    }
+    synchronize();
+    gf_res_prev_active = nullptr;
+    ps.h_buf = host;
+    ps.gen = ++ridgefill_part_gen;
+}
+
+void llama_context::ridgefill_seq_compact_hidden(llama_seq_id seq, ggml_tensor * compact, ggml_tensor * tail, int32_t keep_end,
+        const std::vector<int32_t> * indices) {
+    if (!ridgefill_stream || seq < 0 || seq >= LLAMA_MAX_SEQ) { throw std::runtime_error("RidgeFill compact: invalid sequence"); }
+    auto & ps = ridgefill_part[seq];
+    auto valid = [&](ggml_tensor * t) { return t && t->buffer && ggml_is_contiguous(t) && t->type == ps.h_buf->type &&
+            t->ne[0] == ps.h_buf->ne[0] && t->ne[1] > 0 && t->ne[2] == 1 && t->ne[3] == 1; };
+    if (ps.part != LLM_RIDGEFILL_PART_LATE || ps.stream_layer >= 0 || ps.late_end != 0 || !ps.h_buf ||
+            !valid(compact) || !valid(tail) || !indices || indices->size() != size_t(ps.lower_end) ||
+            keep_end < ridgefill_p_end[seq] || keep_end > ps.lower_end) {
+        throw std::runtime_error("RidgeFill compact: invalid hidden row map or staging buffers");
+    }
+    for (int32_t pos = 0; pos < keep_end; ++pos) {
+        if ((*indices)[pos] < 0 || (*indices)[pos] >= compact->ne[1]) { throw std::runtime_error("RidgeFill compact: row index outside storage"); }
+    }
+    ps.h_compact = compact; ps.h_tail = tail; ps.h_keep_end = keep_end; ps.h_indices = indices;
+    ps.gen = ++ridgefill_part_gen;
+}
+
+void llama_context::ridgefill_seq_stage_tail(llama_seq_id seq, int32_t begin, int32_t count) {
+    if (!ridgefill_stream || seq < 0 || seq >= LLAMA_MAX_SEQ) { throw std::runtime_error("RidgeFill compact: invalid sequence"); }
+    auto & ps = ridgefill_part[seq];
+    if (ps.part != LLM_RIDGEFILL_PART_LATE || !ps.h_tail || begin < ps.h_keep_end || count <= 0 ||
+            begin > ps.lower_end - count || count > ps.h_tail->ne[1]) { throw std::runtime_error("RidgeFill compact: invalid staged tail range"); }
+    synchronize();
+    const int64_t started = ridgefill->profiling ? ggml_time_us() : 0;
+    ggml_backend_tensor_set(ps.h_tail, static_cast<const uint8_t *>(ps.h_buf->data) + size_t(begin)*ps.h_buf->nb[1], 0, size_t(count)*ps.h_buf->nb[1]);
+    ps.h_tail_begin = begin;
+    if (ridgefill->profiling) { llama_ridgefill_profile(ridgefill, "tail_upload", ps.stream_layer, begin, started, ggml_time_us()); }
+}
+
 void llama_context::ridgefill_certificate_clear(llama_seq_id seq) {
     ridgefill_certificate_on[seq] = false;
     ridgefill_calibration[seq].clear();
@@ -2148,6 +2195,7 @@ llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_uba
     res.rf    = ridgefill;
     res.p_end = ridgefill_p_end.data();
     res.stream_layer = ps.stream_layer;
+    res.stream_host_tail = ps.h_compact && ubatch.pos[0] >= ps.h_keep_end;
     if (ps.stream_layer >= 0) {
         res.stream_w = ridgefill_stream->weight(ps.stream_layer);
         res.stream_b = ridgefill_stream->bias(ps.stream_layer);
@@ -2246,11 +2294,16 @@ bool llama_context::ridgefill_mark() {
 }
 
 llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, llm_graph_type gtype, llama_memory_context_i * mctx, ggml_status & ret) {
+    const bool rf_profile = ridgefill && ridgefill->profiling;
+    const int32_t rf_layer = rf_profile ? ridgefill_part[ubatch.seq_id[0][0]].stream_layer : -1;
+    const int32_t rf_pos = rf_profile ? ubatch.pos[0] : -1;
+    int64_t rf_time = rf_profile ? ggml_time_us() : 0;
     if (mctx && !mctx->apply()) {
         LLAMA_LOG_ERROR("%s: failed to apply memory context\n", __func__);
         ret = GGML_STATUS_FAILED;
         return nullptr;
     }
+    if (rf_profile) { llama_ridgefill_profile(ridgefill, "memory_apply", rf_layer, rf_pos, rf_time, ggml_time_us()); }
 
     auto * res = get_gf_res_prev();
     auto * gf  = res->get_gf();
@@ -2271,15 +2324,18 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
 
         n_reused++;
     } else {
+        rf_time = rf_profile ? ggml_time_us() : 0;
         gf_res_prev_active = nullptr;
         res->reset();
 
         ggml_backend_sched_reset(sched.get());
         ggml_backend_sched_set_eval_callback(sched.get(), cparams.cb_eval, cparams.cb_eval_user_data);
+        if (rf_profile) { llama_ridgefill_profile(ridgefill, "graph_reset", rf_layer, rf_pos, rf_time, ggml_time_us()); rf_time = ggml_time_us(); }
 
         //const auto t_start_us = ggml_time_us();
 
         gf = model.build_graph(gparams);
+        if (rf_profile) { llama_ridgefill_profile(ridgefill, "graph_build", rf_layer, rf_pos, rf_time, ggml_time_us()); rf_time = ggml_time_us(); }
 
         //LLAMA_LOG_INFO("graph build time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
 
@@ -2296,6 +2352,7 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         }
 
         gf_res_prev_active = res;
+        if (rf_profile) { llama_ridgefill_profile(ridgefill, "graph_alloc", rf_layer, rf_pos, rf_time, ggml_time_us()); }
     }
 
     // set the input data for the input tensors
@@ -2303,12 +2360,16 @@ llm_graph_result * llama_context::process_ubatch(const llama_ubatch & ubatch, ll
         //const auto t_start_us = ggml_time_us();
 
         // FIXME this call causes a crash if any model inputs were not used in the graph and were therefore not allocated
+        rf_time = rf_profile ? ggml_time_us() : 0;
         res->set_inputs(&ubatch);
+        if (rf_profile) { llama_ridgefill_profile(ridgefill, "set_inputs", rf_layer, rf_pos, rf_time, ggml_time_us()); }
 
         //LLAMA_LOG_INFO("graph set inputs time: %.3f ms\n", (ggml_time_us() - t_start_us)/1000.0);
     }
 
+    rf_time = rf_profile ? ggml_time_us() : 0;
     const auto status = graph_compute(res->get_gf(), ubatch.n_tokens > 1);
+    if (rf_profile) { llama_ridgefill_profile(ridgefill, "compute_submit", rf_layer, rf_pos, rf_time, ggml_time_us()); }
     if (status != GGML_STATUS_SUCCESS) {
         LLAMA_LOG_ERROR("%s: failed to compute graph, compute status: %d\n", __func__, status);
         ret = status;

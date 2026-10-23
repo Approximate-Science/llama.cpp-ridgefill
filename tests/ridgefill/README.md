@@ -224,6 +224,8 @@ python3 tests/ridgefill/check_certificate.py --bin-dir build-cpu/bin --parent-bi
 
 The optional `--stream-projector` runs the new scorer/server with streaming enabled against the resident parent. It compares full output bytes and reports, ignoring only the new storage flag; certificate runtime/buffer measurements remain visible. Without the option the existing default-off gate is unchanged.
 
+The streaming unit also covers h_S compaction with BF16/F32 storage and a second sequence occupying earlier KV cells. The latter checks masking of the other sequence's keys and requires its complete state to remain unchanged. Native comparisons include every prefill/final KV, convolution and recurrent-state byte and full-vocabulary logits.
+
 ### Lexical v2 selector controls
 
 Build `lexical_rows.cpp` against the CPU common/llama libraries. It loads only the GGUF vocabulary, checks decoded pieces/barriers against the frozen input, runs the production selector, and poisons unavailable suffix IDs to check target independence. The Python wrapper requires Unicode 16 (Python 3.14), compares all 68 Q6 results exactly, checks 27 synthetic boundary/rarity controls, and checks the local Unicode category supplement over all codepoints. The expected JSONL is copied unchanged from Q6 and hash-pinned; provide Q5's immutable `tokenized.jsonl` as an argument. No model inference or benchmark set runs in this selector test.
@@ -235,3 +237,5 @@ python3 tests/ridgefill/check_lexical_http.py --bin-dir build-cpu/bin --model /p
 ```
 
 The short tiny-model native/HTTP check verifies parameter inheritance and request overrides, strict integer bounds, mandatory rows within the existing budget, report/anchor parity, whole-span cap and oversize reporting, and no-op/next-request byte identity. These random-weight model checks establish implementation behavior, not model quality.
+
+The replay-lookup regression compares the production finder with exhaustive cell scans after sharing, removal, division and shifts. It checks unordered/repeated queries, missing/negative positions, mixed owners and the highest-cell rule when cache positions repeat. It needs no model compute beyond the existing tiny fixture.

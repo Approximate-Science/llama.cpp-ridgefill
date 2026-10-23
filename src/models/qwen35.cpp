@@ -164,10 +164,13 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
     cb(inpL, "model.input_embed", -1);
 
     auto * inp = build_inp_mem_hybrid();
+    if (rf_part && rf_part->attention_mask && ridgefill_params.fill == LLM_RIDGEFILL_FILL_NONE) {
+        inp->get_attn()->self_kq_mask_cnv = rf_part->attention_mask;
+    }
 
-    ggml_tensor * inp_pos     = build_inp_pos();
+    ggml_tensor * inp_pos     = stream >= 0 && hparams.is_recr(stream) ? nullptr : build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
-    if (stream >= 0) { ggml_build_forward_expand(gf, inp_pos); }
+    if (stream >= 0 && inp_pos) { ggml_build_forward_expand(gf, inp_pos); }
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
     for (int il = il_0; il < (stream >= 0 ? stream + 1 : n_layer); ++il) {
