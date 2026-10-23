@@ -806,6 +806,7 @@ struct llm_graph_params_ridgefill {
     int32_t                 fill = 0;       // llm_ridgefill_fill
     llm_ridgefill_part      part = LLM_RIDGEFILL_PART_FULL;
     int32_t                 n_rows  = 0;     // |R| in this ubatch (shape of the rows input)
+    bool                    reuse_kv = false; // S1_FILL already wrote the bulk prefix attention K/V
     bool                    correct = false; // the correction-scale input exists (correction ubatch, alpha != 0)
     float                   alpha   = 0.0f;  // the correction scale of speed mode
 
@@ -829,7 +830,7 @@ struct llm_graph_params_ridgefill {
     const std::vector<llama_pos> * rows_vtail = nullptr; // vtail: the sequence's exact rows (they keep their V)
 
     bool operator==(const llm_graph_params_ridgefill & o) const {
-        return rf == o.rf && fill == o.fill && part == o.part && n_rows == o.n_rows && correct == o.correct &&
+        return rf == o.rf && fill == o.fill && part == o.part && n_rows == o.n_rows && reuse_kv == o.reuse_kv && correct == o.correct &&
                alpha == o.alpha && p_end == o.p_end && rows_seq == o.rows_seq &&
                part_state == o.part_state && part_gen == o.part_gen && n_win == o.n_win &&
                certificate == o.certificate && s1_attn_only == o.s1_attn_only && s1_probe == o.s1_probe && vtail_rows == o.vtail_rows &&
@@ -1364,7 +1365,7 @@ struct llm_graph_context {
                   ggml_tensor * inp_out_ids) const;
 
     // RidgeFill (llama-ridgefill.cpp): the rows / correction-scale input of a filled ubatch, nullptr if it has neither
-    llm_graph_input_ridgefill * build_inp_ridgefill() const;
+    llm_graph_input_ridgefill * build_inp_ridgefill(llm_graph_input_attn_kv * inp_attn) const;
 
     // RidgeFill sweeps (llama-ridgefill.cpp): the row inputs of a LOWER / LATE ubatch, nullptr for FULL
     llm_graph_input_ridgefill_part * build_inp_ridgefill_part() const;

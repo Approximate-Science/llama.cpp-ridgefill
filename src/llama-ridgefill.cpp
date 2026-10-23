@@ -545,6 +545,7 @@ static llama_ridgefill * ridgefill_load(const llama_model * model, const char * 
     llama_ridgefill * rf = new llama_ridgefill();
     rf->streamed = streamed;
     rf->profiling = std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr;
+    rf->trim_kv = std::getenv("LLAMA_RIDGEFILL_TRIM_KV") != nullptr;
 
     try {
         if (streamed && model->arch != LLM_ARCH_QWEN35) {
@@ -1168,7 +1169,7 @@ int32_t llama_ridgefill_ubatch_rows(const llama_ubatch & ubatch, const std::vect
     return n;
 }
 
-llm_graph_input_ridgefill * llm_graph_context::build_inp_ridgefill() const {
+llm_graph_input_ridgefill * llm_graph_context::build_inp_ridgefill(llm_graph_input_attn_kv * inp_attn) const {
     const auto & p = ridgefill_params;
     if (!p.rf || (p.n_rows == 0 && !p.correct)) {
         return nullptr;
@@ -1182,6 +1183,16 @@ llm_graph_input_ridgefill * llm_graph_context::build_inp_ridgefill() const {
         if (p.stream_layer < 0 || !hparams.is_recr(p.stream_layer)) {
             inp->pos = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, (int64_t) p.n_rows*hparams.n_pos_per_embd());
             ggml_set_input(inp->pos);
+        }
+        if (p.reuse_kv) {
+            inp->attn = inp_attn;
+            inp->k_idxs = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, p.n_rows);
+            inp->v_idxs = ggml_new_tensor_1d(ctx0, GGML_TYPE_I64, p.n_rows * (inp_attn->get_v_idxs()->ne[0] / n_tokens));
+            ggml_set_input(inp->k_idxs);
+            ggml_set_input(inp->v_idxs);
+            // Keep the host index inputs for the exact-row gather in set_input.
+            ggml_build_forward_expand(gf, inp_attn->get_k_idxs());
+            ggml_build_forward_expand(gf, inp_attn->get_v_idxs());
         }
     }
     if (p.correct) {
@@ -1207,8 +1218,21 @@ void llm_graph_input_ridgefill::set_input(const llama_ubatch * ubatch) {
                 pos_data[k*n_r + r] = ubatch->pos[k*ubatch->n_tokens + idx[r]];
             }
         }
-        ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*sizeof(int32_t));
-        if (pos) { ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*sizeof(int32_t)); }
+        if (rows->buffer) { ggml_backend_tensor_set(rows, idx.data(), 0, idx.size()*sizeof(int32_t)); }
+        if (pos && pos->buffer) { ggml_backend_tensor_set(pos, pos_data.data(), 0, pos_data.size()*sizeof(int32_t)); }
+        if (k_idxs) {
+            auto gather = [&](ggml_tensor * src, ggml_tensor * dst) {
+                const size_t stride = src->ne[0] / ubatch->n_tokens;
+                std::vector<int64_t> full(src->ne[0]), selected(dst->ne[0]);
+                ggml_backend_tensor_get(src, full.data(), 0, full.size()*sizeof(int64_t));
+                for (size_t r = 0; r < idx.size(); ++r) {
+                    std::copy_n(full.data() + idx[r]*stride, stride, selected.data() + r*stride);
+                }
+                if (dst->buffer) { ggml_backend_tensor_set(dst, selected.data(), 0, selected.size()*sizeof(int64_t)); }
+            };
+            gather(attn->get_k_idxs(), k_idxs);
+            gather(attn->get_v_idxs(), v_idxs);
+        }
     }
 
     if (scale) {
@@ -1296,16 +1320,20 @@ ggml_tensor * build_ridgefill_late(
             continue; // S1_FILL: the late GDN layers are not filled (s1_gdn "window")
         }
 
-        ggml_tensor * cur = h_S;
+        const bool reuse_kv = g.ridgefill_params.reuse_kv && !hparams.is_recr(il);
+        if (reuse_kv && !masked) { continue; }
+
+        // Keep the original GEMM shape so the selected rows keep the same arithmetic.
+        ggml_tensor * cur = reuse_kv ? ggml_set_rows(ctx0, ggml_scale(ctx0, h_S, 0.0f), h_R, rows) : h_S;
         auto * weight = stream >= 0 ? g.ridgefill_params.stream_w : rf->w[il];
         auto * bias = stream >= 0 ? g.ridgefill_params.stream_b : rf->b[il];
-        if (weight) {
+        if (!reuse_kv && weight) {
             cur = ggml_mul_mat(ctx0, weight, h_S);
             cur = ggml_add(ctx0, cur, bias);
         }
         g.cb(cur, "ridgefill_inp", il);
 
-        if (masked) {
+        if (masked && !reuse_kv) {
             // x_mix: the predicted input for bulk rows, the carried exact residual for rows R
             cur = ggml_set_rows(ctx0, cur, h_R, rows);
             g.cb(cur, "ridgefill_mix", il);
@@ -1319,6 +1347,7 @@ ggml_tensor * build_ridgefill_late(
         ggml_tensor * o_R   = nullptr; // the mixer's output for the rows R, before the residual
 
         if (!hparams.is_recr(il)) {
+            const int64_t n_kv_rows = reuse_kv ? n_R : n_tokens;
             // attention: K, V only (the joint Q/gate projection is not used and so not computed)
             auto [Qcur_full, Kcur, Vcur] = g.build_qkv(layer, cur,
                     n_embd_head * 2, g.n_head,
@@ -1327,14 +1356,16 @@ ggml_tensor * build_ridgefill_late(
                     il, false);
             GGML_UNUSED(Qcur_full);
 
-            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, g.n_head_kv, n_tokens);
+            // Gather before norm/RoPE to keep the fused cache-store path.
+            if (reuse_kv) { Kcur = ggml_get_rows(ctx0, Kcur, rows); }
+            Kcur = ggml_reshape_3d(ctx0, Kcur, n_embd_head, g.n_head_kv, n_kv_rows);
             Kcur = g.build_norm(Kcur, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
             g.cb(Kcur, "Kcur_normed", il);
 
             Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, g.n_head_kv, n_tokens);
 
             Kcur = ggml_rope_multi(
-                    ctx0, Kcur, inp_pos, nullptr,
+                    ctx0, Kcur, reuse_kv ? rows_mask->pos : inp_pos, nullptr,
                     g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base, g.freq_scale,
                     g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
             g.cb(Kcur, "Kcur", il);
@@ -1347,9 +1378,13 @@ ggml_tensor * build_ridgefill_late(
                 Vcur = llama_mul_mat_hadamard(ctx0, Vcur, inp_attn->self_v_rot);
             }
 
+            if (reuse_kv) {
+                Vcur = ggml_get_rows(ctx0, ggml_cont_2d(ctx0, Vcur, n_embd_head*g.n_head_kv, n_tokens), rows);
+                Vcur = ggml_reshape_3d(ctx0, Vcur, n_embd_head, g.n_head_kv, n_R);
+            }
             const auto * mctx_cur = inp_attn->mctx;
-            ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, Kcur, inp_attn->get_k_idxs(), il));
-            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
+            ggml_build_forward_expand(gf, mctx_cur->cpy_k(ctx0, Kcur, reuse_kv ? rows_mask->k_idxs : inp_attn->get_k_idxs(), il));
+            ggml_build_forward_expand(gf, mctx_cur->cpy_v(ctx0, Vcur, reuse_kv ? rows_mask->v_idxs : inp_attn->get_v_idxs(), il));
 
             if (masked) {
                 // rows R: Q and the output gate, attention over the cache as filled (incl. this ubatch), wo

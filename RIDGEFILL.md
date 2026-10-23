@@ -512,3 +512,7 @@ S1_PROBE retains its original chunk and mass-reduction order. With certificate s
 After synchronization, the log records cumulative context map-upload bytes. A difference across a single prefill measures its host-to-device W/b payload, including prefetch and certificate maps. It excludes model loading, ordinary inputs and readback, host-to-host copies and backend-internal transfers; concurrent sequences share the context counter.
 
 `LLAMA_RIDGEFILL_PROFILE=1` records absolute monotonic host intervals for map copies, graph reset/build/allocation, input preparation, compute submission and synchronization. Worker setter intervals end after the copy completes. Compute submission intervals are API timings; synchronization ends bound completion. Keep these diagnostic runs separate from unprofiled TTFT repetitions.
+
+### Experimental S1 bulk K/V reuse
+
+Set `LLAMA_RIDGEFILL_TRIM_KV=1` before starting the server/scorer to reuse S1_FILL's bulk attention cache in the ordered late pass. This startup switch is default off and requires the S1 two-sweep path. The pass skips the bulk ridge projector, retains the original K/V GEMM dimensions and updates only exact-row cache entries. Keys are gathered before normalization/RoPE to preserve the fused cache-store arithmetic. The GDN Q projection and decode path are unchanged. The 16K resident-projector smoke matched full logit bytes and reduced median TTFT by0.95%; other configurations still need separate measurement.

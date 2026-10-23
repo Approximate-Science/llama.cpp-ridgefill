@@ -1577,6 +1577,10 @@ void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outpu
         v.n_rows   = n_tokens;
         v.rows_seq = ridgefill_rows.data();
         variants.push_back(v);
+        if (v.part == LLM_RIDGEFILL_PART_LATE && ridgefill->trim_kv) {
+            v.reuse_kv = ridgefill->trim_kv;
+            variants.push_back(v);
+        }
     };
     fill(base);
 
@@ -1824,6 +1828,7 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
         }
         next.lower_end = ps.lower_end;
         next.late_end  = attn_min;
+        next.prefix_kv_filled = after_probe;
     } else if (next.part == LLM_RIDGEFILL_PART_S1_FILL) {
         if (ps.part != LLM_RIDGEFILL_PART_LOWER || ps.h_buf != p->h_buf || !lower_done) {
             return refuse("S1_FILL follows a LOWER pass over the whole prompt, with the same h_buf");
@@ -2211,6 +2216,7 @@ llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_uba
         res.correct  = ridgefill_correct(ubatch);
         res.alpha    = res.correct ? ridgefill_alpha : 0.0f;
         res.rows_seq = res.n_rows > 0 ? ridgefill_rows.data() : nullptr;
+        res.reuse_kv = ps.part == LLM_RIDGEFILL_PART_LATE && ridgefill->trim_kv && ps.prefix_kv_filled;
     }
 
     res.s1_probe = ps.part == LLM_RIDGEFILL_PART_S1_PROBE;

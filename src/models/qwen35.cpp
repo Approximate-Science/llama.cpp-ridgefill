@@ -188,10 +188,11 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         }
         if (ridgefill && (il == ridgefill->split || il == stream) && ridgefill_params.fill != LLM_RIDGEFILL_FILL_NONE) {
             // RidgeFill: a filled ubatch writes the late layers' caches from h_S and has no output head
-            auto * rows = build_inp_ridgefill();
+            auto * rows = build_inp_ridgefill(inp->get_attn());
             if (stream >= 0 && rows && rows->pos) { ggml_build_forward_expand(gf, rows->pos); }
             build_ridgefill_late(*this, model, inpL, rows, inp_pos, inp->get_attn(), inp->get_recr(),
                     (llm_ridgefill_fill) ridgefill_params.fill, rf_part);
+            if (inp_pos) { ggml_build_forward_expand(gf, inp_pos); }
             if (inp_out_ids) {
                 ggml_build_forward_expand(gf, inp_out_ids);
             }

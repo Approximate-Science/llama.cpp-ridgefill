@@ -21,6 +21,7 @@ struct llama_ridgefill {
     int32_t format = 1; // 1: the Oct-8 dense files (llama, qwen3), 2: RF27 (qwen35)
     bool streamed = false;
     bool profiling = false;
+    bool trim_kv = false;
 
     // per layer, nullptr for il < split; w and b are nullptr for a GDN layer filled with the identity map
     std::vector<ggml_tensor *> w;  // [n_embd, n_embd]
@@ -115,6 +116,7 @@ struct llama_ridgefill_part_state {
     // S1_PROBE: the window [s1_begin, s1_end); S1_FILL / S1_PROBE / LATE replay rows with the late_end cursor
     llama_pos s1_begin = 0;
     llama_pos s1_end   = 0;
+    bool prefix_kv_filled = false;
 };
 
 struct llama_ridgefill_calibration {
@@ -253,6 +255,9 @@ public:
     ggml_tensor * rows  = nullptr; // I32 [n_R]: ubatch row indices of the exact rows R, ascending
     ggml_tensor * pos   = nullptr; // I32 [n_R * n_pos]: their positions, section-major as the model's inp_pos
     ggml_tensor * scale = nullptr; // F32 [H_v, n_seqs, n_gdn_late]: correction scale per head, sequence, late GDN layer
+    ggml_tensor * k_idxs = nullptr; // I64: exact-row destinations when reusing the bulk K/V
+    ggml_tensor * v_idxs = nullptr;
+    const llm_graph_input_attn_kv * attn = nullptr;
 
     const llm_graph_params_ridgefill params;
 };
