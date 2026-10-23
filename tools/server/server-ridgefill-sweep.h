@@ -77,6 +77,10 @@ struct server_ridgefill_sweep {
     int32_t window_begin() const { return win_begin; }
     int32_t window_end() const { return win_end; }
     int32_t base_row_count() const { return n_base; }
+    int32_t step_tokens() const { return n_step_tokens; }
+    int32_t next_tokens(llama_context * ctx, const server_ridgefill_sweep_params & params) const;
+    const char * phase_name() const;
+    int32_t cursor() const { return position; }
     const std::vector<double> & get_s1_mass() const { return s1_mass; }
     const std::vector<float> & get_vtail_scales() const { return vtail_scales; }
     const server_ridgefill_sweep_cost & get_cost() const { return cost; }
@@ -95,6 +99,7 @@ private:
     int32_t win_begin = -1;
     int32_t win_end = -1;
     int32_t n_base = 0;
+    int32_t n_step_tokens = 0;
     bool active = false;
     bool vtail_enabled = false;
     std::unique_ptr<llama_ridgefill_sweep_buffer> hidden;

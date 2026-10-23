@@ -13,6 +13,28 @@
 server_ridgefill_sweep::server_ridgefill_sweep() = default;
 server_ridgefill_sweep::~server_ridgefill_sweep() = default;
 
+const char * server_ridgefill_sweep::phase_name() const {
+    static const char * names[] = {"lower", "mass", "rows", "s1_fill", "s1_probe", "s1_rows", "prefix", "tail", "external", "done"};
+    return names[int(next)];
+}
+
+int32_t server_ridgefill_sweep::next_tokens(llama_context * ctx, const server_ridgefill_sweep_params & params) const {
+    int32_t end;
+    switch (next) {
+        case phase::lower:    end = params.n_tokens; break;
+        case phase::s1_fill:
+        case phase::prefix:   end = params.n_prefix; break;
+        case phase::s1_probe: end = win_end; break;
+        case phase::tail:     end = params.n_tokens - int(params.defer_last_token); break;
+        default: return 0;
+    }
+    int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), end - position});
+    if (next == phase::tail && params.vtail && position == params.n_prefix) {
+        count = std::max(count, std::min(params.vtail_rows, params.n_tokens - params.n_prefix));
+    }
+    return count;
+}
+
 int32_t server_ridgefill_sweep_api_version() {
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
     return llama_ridgefill_api_version();
@@ -79,6 +101,7 @@ void server_ridgefill_sweep::decode(llama_context * ctx, llama_seq_id seq, const
         throw std::runtime_error("RidgeFill quality+qattn: sweep decode failed with code " + std::to_string(rc));
     }
     position += count;
+    n_step_tokens = count;
 }
 
 void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
@@ -411,6 +434,7 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
         }
     }
     sweep.n_outputs = 0;
+    sweep.n_step_tokens = 0;
     sweep.output_position = -1;
     using phase = server_ridgefill_sweep::phase;
     switch (sweep.next) {

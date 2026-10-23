@@ -500,10 +500,6 @@ struct server_slot {
     bool can_batch_with(server_slot & other_slot) const {
         GGML_ASSERT(task);
 
-        if (ridgefill_sweep || other_slot.ridgefill_sweep) {
-            return false;
-        }
-
         // a joint decision head reads the whole batch
         if (!task->decision.order.empty() || !other_slot.task->decision.order.empty()) {
             return false;
@@ -1060,6 +1056,7 @@ private:
     int slots_n_diff = 0; // env: LLAMA_SERVER_SLOTS_N_DIFF
 
     int n_empty_consecutive = 0;
+    uint64_t ridgefill_iteration = 0;
 
     std::unique_ptr<server_prompt_cache> prompt_cache;
 
@@ -3448,7 +3445,15 @@ private:
         int32_t off_next = 0;
         int32_t n_batch = llama_n_batch(ctx_tgt);
         for (int32_t off = 0; off < batch.size(); off = off_next) {
-            const int32_t n_tokens = std::min(n_batch, batch.size() - off);
+            int32_t n_tokens = std::min(n_batch, batch.size() - off);
+            if (!params_base.ridgefill_path.empty()) {
+                for (int32_t i = off; i < off + n_tokens; ++i) {
+                    if (slots[batch.tokens[i].id_slot].ridgefill_sweep) {
+                        n_tokens = i == off ? 1 : i - off;
+                        break; // a final LATE output row must be submitted alone
+                    }
+                }
+            }
             try {
                 scoped_timer t(t_decode, n_decode);
                 // TODO @ngxson : maybe handle n_batch == 1 here instead of inside decode()
@@ -3517,14 +3522,27 @@ private:
                 slot.prompt.ridgefill_fill_start, std::min(prefix, slot.prompt.n_filled), extra_work ? &completed : nullptr, slot.ridgefill_sweep ? &slot.ridgefill_sweep->get_lexical() : nullptr);
     }
 
-    bool ridgefill_sweep_prompt(server_slot & slot) {
+    bool ridgefill_sweep_prompt(server_slot & slot, int32_t & budget, int32_t capacity) {
+        auto step_params = slot.ridgefill_sweep_params;
+        step_params.n_batch = std::min(step_params.n_batch, budget);
+        const int32_t needed = slot.ridgefill_sweep->next_tokens(ctx_tgt, step_params);
+        if (needed > capacity) {
+            send_error(slot, "RidgeFill vtail: calibration exceeds the prompt budget beside generating slots; reduce vtail rows or increase n_batch", ERROR_TYPE_SERVER);
+            slot.release();
+            return false;
+        }
+        if (needed > budget || budget == 0) {
+            return false;
+        }
+        const char * phase = slot.ridgefill_sweep->phase_name();
+        const int32_t cursor = slot.ridgefill_sweep->cursor();
         const int32_t before = std::min(slot.ridgefill_sweep->lower_progress(), slot.task->n_tokens() - 1);
         auto result = server_ridgefill_sweep_result::pending;
         metrics_pre_decode();
         try {
             queue_tasks.yield_to_queue([&]() {
                 result = server_ridgefill_sweep_step(*slot.ridgefill_sweep, ctx_tgt, slot.id,
-                        slot.task->tokens.get_tokens().data(), slot.prompt.ridgefill_rows, slot.ridgefill_sweep_params);
+                        slot.task->tokens.get_tokens().data(), slot.prompt.ridgefill_rows, step_params);
             });
         } catch (const std::exception & error) {
             send_error(slot, error.what(), ERROR_TYPE_SERVER);
@@ -3535,7 +3553,14 @@ private:
         metrics_queue_prompt(after - before);
         slot.stats.n_prompt_processed += after - before;
         slot.stats.update_prompt_last();
-        if (result != server_ridgefill_sweep_result::ready || batch.size() != 0) {
+        const int32_t charged = needed > 0 ? slot.ridgefill_sweep->step_tokens() :
+                result == server_ridgefill_sweep_result::ready ? 0 : budget;
+        GGML_ASSERT(charged <= budget);
+        budget -= charged;
+        SLT_DBG(slot, "RidgeFill step iteration=%" PRIu64 " phase=%s cursor=%d next=%s cursor_next=%d rows=%d charged=%d remaining=%d\n",
+                ridgefill_iteration, phase, cursor, slot.ridgefill_sweep->phase_name(), slot.ridgefill_sweep->cursor(),
+                slot.ridgefill_sweep->step_tokens(), charged, budget);
+        if (result != server_ridgefill_sweep_result::ready) {
             if (slot.task->params.stream && slot.task->params.return_progress) {
                 send_partial_response(slot, {}, true);
             }
@@ -3767,6 +3792,9 @@ private:
         // process in chunks of params.n_batch
         int32_t n_batch  = llama_n_batch(ctx_tgt);
         int32_t n_ubatch = llama_n_ubatch(ctx_tgt);
+        int32_t ridgefill_budget = std::max(0, n_batch - batch.size());
+        const int32_t ridgefill_capacity = ridgefill_budget;
+        if (!params_base.ridgefill_path.empty()) { ++ridgefill_iteration; }
 
         auto & alora_scale       = batch.alora_scale;
         auto & alora_disabled_id = batch.alora_disabled_id;
@@ -4272,8 +4300,12 @@ private:
                         }
                     } // end of SLOT_STATE_STARTED
 
-                    if (slot.ridgefill_sweep && !ridgefill_sweep_prompt(slot)) {
-                        return;
+                    if (slot.ridgefill_sweep) {
+                        ridgefill_budget = std::min(ridgefill_budget, n_batch - batch.size());
+                        const int32_t before = ridgefill_budget;
+                        const bool ready = ridgefill_sweep_prompt(slot, ridgefill_budget, ridgefill_capacity);
+                        n_batch = std::max(batch.size(), n_batch - (before - ridgefill_budget));
+                        if (!ready) { return; }
                     }
 
                     if (!slot.can_split()) {
