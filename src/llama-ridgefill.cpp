@@ -1421,10 +1421,15 @@ ggml_tensor * build_ridgefill_late(
                 if (!mask_R) {
                     ggml_tensor * kq_mask = part && part->attention_mask ? part->attention_mask : inp_attn->get_kq_mask();
                     GGML_ASSERT(kq_mask->ne[2] == 1 && kq_mask->ne[3] == 1);
-                    mask_R = part && part->attention_mask ? kq_mask : ggml_get_rows(ctx0, kq_mask, rows); // [n_kv, n_R]
-                    mask_R = ggml_reshape_4d(ctx0, mask_R, mask_R->ne[0], n_R, 1, 1);
-                    if (g.cparams.flash_attn) {
-                        mask_R = ggml_cast(ctx0, mask_R, GGML_TYPE_F16);
+                    if (part && part->attention_mask) {
+                        // Keep INPUT: a view can defer its host copy until after the next input update.
+                        mask_R = kq_mask;
+                    } else {
+                        mask_R = ggml_get_rows(ctx0, kq_mask, rows); // [n_kv, n_R]
+                        mask_R = ggml_reshape_4d(ctx0, mask_R, mask_R->ne[0], n_R, 1, 1);
+                        if (g.cparams.flash_attn) {
+                            mask_R = ggml_cast(ctx0, mask_R, GGML_TYPE_F16);
+                        }
                     }
                 }
 

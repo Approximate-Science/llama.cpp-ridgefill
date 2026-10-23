@@ -226,6 +226,13 @@ The optional `--stream-projector` runs the new scorer/server with streaming enab
 
 The streaming unit also covers h_S compaction with BF16/F32 storage and a second sequence occupying earlier KV cells. The latter checks masking of the other sequence's keys and requires its complete state to remain unchanged. Native comparisons include every prefill/final KV, convolution and recurrent-state byte and full-vocabulary logits.
 
+`check_stream_order.py` scores one document alone and after each other input document in the scorer's reused context, with streaming on and K/V reuse off/on. It requires every logprob, logsumexp, probe-mass byte and selected/target row to match a resident reference, including the predecessor documents. The reference can be freshly scored by omitting `--reference`; provide a pinned cached reference to avoid repeating unchanged controls. The command JSON contains the complete native scorer argv, including input/output and the streaming flag. Use a few fixed documents, not a benchmark set. `test_stream_order.py` checks the comparator's one-ULP, signed-zero and missing/nonfinite rejection controls.
+
+```sh
+python3 -m unittest discover -s tests/ridgefill -p test_stream_order.py
+python3 tests/ridgefill/check_stream_order.py --binary BUILD/bin/llama-ridgefill-score --input documents.jsonl --command-json native-command.json --target document-name --reference resident.jsonl --out out/stream-order
+```
+
 ### Lexical v2 selector controls
 
 Build `lexical_rows.cpp` against the CPU common/llama libraries. It loads only the GGUF vocabulary, checks decoded pieces/barriers against the frozen input, runs the production selector, and poisons unavailable suffix IDs to check target independence. The Python wrapper requires Unicode 16 (Python 3.14), compares all 68 Q6 results exactly, checks 27 synthetic boundary/rarity controls, and checks the local Unicode category supplement over all codepoints. The expected JSONL is copied unchanged from Q6 and hash-pinned; provide Q5's immutable `tokenized.jsonl` as an argument. No model inference or benchmark set runs in this selector test.
