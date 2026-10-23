@@ -23,6 +23,8 @@ Input may be a JSON token-ID array, a `{ "name": "doc", "ids": [...] }` object, 
 
 Defaults match the server recipe: split from the projector, tail 4096, min prompt 8192, class share 0.5, digits on, qattn share 0.2, window 64 ending at N, alpha 0, F16 KV and h_S. The scorer supports `--cache-type` and `--h-type` f32/f16/bf16. CPU is the default; pass `--gpu-layers 99` in lane Q's assigned GPU environment. `--help` lists runtime controls. JSON/JSONL is the supported interchange format; no NPY dependency is needed.
 
+`--ridgefill-stream-projector on` is an experimental, default-off storage option for quality+qattn with alpha 0. It keeps maps/corrections in host RAM and uses the server's layer-major late sweep with two staged maps per device. It supports S1, vtail and the prefill certificate; the active report adds `projector_streamed: true`. h_S and compact F32 exact-row residuals stay on their backends. Streaming does not change the selector endpoint or target-exclusion rules.
+
 ## The NLL selector window excludes targets
 
 `q27/rf27_quality.py` sets `known = N - scored` and captures `[known-window, known)`. Its `finish(..., keep=K+1)` result is passed to `score_tokens()`, which drops the final logit row and scores IDs `[N-K,N)`. This is also the target exclusion documented in `kva/select.py`; `q27/drive.py` delegates quality work to the quality steps rather than defining a different qattn NLL rule.

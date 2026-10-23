@@ -10,6 +10,11 @@ struct llm_graph_context;
 struct llama_context;
 struct llama_layer;
 class llama_kv_cache;
+struct llama_ridgefill;
+struct llama_ridgefill_calibration;
+
+std::vector<float> llama_ridgefill_sweep_stream_beta(llama_context & ctx, int32_t seq,
+        const llama_ridgefill & rf, ggml_tensor * hidden, const llama_ridgefill_calibration & calibration, size_t & compute_bytes);
 
 constexpr size_t LLAMA_RIDGEFILL_SWEEP_MAX_BYTES = size_t(1) << 30;
 

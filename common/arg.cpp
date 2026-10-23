@@ -3066,6 +3066,10 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-digits", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));
     add_opt(common_arg(
+        {"--ridgefill-stream-projector"}, "on|off", "RidgeFill: stream host maps in the layer-major server/scorer sweep (default: off)",
+        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-stream-projector", value); }
+    ).set_examples({LLAMA_EXAMPLE_SERVER}));
+    add_opt(common_arg(
         {"--ridgefill-lexical"}, "on|off", "RidgeFill: reserve rare question-matching prefix spans (default: off; server/scorer)",
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-lexical", value); }
     ));

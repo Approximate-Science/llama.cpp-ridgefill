@@ -149,13 +149,17 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     // RidgeFill two-sweep prefill: a LATE ubatch starts at the split from h_S rows of the sweep buffer
     auto * rf_part  = build_inp_ridgefill_part();
-    const int il_0  = rf_part && ridgefill_params.part != LLM_RIDGEFILL_PART_LOWER ? ridgefill->split : 0;
+    const int stream = ridgefill_params.stream_layer;
+    const int il_0  = stream >= 0 ? stream : rf_part && ridgefill_params.part != LLM_RIDGEFILL_PART_LOWER ? ridgefill->split : 0;
 
     inpL = il_0 > 0 ? build_ridgefill_h_input(*this, rf_part) : build_inp_embd(model.tok_embd);
 
     ggml_tensor * rf_h_S   = il_0 > 0 ? inpL : nullptr; // LATE / S1 parts: h_S of the ubatch rows (vtail's fill)
     ggml_tensor * rf_mass  = nullptr;                    // S1_PROBE: the attention mass per KV cell
     ggml_tensor * rf_scale = nullptr;                    // vtail: the scales applied
+    if (stream >= 0 && stream > ridgefill->split && ridgefill_params.fill == LLM_RIDGEFILL_FILL_NONE) {
+        inpL = ggml_get_rows(ctx0, rf_part->params.part_state->stream_carry, rf_part->carry_rows);
+    }
 
     cb(inpL, "model.input_embed", -1);
 
@@ -163,9 +167,10 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
 
     ggml_tensor * inp_pos     = build_inp_pos();
     ggml_tensor * inp_out_ids = build_inp_out_ids();
+    if (stream >= 0) { ggml_build_forward_expand(gf, inp_pos); }
 
     // MTP/NextN layers are loaded as extra decoder blocks but not executed in the main pass.
-    for (int il = il_0; il < n_layer; ++il) {
+    for (int il = il_0; il < (stream >= 0 ? stream + 1 : n_layer); ++il) {
         if (rf_part && ridgefill_params.part == LLM_RIDGEFILL_PART_LOWER) {
             // RidgeFill sweep 1: the lower layers only; h_S (and window layer inputs) go to the sweep buffers
             build_ridgefill_capture(*this, rf_part, inpL, il);
@@ -178,10 +183,12 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
                 return;
             }
         }
-        if (ridgefill && il == ridgefill->split && ridgefill_params.fill != LLM_RIDGEFILL_FILL_NONE) {
+        if (ridgefill && (il == ridgefill->split || il == stream) && ridgefill_params.fill != LLM_RIDGEFILL_FILL_NONE) {
             // RidgeFill: a filled ubatch writes the late layers' caches from h_S and has no output head
-            build_ridgefill_late(*this, model, inpL, build_inp_ridgefill(), inp_pos, inp->get_attn(), inp->get_recr(),
-                    (llm_ridgefill_fill) ridgefill_params.fill);
+            auto * rows = build_inp_ridgefill();
+            if (stream >= 0 && rows && rows->pos) { ggml_build_forward_expand(gf, rows->pos); }
+            build_ridgefill_late(*this, model, inpL, rows, inp_pos, inp->get_attn(), inp->get_recr(),
+                    (llm_ridgefill_fill) ridgefill_params.fill, rf_part);
             if (inp_out_ids) {
                 ggml_build_forward_expand(gf, inp_out_ids);
             }
@@ -257,6 +264,11 @@ llama_model_qwen35::graph::graph(const llama_model & model, const llm_graph_para
         if (inp_out_ids) {
             ggml_build_forward_expand(gf, inp_out_ids);
         }
+        return;
+    }
+    if (stream >= 0 && stream + 1 < n_layer) {
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, rf_part->params.part_state->stream_carry, inpL, rf_part->carry_rows));
+        if (inp_out_ids) { ggml_build_forward_expand(gf, inp_out_ids); }
         return;
     }
     cur = inpL;

@@ -1420,7 +1420,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             pimpl->context.reset();
             return;
         }
-        pimpl->ridgefill.reset(llama_ridgefill_init(model, params.ridgefill_path.c_str()));
+        pimpl->ridgefill.reset(params.ridgefill_stream_projector ? llama_ridgefill_init_streamed(model, params.ridgefill_path.c_str()) :
+                llama_ridgefill_init(model, params.ridgefill_path.c_str()));
         if (!pimpl->ridgefill) {
             COM_ERR("failed to load RidgeFill projector '%s'\n", params.ridgefill_path.c_str());
             pimpl->context.reset();
@@ -1807,6 +1808,9 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         }
         if (option == "--ridgefill-certificate-tau") { params.ridgefill_certificate_tau = fraction; }
         else { params.ridgefill_certificate_cap = fraction; }
+    } else if (option == "--ridgefill-stream-projector") {
+        if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
+        params.ridgefill_stream_projector = value == "on";
     } else if (option == "--ridgefill-certificate") {
         if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
         params.ridgefill_certificate = value == "on";
@@ -1876,6 +1880,10 @@ void common_ridgefill_validate_options(const common_params & params, const std::
             params.ridgefill_lexical_span_rows, params.ridgefill_lexical_max_occurrences});
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;
     if (!common_ridgefill_mode_valid(selected_mode)) { throw std::invalid_argument("RidgeFill: invalid mode " + selected_mode); }
+    if (params.ridgefill_stream_projector && selected_mode != "off" && (selected_mode != "quality+qattn" ||
+            (params.ridgefill_qattn_share == 0 && params.ridgefill_s1_window == 0 && !params.ridgefill_vtail))) {
+        throw std::invalid_argument("RidgeFill: --ridgefill-stream-projector requires the quality+qattn server/scorer sweep");
+    }
     if (params.ridgefill_lexical && selected_mode != "off" && selected_mode != "quality+qattn") {
         throw std::invalid_argument("RidgeFill: --ridgefill-lexical requires the quality+qattn server/scorer sweep");
     }
@@ -2229,6 +2237,7 @@ common_json common_ridgefill_report::to_json() const {
         {"scope", "prompt coverage including cached rows; analytic cold prefill"},
         {"mac_model", "kva/compute.py: efficient bypass, actual exact-row positions, actual query window, one lm_head"},
     };
+    if (projector_streamed) { result["projector_streamed"] = true; }
     if (s1_begin >= 0) {
         result["n_exact_prefix_by_source"]["s1"] = exact_by_source[5];
         result["s1"] = common_json {{"window", std::vector<int32_t>{s1_begin, s1_end}}, {"macs_fill", macs_s1_fill},
@@ -2306,6 +2315,7 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
     }
     common_ridgefill_report report;
     report.enabled = true;
+    report.projector_streamed = mode != "off" && llama_ridgefill_is_streamed(rf);
     report.n_prompt = n_prompt;
     report.n_prefix = n_prefix;
     report.n_exact_prefix = rows.size();

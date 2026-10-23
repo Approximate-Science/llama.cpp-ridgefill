@@ -84,9 +84,10 @@ struct server_ridgefill_sweep {
     int32_t step_tokens() const { return n_step_tokens; }
     int32_t next_tokens(llama_context * ctx, const server_ridgefill_sweep_params & params) const;
     // Estimated work of the next unchanged step, in full-model prompt row equivalents.
-    int32_t next_work(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) const;
+    int32_t next_work(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params, int32_t capacity) const;
     const char * phase_name() const;
-    int32_t cursor() const { return next == phase::certificate ? int32_t(certificate.layers.size()) : position; }
+    int32_t cursor() const { return next == phase::certificate ? int32_t(certificate.layers.size()) :
+            stream_layer >= 0 ? (stream_layer - stream_split)*stream_stride + position : position; }
     const std::vector<double> & get_s1_mass() const { return s1_mass; }
     const std::vector<float> & get_vtail_scales() const { return vtail_scales; }
     const server_ridgefill_sweep_cost & get_cost() const { return cost; }
@@ -97,7 +98,7 @@ struct server_ridgefill_sweep {
     void cancel(llama_context * ctx, llama_seq_id seq);
 
 private:
-    enum class phase { lower, mass, rows, s1_fill, s1_probe, s1_rows, certificate, prefix, tail, external, done };
+    enum class phase { lower, mass, rows, s1_fill, s1_probe, s1_rows, certificate, prefix, stream_tail, tail, external, done };
     phase next = phase::lower;
     int32_t position = 0;
     int32_t n_lower = 0;
@@ -110,6 +111,8 @@ private:
     bool active = false;
     bool vtail_enabled = false;
     std::unique_ptr<llama_ridgefill_sweep_buffer> hidden;
+    std::unique_ptr<llama_ridgefill_sweep_buffer> stream_carry;
+    int32_t stream_layer = -1, stream_calib_rows = 0, stream_stride = 0, stream_split = 0;
     std::vector<double> mass;
     std::vector<double> s1_mass;
     std::vector<float> vtail_scales;
@@ -131,6 +134,7 @@ private:
     bool sweep_certificate(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params);
     void sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     void sweep_tail(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
+    bool advance_stream(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params, bool attn_only);
     void decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, int32_t count, bool output_all, bool output_last,
             int32_t logits_begin = -1, int32_t logits_end = -1);
 

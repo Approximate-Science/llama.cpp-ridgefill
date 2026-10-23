@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <cmath>
 #include <climits>
+#include <cinttypes>
 #include <iterator>
 #include <stdexcept>
 
@@ -16,7 +17,7 @@ server_ridgefill_sweep::server_ridgefill_sweep() = default;
 server_ridgefill_sweep::~server_ridgefill_sweep() = default;
 
 const char * server_ridgefill_sweep::phase_name() const {
-    static const char * names[] = {"lower", "mass", "rows", "s1_fill", "s1_probe", "s1_rows", "certificate", "prefix", "tail", "external", "done"};
+    static const char * names[] = {"lower", "mass", "rows", "s1_fill", "s1_probe", "s1_rows", "certificate", "prefix", "stream_tail", "tail", "external", "done"};
     return names[int(next)];
 }
 
@@ -27,6 +28,7 @@ int32_t server_ridgefill_sweep::next_tokens(llama_context * ctx, const server_ri
         case phase::s1_fill:
         case phase::prefix:   end = params.n_prefix; break;
         case phase::s1_probe: end = win_end; break;
+        case phase::stream_tail: return stream_calib_rows;
         case phase::tail:     end = params.n_tokens - int(params.defer_last_token); break;
         default: return 0;
     }
@@ -114,6 +116,11 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
             throw std::runtime_error("RidgeFill quality+qattn: invalid split or embedding width");
         }
         if (params.s1 || params.vtail) { prepare_cost(model, params); }
+        stream_stride = params.n_tokens;
+        stream_split = params.split;
+        if (ctx->get_ridgefill_stream() && params.n_tokens > INT32_MAX/int32_t(model.hparams.n_layer() - params.split)) {
+            throw std::runtime_error("RidgeFill stream: cursor exceeds the integer range");
+        }
         win_end = params.qattn_end >= 0 ? params.qattn_end : (params.qattn_blind ? params.n_prefix : params.n_tokens);
         win_begin = std::max(0, win_end - params.qattn_window);
         if (params.qattn_share > 0 && params.qattn_window_mode == "turn") {
@@ -223,15 +230,27 @@ static uint32_t sweep_cache_rows(const llama_kv_cache & cache, llama_seq_id seq)
 
 void server_ridgefill_sweep::sweep_s1_fill(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
-    if (position == 0) {
+    auto * maps = ctx->get_ridgefill_stream();
+    if (position == 0 && stream_layer < 0) {
         auto part = llama_ridgefill_part_default_params();
         part.part = LLAMA_RIDGEFILL_PART_S1_FILL;
         part.h_buf = hidden->tensor();
         if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
             throw std::runtime_error("RidgeFill S1: S1_FILL was refused");
         }
+        if (maps) {
+            stream_layer = params.split;
+            while (ctx->get_model().hparams.is_recr(stream_layer)) { ++stream_layer; }
+            ctx->ridgefill_seq_stream_layer(seq, stream_layer, nullptr, params.n_prefix);
+        }
+    }
+    if (maps) {
+        int32_t next_layer = stream_layer + 1;
+        while (next_layer < int32_t(ctx->get_model().hparams.n_layer()) && ctx->get_model().hparams.is_recr(next_layer)) { ++next_layer; }
+        maps->stage(*ctx, stream_layer, next_layer < int32_t(ctx->get_model().hparams.n_layer()) ? next_layer : -1);
     }
     decode(ctx, seq, tokens, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), params.n_prefix - position}), false, false);
+    if (maps && position == params.n_prefix) { advance_stream(ctx, seq, params, true); }
 }
 
 void server_ridgefill_sweep::sweep_s1_probe(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
@@ -290,7 +309,20 @@ void server_ridgefill_sweep::select_s1_rows(llama_context * ctx, llama_seq_id se
 
 bool server_ridgefill_sweep::sweep_certificate(llama_context * ctx, llama_seq_id seq,
         const server_ridgefill_sweep_params & params) {
+    size_t beta_bytes = 0;
+    double beta_seconds = 0;
+    if (auto * maps = ctx->get_ridgefill_stream()) {
+        const int64_t started = ggml_time_us();
+        const auto & calibration = ctx->ridgefill_certificate_data(seq);
+        const size_t index = certificate.layers.size();
+        const auto & c = calibration.at(index);
+        maps->stage(*ctx, c.layer, index + 1 < calibration.size() ? calibration[index + 1].layer : -1);
+        ctx->ridgefill_certificate_set_beta(seq, c.layer, llama_ridgefill_sweep_stream_beta(*ctx, seq, *params.projector, hidden->tensor(), c, beta_bytes));
+        beta_seconds = (ggml_time_us() - started)/1e6;
+    }
     auto upper = llama_ridgefill_sweep_certificate(*ctx, seq, params.n_tokens, params.n_prefix, certificate);
+    certificate.compute_bytes = std::max(certificate.compute_bytes, beta_bytes);
+    certificate.seconds += beta_seconds;
     for (size_t i = 0; i < upper.size(); ++i) { certificate_upper[i] = std::max(certificate_upper[i], upper[i]); }
     if (certificate.layers.size() == ctx->ridgefill_certificate_data(seq).size()) {
         rows = llama_ridgefill_certificate_select(certificate_upper, rows, certificate);
@@ -302,7 +334,7 @@ bool server_ridgefill_sweep::sweep_certificate(llama_context * ctx, llama_seq_id
 }
 #endif
 
-int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) const {
+int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params, int32_t capacity) const {
     if (next == phase::external || next == phase::done) { return 0; }
     const auto & model = ctx->get_model();
     const auto & hp = model.hparams;
@@ -312,6 +344,11 @@ int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq,
     keys = std::max(keys, double(sweep_cache_rows(sweep_cache(ctx), seq)));
 #endif
     const int32_t count = next_tokens(ctx, params);
+    const bool layerwise = ctx->get_ridgefill_stream() && (next == phase::s1_fill || next == phase::prefix || next == phase::stream_tail);
+    int32_t layer_index = stream_layer >= 0 ? stream_layer : params.split;
+    if (layerwise && next == phase::s1_fill) {
+        while (layer_index < int32_t(hp.n_layer()) && hp.is_recr(layer_index)) { ++layer_index; }
+    }
     int32_t exact = 0;
     if (next == phase::prefix) {
         exact = std::lower_bound(rows.begin(), rows.end(), position + count) - std::lower_bound(rows.begin(), rows.end(), position);
@@ -338,7 +375,7 @@ int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq,
             bulk = 2 * h * hkv * d;
             linear = 3 * h * hq * d + bulk;
             attention = 2 * hq * d * keys;
-            if (il >= uint32_t(params.split)) {
+            if (il >= uint32_t(params.split) && (!layerwise || il == uint32_t(layer_index))) {
                 attn_fill += h * h + bulk;
                 certificate_work = std::max(certificate_work,
                         params.s1_window * (h * h + bulk + attention) + 2 * hkv * d * params.n_prefix);
@@ -354,7 +391,7 @@ int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq,
         stock_bytes += full_bytes;
         if (il < uint32_t(params.split)) {
             lower_bytes += full_bytes;
-        } else {
+        } else if (!layerwise || il == uint32_t(layer_index)) {
             const double map = params.projector ? bytes({params.projector->w.at(il), params.projector->b.at(il)}) : 4 * h * h;
             late_bytes += full_bytes;
             fill_bytes += map + common + mix;
@@ -365,7 +402,7 @@ int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq,
         stock += full;
         if (il < uint32_t(params.split)) {
             lower += full;
-        } else {
+        } else if (!layerwise || il == uint32_t(layer_index)) {
             late += full;
             // The current late graph projects every row, including exact rows.
             fill += h * h + bulk;
@@ -378,6 +415,7 @@ int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq,
         case phase::s1_fill:     work = count * attn_fill; traffic = attn_bytes; break;
         case phase::s1_probe:    work = count * late; traffic = late_bytes; break;
         case phase::prefix:      work = count * fill + exact * extra; traffic = fill_bytes + (exact > 0 ? extra_bytes : 0); break;
+        case phase::stream_tail:
         case phase::tail:
             work = count * late;
             traffic = late_bytes;
@@ -400,12 +438,17 @@ int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq,
     // Keep a cheaper unchanged graph within its stock physical-row cost, including n_batch == n_ubatch.
     const double charged = std::ceil(std::min(compute + weights, std::max({double(count), compute, weights})));
     if (!std::isfinite(charged) || charged > INT32_MAX) { throw std::runtime_error("RidgeFill budget: invalid step cost"); }
-    return std::max(1, int32_t(charged));
+    const int32_t result = std::max(1, int32_t(charged));
+    if (count > capacity || result > capacity) {
+        throw std::runtime_error("RidgeFill: sweep step exceeds the stock prompt chunk budget; reduce probe/vtail rows or increase n_batch");
+    }
+    return result;
 }
 
 void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
-    if (position == 0) {
+    auto * maps = ctx->get_ridgefill_stream();
+    if (position == 0 && stream_layer < 0) {
         auto part = llama_ridgefill_part_default_params();
         part.part = LLAMA_RIDGEFILL_PART_LATE;
         part.h_buf = hidden->tensor();
@@ -423,19 +466,58 @@ void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq,
         if (llama_ridgefill_seq_set_part(ctx, seq, &part) < 0) {
             throw std::runtime_error("RidgeFill quality+qattn: LATE part was refused");
         }
+        if (maps) {
+            stream_calib_rows = params.vtail ? std::max(cost.vtail_rows, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)),
+                    params.n_tokens - params.n_prefix - int(params.defer_last_token)})) : 0;
+            stream_carry = std::make_unique<llama_ridgefill_sweep_buffer>(ctx->get_model().select_buft(params.split), params.n_embd,
+                    std::max<int32_t>(1, rows.size() + stream_calib_rows), GGML_TYPE_F32, params.max_bytes);
+            stream_layer = params.split;
+            ctx->ridgefill_seq_stream_layer(seq, stream_layer, stream_carry->tensor(), params.n_prefix + stream_calib_rows);
+            LLAMA_LOG_INFO("%s: RidgeFill stream compact residual %.4f MiB (%zu exact + %d tail rows), maps %.4f MiB\n", __func__,
+                    stream_carry->size_bytes()/(1024.0*1024.0), rows.size(), stream_calib_rows, maps->buffer_bytes()/(1024.0*1024.0));
+        }
     }
+    if (maps) { maps->stage(*ctx, stream_layer, stream_layer + 1 < int32_t(ctx->get_model().hparams.n_layer()) ? stream_layer + 1 : -1); }
     decode(ctx, seq, tokens, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), params.n_prefix - position}), false, false);
+    if (maps && position == params.n_prefix) {
+        if (stream_calib_rows) { next = phase::stream_tail; }
+        else { advance_stream(ctx, seq, params, false); }
+    }
+}
+
+bool server_ridgefill_sweep::advance_stream(llama_context * ctx, llama_seq_id seq,
+        const server_ridgefill_sweep_params & params, bool attn_only) {
+    int32_t following = stream_layer + 1;
+    const int32_t layers = ctx->get_model().hparams.n_layer();
+    while (attn_only && following < layers && ctx->get_model().hparams.is_recr(following)) { ++following; }
+    if (following == layers) {
+        ctx->ridgefill_seq_stream_layer(seq, -1, nullptr, 0);
+        stream_layer = -1;
+        stream_carry.reset();
+        return true;
+    }
+    stream_layer = following;
+    ctx->ridgefill_seq_stream_layer(seq, stream_layer, attn_only ? nullptr : stream_carry->tensor(),
+            params.n_prefix + (attn_only ? 0 : stream_calib_rows));
+    position = 0;
+    return false;
 }
 
 void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
     const int32_t end = params.n_tokens - int(params.defer_last_token);
+    const bool streaming = next == phase::stream_tail;
+    const bool last_layer = !streaming || stream_layer + 1 == int32_t(ctx->get_model().hparams.n_layer());
     if (position < end) {
         int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), end - position});
+        if (streaming) {
+            count = stream_calib_rows;
+            ctx->get_ridgefill_stream()->stage(*ctx, stream_layer, last_layer ? -1 : stream_layer + 1);
+        }
         const bool calibrate = params.vtail && position == params.n_prefix;
         if (calibrate) { count = std::max(count, cost.vtail_rows); }
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
-        if (calibrate) {
+        if (calibrate && (!streaming || stream_layer == params.split)) {
             const auto & cache = sweep_cache(ctx);
             cost.vtail_cache_rows = sweep_cache_rows(cache, seq);
             const auto & hp = ctx->get_model().hparams;
@@ -448,16 +530,21 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
             cost.vtail_cache_write_bytes = cost.vtail_cache_read_bytes;
         }
 #endif
-        decode(ctx, seq, tokens, count, params.all_tail_logits,
-                params.logits_begin < 0 && !params.defer_last_token && position + count == end, params.logits_begin, params.logits_end);
+        decode(ctx, seq, tokens, count, params.all_tail_logits && last_layer,
+                params.logits_begin < 0 && !params.defer_last_token && position + count == end && last_layer,
+                last_layer ? params.logits_begin : -1, last_layer ? params.logits_end : -1);
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
-        if (calibrate && llama_ridgefill_seq_get_vtail_scales(ctx, seq, vtail_scales.data(), vtail_scales.size()) != int32_t(vtail_scales.size())) {
+        if (calibrate && last_layer && llama_ridgefill_seq_get_vtail_scales(ctx, seq, vtail_scales.data(), vtail_scales.size()) != int32_t(vtail_scales.size())) {
             throw std::runtime_error("RidgeFill vtail: complete per-layer value scales are unavailable");
         }
-        if (calibrate && !std::all_of(vtail_scales.begin(), vtail_scales.end(), [](float scale) { return std::isfinite(scale) && scale >= 0; })) {
+        if (calibrate && last_layer && !std::all_of(vtail_scales.begin(), vtail_scales.end(), [](float scale) { return std::isfinite(scale) && scale >= 0; })) {
             throw std::runtime_error("RidgeFill vtail: nonfinite or negative value scale");
         }
 #endif
+    }
+    if (streaming) {
+        if (!advance_stream(ctx, seq, params, false)) { next = phase::prefix; return; }
+        next = phase::tail;
     }
     if (position == end && !params.defer_last_token) {
         finish_external_tail(ctx, seq);
@@ -466,6 +553,9 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
 
 void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq_id seq) {
     llama_synchronize(ctx);
+    if (auto * maps = ctx->get_ridgefill_stream()) {
+        LLAMA_LOG_INFO("%s: RidgeFill context map uploads total %" PRIu64 " bytes\n", __func__, maps->uploaded_bytes());
+    }
 #if defined(LLAMA_RIDGEFILL_API_VERSION) && LLAMA_RIDGEFILL_API_VERSION >= 2
     if (vtail_enabled && llama_ridgefill_seq_set_vtail(ctx, seq, false, 1) < 0) {
         throw std::runtime_error("RidgeFill vtail: disabling value rescaling before FULL was refused");
@@ -477,6 +567,7 @@ void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq
     }
     active = false;
     hidden.reset();
+    stream_carry.reset();
     windows.clear();
     next = phase::done;
 }
@@ -613,10 +704,11 @@ server_ridgefill_sweep_result server_ridgefill_sweep_step(
 #endif
         case phase::prefix:
             sweep.sweep_prefix(ctx, seq, tokens, params);
-            if (sweep.position == params.n_prefix) {
+            if (sweep.next == phase::prefix && sweep.position == params.n_prefix) {
                 sweep.next = phase::tail;
             }
             break;
+        case phase::stream_tail:
         case phase::tail:
             sweep.sweep_tail(ctx, seq, tokens, params);
             if (params.defer_last_token && sweep.position == params.n_tokens - 1) {

@@ -443,6 +443,88 @@ std::vector<int32_t> llama_ridgefill_certificate_select(const std::vector<double
     return rows;
 }
 
+std::vector<float> llama_ridgefill_sweep_stream_beta(llama_context & ctx, int32_t seq,
+        const llama_ridgefill & rf, ggml_tensor * hidden, const llama_ridgefill_calibration & c, size_t & compute_bytes) {
+    ctx.synchronize();
+    auto * hybrid = dynamic_cast<llama_memory_hybrid *>(ctx.get_memory());
+    auto * maps = ctx.get_ridgefill_stream();
+    if (!hybrid || !maps || !rf.streamed || !hidden || hidden->ne[1] > INT32_MAX || c.probe_chunks.empty()) {
+        throw std::runtime_error("RidgeFill stream: missing probe beta inputs");
+    }
+    auto & cache = *hybrid->get_mem_attn();
+    const auto cells = llama_ridgefill_sweep_key_rows(cache, seq, hidden->ne[1]);
+    const auto & model = ctx.get_model();
+    std::vector<ggml_backend_t> backends;
+    ggml_backend_t cpu = nullptr;
+    for (int i = 0; i < ggml_backend_sched_get_n_backends(ctx.get_sched()); ++i) {
+        auto * backend = ggml_backend_sched_get_backend(ctx.get_sched(), i);
+        backends.push_back(backend);
+        if (ggml_backend_dev_type(ggml_backend_get_device(backend)) == GGML_BACKEND_DEVICE_TYPE_CPU) { cpu = backend; }
+    }
+    std::vector<float> beta(c.kv_heads, 0.0f);
+    int32_t cursor = 0;
+    for (const auto & chunk : c.probe_chunks) {
+        const int32_t first = chunk.first, count = chunk.second, begin = c.begin + first;
+        if (first != cursor || count <= 0 || count > c.rows - first || begin < 0 || begin > int32_t(cells.size()) - count) {
+            throw std::runtime_error("RidgeFill stream: invalid probe chunk coverage");
+        }
+        llm_graph_result graph(512);
+        llama_adapter_loras loras;
+        llm_graph_params params = {};
+        params.arch = model.arch; params.hparams = model.hparams; params.cparams = ctx.get_cparams();
+        params.ubatch.n_tokens = params.ubatch.n_seq_tokens = count;
+        params.ubatch.n_seqs = params.ubatch.n_seqs_unq = 1;
+        params.loras = &loras; params.backend_cpu = cpu; params.res = &graph;
+        llm_graph_context g(params);
+        auto * hi = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, count);
+        auto * ri = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, count);
+        auto * pi = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, count*model.hparams.n_pos_per_embd());
+        for (auto * input : {hi, ri, pi}) { ggml_set_input(input); }
+        auto * rotation = cache.build_input_k_rot(g.ctx0);
+        const auto & layer = model.layers[c.layer];
+        ggml_tensor * x = ggml_get_rows(g.ctx0, hidden, hi);
+        if (auto * weight = maps->weight(c.layer)) { x = ggml_add(g.ctx0, ggml_mul_mat(g.ctx0, weight, x), maps->bias(c.layer)); }
+        x = g.build_norm(x, layer.attn_norm, nullptr, LLM_NORM_RMS, c.layer);
+        auto predicted = g.build_qkv(layer, x, c.dim*2, c.heads, c.dim, c.kv_heads, c.dim, c.kv_heads, c.layer, false);
+        auto * kp = ggml_reshape_3d(g.ctx0, predicted.k, c.dim, c.kv_heads, count);
+        kp = g.build_norm(kp, layer.attn_k_norm, nullptr, LLM_NORM_RMS, c.layer);
+        int sections[4];
+        std::copy(std::begin(model.hparams.rope_sections), std::end(model.hparams.rope_sections), sections);
+        kp = ggml_rope_multi(g.ctx0, kp, pi, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
+                g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
+        if (rotation) { kp = llama_mul_mat_hadamard(g.ctx0, kp, rotation); }
+        auto * storage = cache.get_k_storage(c.layer);
+        auto * stream = ggml_view_2d(g.ctx0, storage, storage->ne[0], storage->ne[1], storage->nb[1], cache.get_stream(seq)*storage->nb[2]);
+        auto * exact = ggml_reshape_3d(g.ctx0, ggml_get_rows(g.ctx0, stream, ri), c.dim, c.kv_heads, count);
+        kp = ggml_cast(g.ctx0, ggml_cast(g.ctx0, kp, storage->type), GGML_TYPE_F32);
+        auto * error = ggml_sqrt(g.ctx0, ggml_sum_rows(g.ctx0, ggml_sqr(g.ctx0, ggml_sub(g.ctx0, kp, exact))));
+        ggml_set_output(error);
+        ggml_build_forward_expand(g.gf, error);
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(), nullptr, backends.size(), 512, false, true));
+        if (!sched || !ggml_backend_sched_alloc_graph(sched.get(), g.gf)) { throw std::runtime_error("RidgeFill stream: beta graph allocation failed"); }
+        size_t bytes = 0;
+        for (auto * backend : backends) { bytes += ggml_backend_sched_get_buffer_size(sched.get(), backend); }
+        compute_bytes = std::max(compute_bytes, bytes);
+        std::vector<int32_t> positions(ggml_nelements(pi)), hidden_rows(count);
+        for (int32_t i = 0; i < count; ++i) { hidden_rows[i] = begin + i; }
+        for (size_t i = 0; i < positions.size(); ++i) { positions[i] = begin + i % count; }
+        ggml_backend_tensor_set(hi, hidden_rows.data(), 0, hidden_rows.size()*sizeof(int32_t));
+        ggml_backend_tensor_set(ri, cells.data() + begin, 0, size_t(count)*sizeof(int32_t));
+        ggml_backend_tensor_set(pi, positions.data(), 0, positions.size()*sizeof(int32_t));
+        if (rotation) { cache.set_input_k_rot(rotation); }
+        if (ggml_backend_sched_graph_compute(sched.get(), g.gf) != GGML_STATUS_SUCCESS) { throw std::runtime_error("RidgeFill stream: beta graph failed"); }
+        std::vector<float> errors(ggml_nelements(error));
+        ggml_backend_tensor_get(error, errors.data(), 0, errors.size()*sizeof(float));
+        for (size_t i = 0; i < errors.size(); ++i) {
+            if (!std::isfinite(errors[i]) || errors[i] < 0) { throw std::runtime_error("RidgeFill stream: non-finite probe key error"); }
+            beta[i % c.kv_heads] = std::max(beta[i % c.kv_heads], std::nextafter(errors[i]*(1.0f + 1e-6f), INFINITY));
+        }
+        cursor += count;
+    }
+    if (cursor != c.rows) { throw std::runtime_error("RidgeFill stream: incomplete probe beta coverage"); }
+    return beta;
+}
+
 std::vector<double> llama_ridgefill_sweep_certificate(llama_context & ctx, int32_t seq,
         int32_t n_tokens, int32_t prefix, llama_ridgefill_certificate_result & result) {
     const auto start = ggml_time_us();

@@ -212,6 +212,18 @@ python3 tests/ridgefill/check_certificate.py --bin-dir build-cpu/bin --parent-bi
 
 The short native/HTTP driver checks accepted-parent byte identity (including full-vocabulary generated probabilities), tau=1 as a no-flag/no-output-change control, tau=0 as a forced/capped positive control, multi-ubatch calibration, per-head beta, source counts, invalid parameters and request-state cleanup. The synthetic input has 2000 tiny-model tokens; the lexical fixture from A1 is suitable. NLL-path controls exclude the scored target from selection. A separate HTTP parity control explicitly uses the full document endpoint to match the server; it does not measure NLL quality. These checks do not establish beta transfer or full-model quality. Run full-model GPU smoke only through the worker's bridge and leave benchmark screens to lane Q.
 
+### Projector streaming controls
+
+`test_streaming.cpp` compares resident and streamed maps on the tiny CPU model. It requires complete serialized prefill/final KV, convolution and recurrent-state bytes and five full-vocabulary logit vectors to match. It covers qattn, S1, vtail, positive/negative certificate controls and a multi-ubatch probe; S1 mass/rows, beta and vtail scales also match exactly. Nonzero alpha refuses, staging is bounded by two map payloads, and cancellation after compact carry allocation followed by replay must match a fresh run. Between streamed layers it narrows a128-row budget to127: the planned first-tail span must remain128, and the server's capacity check must refuse it;128 remains an admitted control. Stock/off is a byte control; an approximate prefix must differ from stock.
+
+```sh
+c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include -Icommon -Itools/server -Ivendor tests/ridgefill/test_streaming.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama-server-impl -lllama-common -lllama -lggml -lggml-cpu -lggml-base -o build-cpu/test-streaming
+build-cpu/test-streaming /path/to/tiny-qwen35-f32.gguf /path/to/projector-s4-f32.gguf /path/to/tiny-match.json out/streaming-unit.json
+python3 tests/ridgefill/check_certificate.py --bin-dir build-cpu/bin --parent-bin /path/to/accepted-parent/bin --model /path/to/tiny-qwen35-f32.gguf --projector /path/to/projector-s4-f32.gguf --input /path/to/tiny-match.json --out out/streaming-http --stream-projector
+```
+
+The optional `--stream-projector` runs the new scorer/server with streaming enabled against the resident parent. It compares full output bytes and reports, ignoring only the new storage flag; certificate runtime/buffer measurements remain visible. Without the option the existing default-off gate is unchanged.
+
 ### Lexical v2 selector controls
 
 Build `lexical_rows.cpp` against the CPU common/llama libraries. It loads only the GGUF vocabulary, checks decoded pieces/barriers against the frozen input, runs the production selector, and poisons unavailable suffix IDs to check target independence. The Python wrapper requires Unicode 16 (Python 3.14), compares all 68 Q6 results exactly, checks 27 synthetic boundary/rarity controls, and checks the local Unicode category supplement over all codepoints. The expected JSONL is copied unchanged from Q6 and hash-pinned; provide Q5's immutable `tokenized.jsonl` as an argument. No model inference or benchmark set runs in this selector test.

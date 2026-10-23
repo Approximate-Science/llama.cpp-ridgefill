@@ -36,7 +36,8 @@ def run(args):
         output = args.out / (label + ".jsonl")
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = str(bundle.resolve())
-        command = [str(bundle / "llama-ridgefill-score"), *common, *extra, "--output", str(output)]
+        stream = ["--ridgefill-stream-projector", "on"] if args.stream_projector and not parent else []
+        command = [str(bundle / "llama-ridgefill-score"), *common, *extra, *stream, "--output", str(output)]
         process = subprocess.run(command, capture_output=True, text=True, env=env, timeout=120)
         (args.out / (label + ".log")).write_text(process.stdout + process.stderr)
         if error:
@@ -50,7 +51,11 @@ def run(args):
         a = native("parent-" + mode, ["--mode", mode], parent=True)
         b = native("new-" + mode, ["--mode", mode])
         for field in ("logprobs", "logsumexp", "exact_rows", "ridgefill"):
-            check(a[field] == b[field], mode + "-byte-identity-" + field)
+            value = b[field]
+            if field == "ridgefill" and args.stream_projector:
+                value = dict(value)
+                check(value.pop("projector_streamed", False) == (mode != "off"), mode + "-streaming-report")
+            check(a[field] == value, mode + "-byte-identity-" + field)
     negative = native("negative", ["--ridgefill-certificate", "on", "--ridgefill-certificate-tau", "1"])
     check(negative["exact_rows"] == baseline["exact_rows"], "tau1-retains-rows")
     check(negative["logprobs"] == baseline["logprobs"], "tau1-logits-identical")
@@ -96,7 +101,8 @@ def run(args):
         env = os.environ.copy()
         env["LD_LIBRARY_PATH"] = str(bundle.resolve())
         with (args.out / ("http-" + arm + ".log")).open("w") as log:
-            proc = subprocess.Popen([str(bundle / "llama-server"), *server_base], stdout=log, stderr=subprocess.STDOUT, env=env)
+            stream = ["--ridgefill-stream-projector", "on"] if args.stream_projector and arm == "new" else []
+            proc = subprocess.Popen([str(bundle / "llama-server"), *server_base, *stream], stdout=log, stderr=subprocess.STDOUT, env=env)
             try:
                 for _ in range(1200):
                     assert proc.poll() is None, "server exited; see " + arm + " log"
@@ -153,4 +159,5 @@ if __name__ == "__main__":
     for name in ("bin-dir", "parent-bin", "model", "projector", "input", "out"):
         parser.add_argument("--" + name, type=Path, required=True)
     parser.add_argument("--port", type=int, default=18304)
+    parser.add_argument("--stream-projector", action="store_true", help="Check streamed new tools against the resident parent")
     run(parser.parse_args())

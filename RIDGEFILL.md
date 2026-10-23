@@ -154,6 +154,7 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-tail N` | projector (27B: 4096) | last prompt tokens computed exactly; at least projector tail_min (27B: 512) |
 | `--ridgefill-min-prompt N` | 8192 | shorter prompts are not filled; CLI/server/perplexity only |
 | `--ridgefill-mode MODE` | speed with a projector | off, speed, quality, quality+qattn; availability above |
+| `--ridgefill-stream-projector on\|off` | off | quality+qattn server/scorer: host maps, two staging maps per device, layer-major late prefix; alpha 0 only |
 | `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in [0,1] |
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
 | `--ridgefill-lexical on\|off` | off | quality+qattn server/scorer: reserve rare question-matching word phrases and their containing units, within a 5% prefix cap |
@@ -495,3 +496,13 @@ For a fixed probe query q and head beta, the uncertain prefix logit radius is de
 A prefix row is flagged if its upper bound exceeds tau for any probe query/head/late attention layer. Flags join S1/lexical/special rows by descending bound, with ties by earlier position, until floor(cap * prefix) total exact rows. Existing rows are preserved; a base set already exceeding the cap refuses by name. A binding cap reports dropped flags and `complete: false`. The report includes per-head beta/layer IDs, calibration size/method, tau/cap, flagged/added/dropped counts and added positions, cap status, bound-graph time/buffer size and extra analytic MACs. Added rows have their own disjoint source count. Disabled certificate selection preserves the previous report and graphs.
 
 This is empirical probe calibration. Neither transfer of beta to the prefix nor agreement of the probe queries/zero-start GDN window with a stock replay is guaranteed. The interval statement is conditional on the key-error radii for those fixed queries; `complete` only says all flags were admitted. A cap can leave flagged rows filled. This feature is not an end-to-end quality certificate. Lane Q owns quality screening; the release remains ON HOLD.
+
+### Experimental projector streaming
+
+`--ridgefill-stream-projector on` keeps projector maps and unused alpha-zero corrections in host RAM. The quality+qattn server/scorer sweep stages two layer maps per target device, owned by the context. This is a startup allocation choice, default off; HTTP can select supported modes but cannot change the projector's storage. Active reports include `projector_streamed: true`. Nonzero alpha and active modes outside the two-sweep driver refuse by name.
+
+S1_FILL runs one attention layer over the prefix before advancing to the next layer. The ordered late pass runs one layer over the prefix and its first vtail chunk, then advances. F32 compact storage carries only the selected prefix rows and that first tail chunk. Individual projection, mixer and MLP row shapes stay the same; the rest of the exact tail uses the previous graph. The first tail span stays atomic across layers: if new generators leave too little batch capacity, it refuses by name; increase n_batch to leave space beside generators. h_S stays on its backend. Host map sources outlive their queued copies, and a staging buffer is reused only after the context synchronizes.
+
+S1_PROBE retains its original chunk and mass-reduction order. With certificate selection, it captures queries there and measures beta afterward, one layer at a time, from the cached exact probe keys and predicted keys. The original projection chunk shapes and cache conversion are retained. CPU checks compare complete KV/convolution/recurrent-state bytes, full-vocabulary logits through later decodes, S1 mass/rows, vtail scales and beta; cancellation after carry allocation must permit identical replay. Memory still scales with h_S and the exact-row carry, so report the tested context/selection with every VRAM comparison.
+
+After synchronization, the log records cumulative context map-upload bytes. A difference across a single prefill measures its host-to-device W/b payload, including prefetch and certificate maps. It excludes model loading, ordinary inputs and readback, host-to-host copies and backend-internal transfers; concurrent sequences share the context counter.

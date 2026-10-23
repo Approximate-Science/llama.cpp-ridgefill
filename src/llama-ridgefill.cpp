@@ -11,12 +11,14 @@
 #include "llama-model.h"
 #include "llama-vocab.h"
 #include "models/models.h"
+#include "ggml-cpu.h"
 
 #include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstring>
 #include <map>
+#include <limits>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -422,7 +424,7 @@ static void llama_ridgefill_init_impl(const llama_model & model, const char * pa
         }
     }
 
-    // the map of layer il lives on the device of layer il
+    // Streamed maps and unused alpha-zero corrections stay in host RAM.
     std::map<ggml_backend_buffer_type_t, ggml_context *> ctx_map;
 
     rf.split = split;
@@ -430,9 +432,8 @@ static void llama_ridgefill_init_impl(const llama_model & model, const char * pa
     rf.b .assign(n_layer, nullptr);
     rf.st.assign(n_layer, nullptr);
 
-    for (int il = split; il < n_layer; ++il) {
-        ggml_backend_buffer_type_t buft = model.select_buft(il);
-
+    auto dup = [&](ggml_tensor * meta, ggml_backend_buffer_type_t buft) -> ggml_tensor * {
+        if (!meta) { return nullptr; }
         auto it = ctx_map.find(buft);
         if (it == ctx_map.end()) {
             ggml_init_params params = {
@@ -448,17 +449,16 @@ static void llama_ridgefill_init_impl(const llama_model & model, const char * pa
             it = ctx_map.emplace(buft, ctx).first;
         }
 
-        auto dup = [&](ggml_tensor * meta) -> ggml_tensor * {
-            if (!meta) {
-                return nullptr;
-            }
-            ggml_tensor * t = ggml_dup_tensor(it->second, meta);
-            ggml_set_name(t, meta->name);
-            return t;
-        };
-        rf.w [il] = dup(w_meta [il]);
-        rf.b [il] = dup(b_meta [il]);
-        rf.st[il] = dup(st_meta[il]);
+        ggml_tensor * t = ggml_dup_tensor(it->second, meta);
+        ggml_set_name(t, meta->name);
+        return t;
+    };
+    for (int il = split; il < n_layer; ++il) {
+        const auto buft = model.select_buft(il);
+        const auto maps = rf.streamed ? ggml_backend_cpu_buffer_type() : buft;
+        rf.w [il] = dup(w_meta [il], maps);
+        rf.b [il] = dup(b_meta [il], maps);
+        rf.st[il] = dup(st_meta[il], rf.streamed ? maps : buft);
     }
 
     for (auto & it : ctx_map) {
@@ -524,12 +524,16 @@ static void llama_ridgefill_init_impl(const llama_model & model, const char * pa
             rf.desc.c_str(), rf.split, n_maps, w_any ? ggml_type_name(w_any->type) : "-", rf.n_gdn_late, rf.alpha_default);
 }
 
-llama_ridgefill * llama_ridgefill_init(const llama_model * model, const char * path) {
+static llama_ridgefill * ridgefill_load(const llama_model * model, const char * path, bool streamed) {
     LLAMA_LOG_INFO("%s: loading RidgeFill projector from '%s' ...\n", __func__, path);
 
     llama_ridgefill * rf = new llama_ridgefill();
+    rf->streamed = streamed;
 
     try {
+        if (streamed && model->arch != LLM_ARCH_QWEN35) {
+            throw std::runtime_error("streamed projector requires the qwen35 layer-major server/scorer sweep");
+        }
         llama_ridgefill_init_impl(*model, path, *rf);
         return rf;
     } catch (const std::exception & err) {
@@ -539,6 +543,146 @@ llama_ridgefill * llama_ridgefill_init(const llama_model * model, const char * p
     delete rf;
 
     return nullptr;
+}
+
+llama_ridgefill * llama_ridgefill_init(const llama_model * model, const char * path) {
+    return ridgefill_load(model, path, false);
+}
+
+llama_ridgefill * llama_ridgefill_init_streamed(const llama_model * model, const char * path) {
+    return ridgefill_load(model, path, true);
+}
+
+bool llama_ridgefill_is_streamed(const llama_ridgefill * rf) { return rf && rf->streamed; }
+
+llama_ridgefill_stream::llama_ridgefill_stream(const llama_model & model, const llama_ridgefill & rf) : rf(rf) {
+    const size_t n = rf.w.size();
+    if (!rf.streamed || n > SIZE_MAX/(4*ggml_tensor_overhead())) {
+        throw std::runtime_error("RidgeFill stream: invalid projector metadata size");
+    }
+    ggml_init_params params = {4*n*ggml_tensor_overhead(), nullptr, true};
+    metadata.reset(ggml_init(params));
+    if (!metadata) { throw std::runtime_error("RidgeFill stream: metadata allocation failed"); }
+    device.assign(n, -1);
+    selected.assign(n, -1);
+    w.resize(n);
+    b.resize(n);
+    std::vector<size_t> matrix_bytes, bias_bytes;
+    auto aligned = [](size_t bytes, size_t alignment) {
+        if (!alignment || bytes > SIZE_MAX - (alignment - 1)) {
+            throw std::runtime_error("RidgeFill stream: map alignment overflow");
+        }
+        return (bytes + alignment - 1)/alignment*alignment;
+    };
+    for (size_t il = rf.split; il < n; ++il) {
+        if (!rf.w[il]) { continue; }
+        if (!ggml_backend_buffer_is_host(rf.w[il]->buffer) || !ggml_backend_buffer_is_host(rf.b[il]->buffer)) {
+            throw std::runtime_error("RidgeFill stream: projector maps must be host-resident");
+        }
+        const auto buft = model.select_buft(il);
+        size_t d = 0;
+        while (d < devices.size() && devices[d].buft != buft) { ++d; }
+        if (d == devices.size()) {
+            devices.emplace_back();
+            devices.back().buft = buft;
+            matrix_bytes.push_back(0);
+            bias_bytes.push_back(0);
+        }
+        device[il] = d;
+        matrix_bytes[d] = std::max(matrix_bytes[d], aligned(ggml_backend_buft_get_alloc_size(buft, rf.w[il]), ggml_backend_buft_get_alignment(buft)));
+        bias_bytes[d] = std::max(bias_bytes[d], ggml_backend_buft_get_alloc_size(buft, rf.b[il]));
+        for (int slot = 0; slot < 2; ++slot) {
+            w[il][slot] = ggml_dup_tensor(metadata.get(), rf.w[il]);
+            b[il][slot] = ggml_dup_tensor(metadata.get(), rf.b[il]);
+            ggml_format_name(w[il][slot], "ridgefill_stream_w_%zu_%d", il, slot);
+            ggml_format_name(b[il][slot], "ridgefill_stream_b_%zu_%d", il, slot);
+        }
+    }
+    for (size_t d = 0; d < devices.size(); ++d) {
+        if (matrix_bytes[d] > SIZE_MAX - bias_bytes[d]) { throw std::runtime_error("RidgeFill stream: map buffer size overflow"); }
+        const size_t size = matrix_bytes[d] + bias_bytes[d];
+        for (int slot = 0; slot < 2; ++slot) {
+            auto & buffer = devices[d].buffers[slot];
+            buffer.reset(ggml_backend_buft_alloc_buffer(devices[d].buft, size));
+            if (!buffer) { throw std::runtime_error("RidgeFill stream: staging allocation failed"); }
+            ggml_backend_buffer_set_usage(buffer.get(), GGML_BACKEND_BUFFER_USAGE_WEIGHTS);
+            const size_t allocated = ggml_backend_buffer_get_size(buffer.get());
+            if (n_bytes > SIZE_MAX - allocated) { throw std::runtime_error("RidgeFill stream: total buffer size overflow"); }
+            n_bytes += allocated;
+            auto * base = static_cast<uint8_t *>(ggml_backend_buffer_get_base(buffer.get()));
+            for (size_t il = rf.split; il < n; ++il) {
+                if (device[il] != int32_t(d)) { continue; }
+                if (ggml_backend_tensor_alloc(buffer.get(), w[il][slot], base) != GGML_STATUS_SUCCESS ||
+                        ggml_backend_tensor_alloc(buffer.get(), b[il][slot], base + matrix_bytes[d]) != GGML_STATUS_SUCCESS) {
+                    throw std::runtime_error("RidgeFill stream: map tensor allocation failed");
+                }
+            }
+        }
+        LLAMA_LOG_INFO("%s: RidgeFill two-map %s buffers %.4f MiB\n", __func__, ggml_backend_buft_name(devices[d].buft),
+                2.0*size/(1024.0*1024.0));
+    }
+}
+
+void llama_ridgefill_stream::copy(llama_context & ctx, int32_t layer, int32_t slot) {
+    auto & maps = devices.at(device.at(layer));
+    ggml_backend_t backend = nullptr;
+    if (!ggml_backend_buffer_is_host(maps.buffers[slot].get())) {
+        for (int i = 0; i < ggml_backend_sched_get_n_backends(ctx.get_sched()); ++i) {
+            auto * candidate = ggml_backend_sched_get_backend(ctx.get_sched(), i);
+            if (ggml_backend_get_default_buffer_type(candidate) == maps.buft ||
+                    (ggml_backend_buft_get_device(maps.buft) && ggml_backend_get_device(candidate) == ggml_backend_buft_get_device(maps.buft))) {
+                backend = candidate; break;
+            }
+        }
+        if (!backend) { throw std::runtime_error("RidgeFill stream: layer backend is unavailable"); }
+    }
+    for (const auto & tensors : {std::make_pair(w[layer][slot], rf.w[layer]), std::make_pair(b[layer][slot], rf.b[layer])}) {
+        if (backend) { ggml_backend_tensor_set_async(backend, tensors.first, tensors.second->data, 0, ggml_nbytes(tensors.second)); }
+        else { ggml_backend_tensor_set(tensors.first, tensors.second->data, 0, ggml_nbytes(tensors.second)); }
+    }
+    maps.layers[slot] = layer;
+    selected[layer] = slot;
+    if (backend) { n_uploaded += ggml_nbytes(rf.w[layer]) + ggml_nbytes(rf.b[layer]); }
+    LLAMA_LOG_DEBUG("%s: RidgeFill map layer %d slot %d copied %zu bytes\n", __func__, layer, slot,
+            ggml_nbytes(rf.w[layer]) + ggml_nbytes(rf.b[layer]));
+}
+
+void llama_ridgefill_stream::stage(llama_context & ctx, int32_t layer, int32_t next_layer) {
+    if (layer < rf.split || layer >= int32_t(w.size()) || next_layer >= int32_t(w.size())) {
+        throw std::runtime_error("RidgeFill stream: layer outside the projector");
+    }
+    auto resident = [&](int32_t il) {
+        if (il < rf.split || !rf.w[il]) { return -1; }
+        auto & maps = devices[device[il]];
+        for (int slot = 0; slot < 2; ++slot) { if (maps.layers[slot] == il) { return slot; } }
+        return -1;
+    };
+    int current = resident(layer);
+    const bool missing = rf.w[layer] && current < 0;
+    const bool prefetch = next_layer >= rf.split && next_layer != layer && rf.w[next_layer] && resident(next_layer) < 0;
+    if (missing || prefetch) { ctx.synchronize(); }
+    if (missing) {
+        auto & maps = devices[device[layer]];
+        current = maps.layers[0] == next_layer ? 1 : 0;
+        copy(ctx, layer, current);
+    }
+    if (prefetch) {
+        const int slot = rf.w[layer] && device[next_layer] == device[layer] ? 1 - current : 0;
+        copy(ctx, next_layer, slot);
+    }
+}
+
+ggml_tensor * llama_ridgefill_stream::weight(int32_t layer) const {
+    if (!rf.w.at(layer)) { return nullptr; }
+    const int slot = selected.at(layer);
+    if (slot < 0 || devices.at(device.at(layer)).layers[slot] != layer) {
+        throw std::runtime_error("RidgeFill stream: requested map was not staged");
+    }
+    return w[layer][slot];
+}
+
+ggml_tensor * llama_ridgefill_stream::bias(int32_t layer) const {
+    return weight(layer) ? b[layer][selected[layer]] : nullptr;
 }
 
 void llama_ridgefill_free(llama_ridgefill * rf) {
@@ -715,6 +859,13 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
 
     inp->h_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
     ggml_set_input(inp->h_rows);
+    const int64_t carry_count = p.fill ? p.n_rows : n_tokens;
+    if (p.stream_layer >= 0 && p.part_state->stream_carry && carry_count > 0) {
+        inp->carry_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, carry_count);
+        ggml_set_input(inp->carry_rows);
+        ggml_build_forward_expand(gf, inp->carry_rows);
+    }
+    if (p.stream_layer >= 0) { ggml_build_forward_expand(gf, inp->h_rows); }
 
     if (p.n_win > 0) {
         inp->win_sel  = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, p.n_win);
@@ -729,7 +880,7 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
         const int64_t n_kv = inp->kv->get_n_kv();
         if (p.s1_probe) {
             // the stock KQ mask's type and shape (build_attn_inp_kq_mask), one sequence / stream
-            if (p.certificate) {
+            if (p.certificate && !p.rf->streamed) {
                 inp->cert_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
                 ggml_set_input(inp->cert_rows);
             }
@@ -770,6 +921,20 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
         GGML_ASSERT(rows[i] >= 0 && rows[i] < ps->h_buf->ne[1]);
     }
     ggml_backend_tensor_set(h_rows, rows.data(), 0, rows.size()*sizeof(int32_t));
+    if (carry_rows) {
+        const auto & exact = *ps->stream_rows;
+        const llama_pos prefix = params.p_end[ubatch->seq_id[0][0]];
+        std::vector<int32_t> indices;
+        for (const auto pos : rows) {
+            const auto it = std::lower_bound(exact.begin(), exact.end(), pos);
+            if (pos < prefix && (it == exact.end() || *it != pos)) { continue; }
+            const int64_t index = pos < prefix ? it - exact.begin() : int64_t(exact.size()) + pos - prefix;
+            GGML_ASSERT(index >= 0 && index < ps->stream_carry->ne[1]);
+            indices.push_back(index);
+        }
+        GGML_ASSERT(indices.size() == size_t(carry_rows->ne[0]));
+        ggml_backend_tensor_set(carry_rows, indices.data(), 0, indices.size()*sizeof(int32_t));
+    }
 
     if (win_sel) {
         std::vector<int32_t> sel;
@@ -972,7 +1137,8 @@ ggml_tensor * build_ridgefill_late(
         ggml_tensor                     * inp_pos,
         llm_graph_input_attn_kv         * inp_attn,
         llm_graph_input_rs              * inp_rs,
-        llm_ridgefill_fill                mode) {
+        llm_ridgefill_fill                mode,
+        const llm_graph_input_ridgefill_part * part) {
     const llama_ridgefill * rf = g.ridgefill;
     const auto & hparams = g.hparams;
     ggml_context * ctx0 = g.ctx0;
@@ -987,6 +1153,10 @@ ggml_tensor * build_ridgefill_late(
 
     ggml_tensor * rows  = masked ? rows_mask->rows : nullptr;
     ggml_tensor * h_R   = masked ? ggml_get_rows(ctx0, h_S, rows) : nullptr; // [n_embd, n_R]
+    const int stream = g.ridgefill_params.stream_layer;
+    if (masked && stream > rf->split) {
+        h_R = ggml_get_rows(ctx0, part->params.part_state->stream_carry, part->carry_rows);
+    }
     const int64_t n_R   = masked ? rows->ne[0] : 0;
     ggml_tensor * mask_R = nullptr; // the KQ mask rows of R, gathered once for all late attention layers
 
@@ -1008,7 +1178,7 @@ ggml_tensor * build_ridgefill_late(
     const int64_t num_v_heads = hparams.ssm_dt_rank;
     const int64_t head_v_dim  = d_inner / num_v_heads;
 
-    for (int il = rf->split; il < g.n_layer; ++il) {
+    for (int il = stream >= 0 ? stream : rf->split; il < (stream >= 0 ? stream + 1 : g.n_layer); ++il) {
         const auto & layer = model.layers[il];
 
         if (g.ridgefill_params.s1_attn_only && hparams.is_recr(il)) {
@@ -1016,9 +1186,11 @@ ggml_tensor * build_ridgefill_late(
         }
 
         ggml_tensor * cur = h_S;
-        if (rf->w[il]) {
-            cur = ggml_mul_mat(ctx0, rf->w[il], h_S);
-            cur = ggml_add(ctx0, cur, rf->b[il]);
+        auto * weight = stream >= 0 ? g.ridgefill_params.stream_w : rf->w[il];
+        auto * bias = stream >= 0 ? g.ridgefill_params.stream_b : rf->b[il];
+        if (weight) {
+            cur = ggml_mul_mat(ctx0, weight, h_S);
+            cur = ggml_add(ctx0, cur, bias);
         }
         g.cb(cur, "ridgefill_inp", il);
 
@@ -1246,6 +1418,9 @@ ggml_tensor * build_ridgefill_late(
         }
     }
 
+    if (masked && stream >= 0 && stream + 1 < g.n_layer) {
+        ggml_build_forward_expand(gf, ggml_set_rows(ctx0, part->params.part_state->stream_carry, h_R, part->carry_rows));
+    }
     // h_R after the last layer has no consumer in a filled ubatch (no logits, it writes no cache): it is not
     // expanded, so the last layer's attention output, ssm_out and MLP for the rows R are pruned from the graph
     return h_R;
@@ -1534,27 +1709,30 @@ ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model &
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
     if (g.ridgefill_params.certificate) {
         const auto * rf = g.ridgefill;
-        ggml_tensor * x = build_ridgefill_h_input(g, inp);
-        if (rf->w[il]) { x = ggml_add(ctx0, ggml_mul_mat(ctx0, rf->w[il], x), rf->b[il]); }
-        x = g.build_norm(x, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
-        auto predicted = g.build_qkv(layer, x, n_embd_head*2, g.n_head, n_embd_head, g.n_head_kv,
-                n_embd_head, g.n_head_kv, il, false);
-        ggml_tensor * kp = ggml_reshape_3d(ctx0, predicted.k, n_embd_head, g.n_head_kv, n_tokens);
-        kp = g.build_norm(kp, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
-        kp = ggml_rope_multi(ctx0, kp, inp_pos, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
-                g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
-        if (inp_attn->self_k_rot) { kp = llama_mul_mat_hadamard(ctx0, kp, inp_attn->self_k_rot); }
-        auto stored = [&](ggml_tensor * t) { return ggml_cast(ctx0, ggml_cast(ctx0, t, k->type), GGML_TYPE_F32); };
-        // Read the written cache; an extra Kcur consumer would break the existing fused store.
-        ggml_tensor * exact = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, k, n_embd_head*g.n_head_kv, k->ne[2]), inp->cert_rows);
-        exact = ggml_reshape_3d(ctx0, exact, n_embd_head, g.n_head_kv, n_tokens);
-        ggml_tensor * error = ggml_sub(ctx0, stored(kp), exact);
-        error = ggml_sqrt(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, error)));
+        ggml_tensor * error = nullptr;
+        if (!rf->streamed) {
+            ggml_tensor * x = build_ridgefill_h_input(g, inp);
+            if (rf->w[il]) { x = ggml_add(ctx0, ggml_mul_mat(ctx0, rf->w[il], x), rf->b[il]); }
+            x = g.build_norm(x, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
+            auto predicted = g.build_qkv(layer, x, n_embd_head*2, g.n_head, n_embd_head, g.n_head_kv,
+                    n_embd_head, g.n_head_kv, il, false);
+            ggml_tensor * kp = ggml_reshape_3d(ctx0, predicted.k, n_embd_head, g.n_head_kv, n_tokens);
+            kp = g.build_norm(kp, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
+            kp = ggml_rope_multi(ctx0, kp, inp_pos, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
+                    g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
+            if (inp_attn->self_k_rot) { kp = llama_mul_mat_hadamard(ctx0, kp, inp_attn->self_k_rot); }
+            auto stored = [&](ggml_tensor * t) { return ggml_cast(ctx0, ggml_cast(ctx0, t, k->type), GGML_TYPE_F32); };
+            // Read the written cache; an extra Kcur consumer would break the existing fused store.
+            ggml_tensor * exact = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, k, n_embd_head*g.n_head_kv, k->ne[2]), inp->cert_rows);
+            exact = ggml_reshape_3d(ctx0, exact, n_embd_head, g.n_head_kv, n_tokens);
+            error = ggml_sub(ctx0, stored(kp), exact);
+            error = ggml_sqrt(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, error)));
+        }
         ggml_tensor * queries = ggml_cont(ctx0, Qcur);
         ggml_set_output(queries);
-        ggml_set_output(error);
+        if (error) { ggml_set_output(error); }
         ggml_build_forward_expand(g.gf, queries);
-        ggml_build_forward_expand(g.gf, error);
+        if (error) { ggml_build_forward_expand(g.gf, error); }
         g.res->t_rf_calibration.push_back({il, queries, error});
     }
 
@@ -1657,7 +1835,9 @@ void build_ridgefill_vtail(llm_graph_context & g, const llama_model & model, con
     };
     ggml_tensor * x_true = ggml_view_2d(ctx0, cur, cur->ne[0], c, cur->nb[1], 0);
     ggml_tensor * x_fill = ggml_view_2d(ctx0, h_S, h_S->ne[0], c, h_S->nb[1], 0);
-    x_fill = ggml_add(ctx0, ggml_mul_mat(ctx0, rf->w[il], x_fill), rf->b[il]);
+    auto * weight = g.ridgefill_params.stream_layer >= 0 ? g.ridgefill_params.stream_w : rf->w[il];
+    auto * bias = g.ridgefill_params.stream_layer >= 0 ? g.ridgefill_params.stream_b : rf->b[il];
+    x_fill = ggml_add(ctx0, ggml_mul_mat(ctx0, weight, x_fill), bias);
     x_fill = g.build_norm(x_fill, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
 
     auto norm_of = [&](ggml_tensor * v) {                     // [1, n_head_kv, c]

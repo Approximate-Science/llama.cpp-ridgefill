@@ -150,6 +150,9 @@ struct llama_ridgefill;
 
 // load a projector (GGUF, see convert_ridgefill_to_gguf.py) for the model, returns nullptr on error
 LLAMA_API struct llama_ridgefill * llama_ridgefill_init(const struct llama_model * model, const char * path);
+// Keep maps/corrections in host RAM; alpha zero only. The server/scorer layer-major sweep stages two maps per layer device.
+LLAMA_API struct llama_ridgefill * llama_ridgefill_init_streamed(const struct llama_model * model, const char * path);
+LLAMA_API bool llama_ridgefill_is_streamed(const struct llama_ridgefill * rf);
 LLAMA_API void                     llama_ridgefill_free(struct llama_ridgefill * rf);
 LLAMA_API int32_t                  llama_ridgefill_split(const struct llama_ridgefill * rf);
 

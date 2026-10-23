@@ -6,6 +6,8 @@
 #include "ggml-cpp.h"
 
 #include <cstdint>
+#include <array>
+#include <utility>
 #include <string>
 #include <vector>
 
@@ -16,6 +18,7 @@
 struct llama_ridgefill {
     int32_t split  = -1;
     int32_t format = 1; // 1: the Oct-8 dense files (llama, qwen3), 2: RF27 (qwen35)
+    bool streamed = false;
 
     // per layer, nullptr for il < split; w and b are nullptr for a GDN layer filled with the identity map
     std::vector<ggml_tensor *> w;  // [n_embd, n_embd]
@@ -45,12 +48,46 @@ struct llama_ridgefill {
     std::vector<ggml_backend_buffer_ptr> bufs;
 };
 
+// One context owns the staging buffers; asynchronous copies read the immutable host projector.
+class llama_ridgefill_stream {
+public:
+    llama_ridgefill_stream(const llama_model & model, const llama_ridgefill & rf);
+    void stage(llama_context & ctx, int32_t layer, int32_t next_layer);
+    ggml_tensor * weight(int32_t layer) const;
+    ggml_tensor * bias(int32_t layer) const;
+    ggml_tensor * reserve_weight(int32_t layer) const { return rf.w.at(layer) ? w.at(layer)[0] : nullptr; }
+    ggml_tensor * reserve_bias(int32_t layer) const { return rf.b.at(layer) ? b.at(layer)[0] : nullptr; }
+    size_t buffer_bytes() const { return n_bytes; }
+    uint64_t uploaded_bytes() const { return n_uploaded; }
+
+private:
+    struct device_maps {
+        ggml_backend_buffer_type_t buft = nullptr;
+        std::array<ggml_backend_buffer_ptr, 2> buffers;
+        std::array<int32_t, 2> layers = {{-1, -1}};
+    };
+    const llama_ridgefill & rf;
+    ggml_context_ptr metadata;
+    std::vector<device_maps> devices;
+    std::vector<int32_t> device;
+    std::vector<int32_t> selected;
+    std::vector<std::array<ggml_tensor *, 2>> w, b;
+    size_t n_bytes = 0;
+    uint64_t n_uploaded = 0;
+
+    void copy(llama_context & ctx, int32_t layer, int32_t slot);
+};
+
 // the two-sweep prefill state of one sequence (llama_ridgefill_seq_set_part), owned by llama_context
 struct llama_ridgefill_part_state {
     llm_ridgefill_part part = LLM_RIDGEFILL_PART_FULL;
     uint64_t           gen  = 0; // bumped on every set, part of the graph-reuse key (the buffers are baked in)
 
     ggml_tensor * h_buf = nullptr; // [n_embd, n_rows]: row p = h_S of position p (LOWER writes, LATE reads)
+    int32_t stream_layer = -1;
+    llama_pos stream_end = 0;
+    ggml_tensor * stream_carry = nullptr; // F32 [n_embd, |R| + first tail chunk]
+    const std::vector<llama_pos> * stream_rows = nullptr;
 
     // LOWER only: the inputs of these layers (< split) at positions [win_begin, win_begin + win_n) are written to
     // row (pos - win_begin) of win_bufs[i] ([n_embd, win_n])
@@ -78,6 +115,7 @@ struct llama_ridgefill_calibration {
     int32_t begin = 0;
     std::vector<float> queries; // [dim, heads, rows], post-RoPE and cache rotation
     std::vector<float> beta; // maximum probe key L2 error per KV head
+    std::vector<std::pair<int32_t, int32_t>> probe_chunks; // streamed beta reuses the original projection shapes
 };
 
 class llama_kv_cache_context;
@@ -93,6 +131,7 @@ public:
     bool can_reuse(const llm_graph_params & params) override;
 
     ggml_tensor * h_rows   = nullptr; // I32 [n_tokens]: the h_buf row (position) of every ubatch row
+    ggml_tensor * carry_rows = nullptr; // I32: compact exact prefix or first-tail residual rows
     ggml_tensor * win_sel  = nullptr; // I32 [n_win]: LOWER, the ubatch rows inside the capture window
     ggml_tensor * win_rows = nullptr; // I32 [n_win]: their rows in the window buffers
 
@@ -222,4 +261,5 @@ ggml_tensor * build_ridgefill_late(
         ggml_tensor                     * inp_pos,
         llm_graph_input_attn_kv         * inp_attn,
         llm_graph_input_rs              * inp_rs,
-        llm_ridgefill_fill                mode);
+        llm_ridgefill_fill                mode,
+        const llm_graph_input_ridgefill_part * part);

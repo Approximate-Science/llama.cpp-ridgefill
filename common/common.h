@@ -571,6 +571,7 @@ struct common_params {
     double ridgefill_certificate_tau = 0.01;
     double ridgefill_certificate_cap = 0.23;
     bool ridgefill_vtail = false;
+    bool ridgefill_stream_projector = false;
     int32_t ridgefill_vtail_rows = 512;
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO
@@ -1095,6 +1096,7 @@ common_ridgefill_lexical_result common_ridgefill_lexical_rows(const llama_vocab 
 
 struct common_ridgefill_report {
     bool enabled = false;
+    bool projector_streamed = false;
     int32_t n_prompt = 0;
     int32_t n_prefix = 0;
     int32_t n_exact_prefix = 0;

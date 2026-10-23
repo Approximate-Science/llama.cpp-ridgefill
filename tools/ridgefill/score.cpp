@@ -38,6 +38,7 @@ struct options {
     float share = 0.5f, qattn_share = 0.2f, alpha = 0.0f;
     bool digits = true, special_exact = false, diagnostics = false, lexical = false;
     bool vtail = false, explicit_window_end = false;
+    bool stream_projector = false;
     common_ridgefill_lexical_params lexical_options;
     int32_t s1_window = 0, vtail_rows = 512;
     double s1_factor = 1.0;
@@ -114,6 +115,9 @@ static options parse(int argc, char ** argv) {
             if (key == "--ridgefill-lexical-span-rows") { o.lexical_options.span_rows = selection.ridgefill_lexical_span_rows; }
             if (key == "--ridgefill-lexical-max-occurrences") { o.lexical_options.maximum_occurrences = selection.ridgefill_lexical_max_occurrences; }
         }
+        else if (key == "--ridgefill-stream-projector") {
+            require(value == "on" || value == "off", key + " must be on or off"); o.stream_projector = value == "on";
+        }
         else if (key == "--ridgefill-lexical") {
             require(value == "on" || value == "off", "--ridgefill-lexical must be on or off"); o.lexical = value == "on";
         }
@@ -159,6 +163,7 @@ static options parse(int argc, char ** argv) {
     selection.ridgefill_certificate = o.certificate;
     selection.ridgefill_certificate_tau = o.certificate_tau;
     selection.ridgefill_certificate_cap = o.certificate_cap;
+    selection.ridgefill_stream_projector = o.stream_projector;
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_lexical = o.lexical;
@@ -243,6 +248,7 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     selection.ridgefill_certificate = o.certificate;
     selection.ridgefill_certificate_tau = o.certificate_tau;
     selection.ridgefill_certificate_cap = o.certificate_cap;
+    selection.ridgefill_stream_projector = o.stream_projector;
     selection.ridgefill_vtail = o.vtail;
     selection.ridgefill_vtail_rows = o.vtail_rows;
     selection.ridgefill_lexical = o.lexical;
@@ -396,6 +402,7 @@ int main(int argc, char ** argv) {
                 "Chat: --special-exact off --header-rows 0 --qattn-window-mode last --qattn-turn-cap 256\n"
                 "turn uses [max(after_last_user_header,END-cap),END), searching only before END; missing/empty turns are refused.\n"
                 "Certificate: --ridgefill-certificate on|off, --ridgefill-certificate-tau 0.01, --ridgefill-certificate-cap 0.23 (requires S1).\n"
+                "Storage: --ridgefill-stream-projector on|off (default off; quality+qattn and alpha 0).\n"
                 "Lexical: --ridgefill-lexical on|off (default off; quality+qattn, endpoint N-K), --ridgefill-lexical-window 64,\n"
                 "         --ridgefill-lexical-min-words 4, --ridgefill-lexical-span-rows 80, --ridgefill-lexical-max-occurrences 2.\n"
                 "S1/vtail (C API v2): --ridgefill-s1-window 0 (use 256 to enable) --ridgefill-s1-factor 1 --ridgefill-vtail off --ridgefill-vtail-rows 512\n"
@@ -432,7 +439,8 @@ int main(int argc, char ** argv) {
         const int32_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model.get()));
         for (const auto & doc : docs) { for (auto id : doc.ids) { require(id < vocab, "token ID outside model vocabulary"); } }
         std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(
-                o.mode == "off" ? nullptr : llama_ridgefill_init(model.get(), o.projector.c_str()), llama_ridgefill_free);
+                o.mode == "off" ? nullptr : o.stream_projector ? llama_ridgefill_init_streamed(model.get(), o.projector.c_str()) :
+                        llama_ridgefill_init(model.get(), o.projector.c_str()), llama_ridgefill_free);
         require(o.mode == "off" || bool(rf), "projector load failed");
         require(!rf || o.tail >= llama_ridgefill_tail_min(rf.get()), "tail is below this projector's tail_min");
         auto cp = llama_context_default_params();

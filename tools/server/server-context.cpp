@@ -3539,13 +3539,9 @@ private:
         const int64_t started = ggml_time_us();
         int32_t steps = 0, physical_rows = 0;
         while (budget > 0) {
-            const int32_t needed = slot.ridgefill_sweep->next_tokens(ctx_tgt, step_params);
             int32_t charged;
             try {
-                charged = slot.ridgefill_sweep->next_work(ctx_tgt, slot.id, step_params);
-                if (needed > capacity || charged > capacity) {
-                    throw std::runtime_error("RidgeFill: sweep step exceeds the stock prompt chunk budget; reduce probe/vtail rows or increase n_batch");
-                }
+                charged = slot.ridgefill_sweep->next_work(ctx_tgt, slot.id, step_params, capacity);
                 if (charged > budget) { break; }
                 const char * phase = slot.ridgefill_sweep->phase_name();
                 const int32_t cursor = slot.ridgefill_sweep->cursor();
@@ -5712,6 +5708,7 @@ static json get_res_props(const server_context_meta & meta, const common_params 
             { "certificate_tau", params.ridgefill_certificate_tau }, { "certificate_cap", params.ridgefill_certificate_cap },
             { "s1_window", params.ridgefill_s1_window }, { "s1_factor", params.ridgefill_s1_factor },
             { "vtail", params.ridgefill_vtail }, { "vtail_rows", params.ridgefill_vtail_rows },
+            { "stream_projector", params.ridgefill_stream_projector },
         };
     }
     if (params.use_jinja) {

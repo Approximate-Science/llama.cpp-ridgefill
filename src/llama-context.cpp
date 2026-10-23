@@ -1520,8 +1520,10 @@ bool llama_context::set_adapter_cvec(
 }
 
 int32_t llama_context::set_ridgefill(const llama_ridgefill * rf) {
+    if (ridgefill_stream) { synchronize(); }
+    ridgefill_stream.reset();
     ridgefill = rf;
-    ridgefill_alpha = rf ? rf->alpha_default : 0.0f;
+    ridgefill_alpha = rf && !rf->streamed ? rf->alpha_default : 0.0f;
 
     if (!rf) {
         sched_need_reserve = true; // detached: the stock graphs at the next decode
@@ -1532,11 +1534,13 @@ int32_t llama_context::set_ridgefill(const llama_ridgefill * rf) {
     // must fail here, at load, rather than in a request
     sched_need_reserve = true;
     try {
+        if (rf->streamed) { ridgefill_stream = std::make_unique<llama_ridgefill_stream>(model, *rf); }
         sched_reserve();
     } catch (const std::exception & err) {
         LLAMA_LOG_ERROR("%s: RidgeFill refused: the compute buffers of the RidgeFill graphs (fill, sweep parts, S1 probe, "
                 "vtail) cannot be reserved: %s\n", __func__, err.what());
         ridgefill = nullptr;
+        ridgefill_stream.reset();
         ridgefill_alpha = 0.0f;
         sched_need_reserve = true;
         try {
@@ -1586,6 +1590,10 @@ void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outpu
             ridgefill_reserve_state.h_buf = h;
         }
         auto part = base;
+        if (ridgefill_stream) {
+            ridgefill_reserve_state.stream_carry = ridgefill_reserve_state.h_buf;
+            ridgefill_reserve_state.stream_rows = &ridgefill_rows[0];
+        }
         part.part_state = &ridgefill_reserve_state;
 
         part.part = LLM_RIDGEFILL_PART_LOWER;
@@ -1616,6 +1624,28 @@ void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outpu
     }
 
     static const char * part_names[] = { "full", "lower", "late", "s1_fill", "s1_probe" };
+    if (ridgefill_stream) {
+        std::vector<llm_graph_params_ridgefill> streamed;
+        for (const auto & v : variants) {
+            if (v.correct) { continue; } // streamed quality uses alpha zero
+            if (v.part == LLM_RIDGEFILL_PART_FULL) { continue; }
+            if (v.part == LLM_RIDGEFILL_PART_LOWER || v.part == LLM_RIDGEFILL_PART_S1_PROBE ||
+                    (v.part == LLM_RIDGEFILL_PART_LATE && v.fill == 0 && v.vtail_rows == 0)) {
+                streamed.push_back(v);
+                continue;
+            }
+            for (uint32_t il = ridgefill->split; il < model.hparams.n_layer(); ++il) {
+                if (v.s1_attn_only && model.hparams.is_recr(il)) { continue; }
+                auto layer = v;
+                layer.stream_layer = il;
+                layer.stream_w = ridgefill_stream->reserve_weight(il);
+                layer.stream_b = ridgefill_stream->reserve_bias(il);
+                if (model.hparams.is_recr(il)) { layer.vtail_rows = 0; }
+                streamed.push_back(layer);
+            }
+        }
+        variants = std::move(streamed);
+    }
     std::vector<size_t> sizes(backend_ptrs.size());
     for (const auto & v : variants) {
         ridgefill_reserve_params = &v;
@@ -1665,6 +1695,10 @@ void llama_context::ridgefill_seq_set(llama_seq_id seq_id, llama_pos p_end) {
 }
 
 int32_t llama_context::ridgefill_set_alpha(float alpha) {
+    if (ridgefill_stream && alpha != 0.0f) {
+        LLAMA_LOG_ERROR("%s: streamed projector requires alpha zero\n", __func__);
+        return -1;
+    }
     if (!(alpha >= 0.0f && alpha <= 1.0f)) {
         LLAMA_LOG_ERROR("%s: RidgeFill alpha %g is outside [0, 1]\n", __func__, alpha);
         return -1;
@@ -1710,6 +1744,7 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
     const bool seq_empty = memory->seq_pos_max(seq_id) < 0;
 
     if (!p || p->part == LLAMA_RIDGEFILL_PART_FULL) {
+        if (ps.stream_layer >= 0 && !seq_empty) { return refuse("finish the streamed layers before FULL"); }
         // back to the single pass only after a complete replay, or with the sequence cleared
         if (ps.part != LLM_RIDGEFILL_PART_FULL && !seq_empty &&
             (ps.part != LLM_RIDGEFILL_PART_LATE || ps.late_end != ps.lower_end)) {
@@ -1834,6 +1869,38 @@ int32_t llama_context::ridgefill_seq_set_part(llama_seq_id seq_id, const llama_r
     return 0;
 }
 
+void llama_context::ridgefill_seq_stream_layer(llama_seq_id seq, int32_t layer, ggml_tensor * carry, int32_t end) {
+    if (!ridgefill_stream || seq < 0 || seq >= LLAMA_MAX_SEQ) {
+        throw std::runtime_error("RidgeFill stream: unavailable context or sequence");
+    }
+    auto & ps = ridgefill_part[seq];
+    const bool fill = ps.part == LLM_RIDGEFILL_PART_S1_FILL;
+    if (!fill && ps.part != LLM_RIDGEFILL_PART_LATE) { throw std::runtime_error("RidgeFill stream: invalid replay part"); }
+    int32_t expected = ps.stream_layer < 0 ? ridgefill->split : ps.stream_layer + 1;
+    while (fill && expected < int32_t(model.hparams.n_layer()) && model.hparams.is_recr(expected)) { ++expected; }
+    if (ps.stream_layer >= 0 && ps.late_end != ps.stream_end) { throw std::runtime_error("RidgeFill stream: previous layer is incomplete"); }
+    if (layer < 0) {
+        if (expected != int32_t(model.hparams.n_layer())) { throw std::runtime_error("RidgeFill stream: finish every late layer before the tail"); }
+        synchronize();
+        ps.stream_layer = -1;
+        ps.stream_carry = nullptr;
+        ps.gen = ++ridgefill_part_gen;
+        return;
+    }
+    if (layer != expected || end < ridgefill_p_end[seq] || end > ps.lower_end ||
+            (fill && end != ridgefill_p_end[seq])) { throw std::runtime_error("RidgeFill stream: invalid layer order or row range"); }
+    if (!fill && (!carry || !carry->buffer || carry->type != GGML_TYPE_F32 || !ggml_is_contiguous(carry) ||
+            carry->ne[0] != model.hparams.n_embd || carry->ne[1] < int64_t(ridgefill_rows[seq].size()) + end - ridgefill_p_end[seq] ||
+            carry->ne[2] != 1 || carry->ne[3] != 1)) { throw std::runtime_error("RidgeFill stream: invalid compact F32 residual buffer"); }
+    synchronize();
+    ps.stream_layer = layer;
+    ps.stream_carry = carry;
+    ps.stream_rows = &ridgefill_rows[seq];
+    ps.stream_end = end;
+    ps.late_end = 0;
+    ps.gen = ++ridgefill_part_gen;
+}
+
 void llama_context::ridgefill_certificate_clear(llama_seq_id seq) {
     ridgefill_certificate_on[seq] = false;
     ridgefill_calibration[seq].clear();
@@ -1872,6 +1939,17 @@ void llama_context::ridgefill_certificate_start(llama_seq_id seq) {
         ridgefill_certificate_reserve = true;
         sched_need_reserve = true;
     }
+}
+
+void llama_context::ridgefill_certificate_set_beta(llama_seq_id seq, int32_t layer, const std::vector<float> & beta) {
+    if (seq < 0 || seq >= LLAMA_MAX_SEQ || !ridgefill_certificate_on[seq]) { throw std::runtime_error("RidgeFill stream: invalid beta sequence"); }
+    auto & data = ridgefill_calibration[seq];
+    auto it = std::find_if(data.begin(), data.end(), [&](const auto & c) { return c.layer == layer; });
+    if (it == data.end() || beta.size() != size_t(it->kv_heads)) { throw std::runtime_error("RidgeFill stream: invalid beta head count"); }
+    for (const auto value : beta) {
+        if (!std::isfinite(value) || value < 0) { throw std::runtime_error("RidgeFill stream: invalid beta value"); }
+    }
+    it->beta = beta;
 }
 
 const std::vector<llama_ridgefill_calibration> & llama_context::ridgefill_certificate_data(llama_seq_id seq) const {
@@ -1931,21 +2009,26 @@ bool llama_context::ridgefill_check_parts(const llama_batch_ext & batch_inp, boo
     for (const auto & tok : batch_inp.tokens) {
         bool part = false;
         for (const llama_seq_id s : tok.seq_ids) {
-            if (s < 0 || s >= LLAMA_MAX_SEQ || ridgefill_part[s].part == LLM_RIDGEFILL_PART_FULL) {
+            if (s < 0 || s >= LLAMA_MAX_SEQ) {
                 continue;
             }
+            const auto & ps = ridgefill_part[s];
+            if (ridgefill && ridgefill->streamed && ps.stream_layer < 0 && tok.pos[0] < ridgefill_p_end[s] && ps.part != LLM_RIDGEFILL_PART_LOWER) {
+                LLAMA_LOG_ERROR("%s: streamed projector needs the layer-major RidgeFill driver\n", __func__);
+                return false;
+            }
+            if (ps.part == LLM_RIDGEFILL_PART_FULL) { continue; }
             part = true;
             if (tok.seq_ids.size() != 1) {
                 LLAMA_LOG_ERROR("%s: seq_id %d: a RidgeFill sweep row cannot belong to several sequences\n", __func__, s);
                 return false;
             }
-            const auto & ps = ridgefill_part[s];
             llama_pos  & nxt = next[s];
             if (nxt < 0) {
                 nxt = ps.part == LLM_RIDGEFILL_PART_LOWER ? ps.lower_end : ps.late_end;
             }
             // the replay parts' row ranges: LATE [.., LOWER rows), S1_FILL [0, p_end), S1_PROBE [s1_begin, s1_end)
-            const llama_pos bound = ps.part == LLM_RIDGEFILL_PART_LATE     ? ps.lower_end :
+            const llama_pos bound = ps.part == LLM_RIDGEFILL_PART_LATE     ? (ps.stream_layer >= 0 ? ps.stream_end : ps.lower_end) :
                                     ps.part == LLM_RIDGEFILL_PART_S1_FILL  ? ridgefill_p_end[s] :
                                     ps.part == LLM_RIDGEFILL_PART_S1_PROBE ? ps.s1_end : (llama_pos) ps.h_buf->ne[1];
             if (tok.pos[0] != nxt || nxt >= ps.h_buf->ne[1] || nxt >= bound) {
@@ -2064,6 +2147,11 @@ llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_uba
 
     res.rf    = ridgefill;
     res.p_end = ridgefill_p_end.data();
+    res.stream_layer = ps.stream_layer;
+    if (ps.stream_layer >= 0) {
+        res.stream_w = ridgefill_stream->weight(ps.stream_layer);
+        res.stream_b = ridgefill_stream->bias(ps.stream_layer);
+    }
 
     if (fill && ps.part == LLM_RIDGEFILL_PART_S1_FILL) {
         // S1 pass 1: the speed fill of the late attention layers (no exact rows, no GDN, no correction)
@@ -2085,6 +2173,7 @@ llm_graph_params_ridgefill llama_context::ridgefill_graph_params(const llama_uba
         res.vtail_rows = std::min<int32_t>(vt.rows, ps.lower_end - ridgefill_p_end[seq]);
         res.rows_vtail = &ridgefill_rows[seq];
     }
+    if (res.stream_layer >= 0 && model.hparams.is_recr(res.stream_layer)) { res.vtail_rows = 0; }
 
     if (ps.part != LLM_RIDGEFILL_PART_FULL) {
         res.part       = ps.part;
@@ -2771,8 +2860,9 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                     const size_t count = size_t(it->dim)*it->heads*ubatch.n_tokens;
                     float * dst = it->queries.data() + size_t(first)*it->dim*it->heads;
                     ggml_backend_tensor_get(output.queries, dst, 0, count*sizeof(float));
-                    std::vector<float> errors(ggml_nelements(output.errors));
-                    ggml_backend_tensor_get(output.errors, errors.data(), 0, errors.size()*sizeof(float));
+                    if (ridgefill->streamed) { it->probe_chunks.emplace_back(first, ubatch.n_tokens); }
+                    std::vector<float> errors(output.errors ? ggml_nelements(output.errors) : 0);
+                    if (output.errors) { ggml_backend_tensor_get(output.errors, errors.data(), 0, errors.size()*sizeof(float)); }
                     for (size_t i = 0; i < count; ++i) {
                         if (!std::isfinite(dst[i])) { throw std::runtime_error("RidgeFill certificate: non-finite probe query"); }
                     }
@@ -2790,8 +2880,18 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
             if (res->t_rf_vtail) {
                 ggml_backend_sched_synchronize(sched.get());
                 auto & sc = ridgefill_vtail[seq].scales;
-                sc.resize(ggml_nelements(res->t_rf_vtail));
-                ggml_backend_tensor_get(res->t_rf_vtail, sc.data(), 0, sc.size()*sizeof(float));
+                size_t offset = 0, count = ggml_nelements(res->t_rf_vtail);
+                if (ridgefill_part[seq].stream_layer >= 0) {
+                    size_t total = 0;
+                    for (int il = ridgefill->split; il < int(model.hparams.n_layer()); ++il) {
+                        if (model.hparams.is_recr(il)) { continue; }
+                        if (il < ridgefill_part[seq].stream_layer) { offset += model.hparams.n_head_kv(il); }
+                        total += model.hparams.n_head_kv(il);
+                    }
+                    if (sc.empty()) { sc.assign(total, NAN); }
+                } else { sc.resize(count); }
+                GGML_ASSERT(offset + count <= sc.size());
+                ggml_backend_tensor_get(res->t_rf_vtail, sc.data() + offset, 0, count*sizeof(float));
             }
         }
 

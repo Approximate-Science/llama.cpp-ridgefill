@@ -141,9 +141,12 @@ struct llama_context {
     int32_t ridgefill_set_alpha(float alpha);
     int32_t ridgefill_seq_set_rows(llama_seq_id seq_id, const llama_pos * rows, int32_t n);
     int32_t ridgefill_seq_set_part(llama_seq_id seq_id, const llama_ridgefill_part_params * params);
+    void ridgefill_seq_stream_layer(llama_seq_id seq, int32_t layer, ggml_tensor * carry, int32_t end);
+    llama_ridgefill_stream * get_ridgefill_stream() const { return ridgefill_stream.get(); }
     void ridgefill_certificate_start(llama_seq_id seq);
     void ridgefill_certificate_clear(llama_seq_id seq);
     const std::vector<llama_ridgefill_calibration> & ridgefill_certificate_data(llama_seq_id seq) const;
+    void ridgefill_certificate_set_beta(llama_seq_id seq, int32_t layer, const std::vector<float> & beta);
     int32_t ridgefill_seq_get_s1_mass(llama_seq_id seq_id, double * out, int32_t n) const;
     int32_t ridgefill_seq_set_vtail(llama_seq_id seq_id, bool enabled, int32_t rows);
     int32_t ridgefill_seq_get_vtail_scales(llama_seq_id seq_id, float * out, int32_t n) const;
@@ -331,6 +334,7 @@ private:
     llama_adapter_loras_ptr loras;
 
     const llama_ridgefill * ridgefill = nullptr;
+    std::unique_ptr<llama_ridgefill_stream> ridgefill_stream;
 
     std::array<llama_pos, LLAMA_MAX_SEQ> ridgefill_p_end = {}; // tokens at pos < p_end are filled
 

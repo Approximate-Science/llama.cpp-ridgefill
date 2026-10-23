@@ -819,6 +819,9 @@ struct llm_graph_params_ridgefill {
     int32_t                            n_win      = 0;
 
     bool    s1_attn_only = false; // S1_FILL: the fill writes the late attention layers only
+    int32_t stream_layer = -1;
+    ggml_tensor * stream_w = nullptr;
+    ggml_tensor * stream_b = nullptr;
     bool    certificate  = false; // S1_PROBE: capture calibration errors and queries
     bool    s1_probe     = false; // S1_PROBE: explicit-softmax attention over the prefix + window, mass output
     int32_t vtail_rows   = 0;     // > 0: the first tail ubatch of a LATE replay; scale the bulk prefix V (vtail)
@@ -829,7 +832,7 @@ struct llm_graph_params_ridgefill {
                alpha == o.alpha && p_end == o.p_end && rows_seq == o.rows_seq &&
                part_state == o.part_state && part_gen == o.part_gen && n_win == o.n_win &&
                certificate == o.certificate && s1_attn_only == o.s1_attn_only && s1_probe == o.s1_probe && vtail_rows == o.vtail_rows &&
-               rows_vtail == o.rows_vtail;
+               rows_vtail == o.rows_vtail && stream_layer == o.stream_layer && stream_w == o.stream_w && stream_b == o.stream_b;
     }
 };
 
