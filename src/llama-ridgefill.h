@@ -21,7 +21,7 @@ struct llama_ridgefill {
     int32_t format = 1; // 1: the Oct-8 dense files (llama, qwen3), 2: RF27 (qwen35)
     bool streamed = false;
     bool profiling = false;
-    bool trim_kv = false;
+    bool trim_kv = true;
 
     // per layer, nullptr for il < split; w and b are nullptr for a GDN layer filled with the identity map
     std::vector<ggml_tensor *> w;  // [n_embd, n_embd]

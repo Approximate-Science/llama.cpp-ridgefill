@@ -9,6 +9,7 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
 #include <fstream>
 #include <memory>
@@ -104,6 +105,7 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
     std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(streamed ?
             llama_ridgefill_init_streamed(model, projector) : llama_ridgefill_init(model, projector), llama_ridgefill_free);
     require(bool(rf), "projector load failed");
+    if (!std::getenv("LLAMA_RIDGEFILL_TRIM_KV")) { require(rf->trim_kv, "K/V reuse must default on"); }
     auto cp = llama_context_default_params();
     cp.n_seq_max = other_sequence ? parallel : 1;
     cp.n_ctx = (ids.size() + 256)*cp.n_seq_max; cp.n_batch = cp.n_ubatch = 128;

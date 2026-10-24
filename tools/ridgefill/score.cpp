@@ -4,6 +4,7 @@
 #include "ggml-backend.h"
 #include "llama.h"
 #include "llama-ext.h"
+#include "llama-ridgefill.h"
 #include "server-ridgefill-sweep.h"
 #include "nlohmann/json.hpp"
 
@@ -11,6 +12,7 @@
 #include <charconv>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
 #include <limits>
@@ -39,6 +41,7 @@ struct options {
     bool digits = true, special_exact = false, diagnostics = false, lexical = false;
     bool vtail = false, explicit_window_end = false;
     bool stream_projector = false;
+    bool trim_kv = true;
     common_ridgefill_lexical_params lexical_options;
     int32_t s1_window = 0, vtail_rows = 512;
     double s1_factor = 1.0;
@@ -114,6 +117,9 @@ static options parse(int argc, char ** argv) {
             if (key == "--ridgefill-lexical-min-words") { o.lexical_options.minimum_words = selection.ridgefill_lexical_min_words; }
             if (key == "--ridgefill-lexical-span-rows") { o.lexical_options.span_rows = selection.ridgefill_lexical_span_rows; }
             if (key == "--ridgefill-lexical-max-occurrences") { o.lexical_options.maximum_occurrences = selection.ridgefill_lexical_max_occurrences; }
+        }
+        else if (key == "--ridgefill-trim-kv") {
+            require(value == "on" || value == "off", key + " must be on or off"); o.trim_kv = value == "on";
         }
         else if (key == "--ridgefill-stream-projector") {
             require(value == "on" || value == "off", key + " must be on or off"); o.stream_projector = value == "on";
@@ -407,6 +413,7 @@ int main(int argc, char ** argv) {
                 "         --ridgefill-lexical-min-words 4, --ridgefill-lexical-span-rows 80, --ridgefill-lexical-max-occurrences 2.\n"
                 "S1/vtail (C API v2): --ridgefill-s1-window 0 (use 256 to enable) --ridgefill-s1-factor 1 --ridgefill-vtail off --ridgefill-vtail-rows 512\n"
                 "S1/vtail default to endpoint N-K in this scorer; vtail calibration must precede scored targets.\n"
+                "K/V reuse: --ridgefill-trim-kv on|off (default: on).\n"
                 "Runtime: --gpu-layers 0 --threads 4 --batch 512 --ubatch 512 --ctx-size 0 --cache-type f16 --h-type f16 --flash-attn auto\n"
                 "JSON: token ID array, {name,ids}, array of documents, or one document per JSONL line. No tokenization.\n";
             return 0;
@@ -442,6 +449,7 @@ int main(int argc, char ** argv) {
                 o.mode == "off" ? nullptr : o.stream_projector ? llama_ridgefill_init_streamed(model.get(), o.projector.c_str()) :
                         llama_ridgefill_init(model.get(), o.projector.c_str()), llama_ridgefill_free);
         require(o.mode == "off" || bool(rf), "projector load failed");
+        if (rf && !std::getenv("LLAMA_RIDGEFILL_TRIM_KV")) { rf->trim_kv = o.trim_kv; }
         require(!rf || o.tail >= llama_ridgefill_tail_min(rf.get()), "tail is below this projector's tail_min");
         auto cp = llama_context_default_params();
         cp.n_ctx = o.ctx ? o.ctx : max_n; cp.n_batch = o.batch; cp.n_ubatch = o.ubatch; cp.n_seq_max = 1;

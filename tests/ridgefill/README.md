@@ -247,7 +247,7 @@ The short tiny-model native/HTTP check verifies parameter inheritance and reques
 
 The replay-lookup regression compares the production finder with exhaustive cell scans after sharing, removal, division and shifts. It checks unordered/repeated queries, missing/negative positions, mixed owners and the highest-cell rule when cache positions repeat. It needs no model compute beyond the existing tiny fixture.
 
-Append `--separate` to `test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON` for the separate-KV regression. It runs resident and streamed S1/vtail sweeps with two and eight sequences, placing the injector in the first and last slot. It requires byte-identical prefill/final cache and recurrent state, five full-vocabulary logit rows, selection and calibration, and unchanged background state. Repeat with `LLAMA_RIDGEFILL_TRIM_KV=1` to cover cache reuse. The old reservation exposes all streams to a one-sequence graph and aborts before this test can complete; the full one-hundred-check suite without this argument keeps the unified-cache controls.
+Append `--separate` to `test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON` for the separate-KV regression. It runs resident and streamed S1/vtail sweeps with two and eight sequences, placing the injector in the first and last slot. It requires byte-identical prefill/final cache and recurrent state, five full-vocabulary logit rows, selection and calibration, and unchanged background state. K/V reuse defaults on; repeat with `LLAMA_RIDGEFILL_TRIM_KV=0` to cover the disabled native control. The old reservation exposes all streams to a one-sequence graph and aborts before this test can complete; the full one-hundred-check suite without this argument keeps the unified-cache controls.
 
 ### Shared-KV S1 probe regression
 
@@ -258,4 +258,6 @@ c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include -Icommon -Itools/server -Ivend
 build-cpu/test-s1-unified /path/to/tiny-qwen35-f32.gguf /path/to/projector-s4-f32.gguf /path/to/tiny-match.json out/s1-unified.json
 ```
 
-Build against a GPU-enabled directory and append `--gpu` to exercise the failing backend placement and require real offload. Run that command only through the permitted GPU bridge. The same executable with the old libraries must pass the16-cell control and fail the large placement. `LLAMA_RIDGEFILL_TRIM_KV=1` repeats the check with bulk K/V reuse. CPU checks cover both V-cache layouts when combined with the GPU/FA-on run; CPU alone does not reproduce the backend defect.
+Build against a GPU-enabled directory and append `--gpu` to exercise the failing backend placement and require real offload. Run that command only through the permitted GPU bridge. The same executable with the old libraries must pass the16-cell control and fail the large placement. Bulk K/V reuse defaults on; `LLAMA_RIDGEFILL_TRIM_KV=0` repeats the disabled native control. CPU checks cover both V-cache layouts when combined with the GPU/FA-on run; CPU alone does not reproduce the backend defect.
+
+`check_startup_options.py --bin-dir BUILD/bin --model TINY_MODEL --projector TINY_PROJECTOR --out out/startup-options` checks the default-on trim flag, help, strict values, actual startup resolution, and the deprecated environment override. It uses CPU only. The order checker explicitly selects both trim states.

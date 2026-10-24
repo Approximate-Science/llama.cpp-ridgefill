@@ -572,6 +572,7 @@ struct common_params {
     double ridgefill_certificate_cap = 0.23;
     bool ridgefill_vtail = false;
     bool ridgefill_stream_projector = false;
+    bool ridgefill_trim_kv = true;
     int32_t ridgefill_vtail_rows = 512;
 
     int32_t verbosity                  = 3;  // LOG_LEVEL_INFO

@@ -546,9 +546,14 @@ static llama_ridgefill * ridgefill_load(const llama_model * model, const char * 
     llama_ridgefill * rf = new llama_ridgefill();
     rf->streamed = streamed;
     rf->profiling = std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr;
-    rf->trim_kv = std::getenv("LLAMA_RIDGEFILL_TRIM_KV") != nullptr;
 
     try {
+        if (const char * legacy = std::getenv("LLAMA_RIDGEFILL_TRIM_KV")) {
+            const std::string value(legacy);
+            if (value != "0" && value != "1") { throw std::runtime_error("LLAMA_RIDGEFILL_TRIM_KV must be 0 or 1; use --ridgefill-trim-kv on|off"); }
+            rf->trim_kv = value == "1";
+            LLAMA_LOG_WARN("%s: LLAMA_RIDGEFILL_TRIM_KV is deprecated and overrides --ridgefill-trim-kv; use the flag instead\n", __func__);
+        }
         if (streamed && model->arch != LLM_ARCH_QWEN35) {
             throw std::runtime_error("streamed projector requires the qwen35 layer-major server/scorer sweep");
         }

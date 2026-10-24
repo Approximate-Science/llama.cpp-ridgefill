@@ -8,6 +8,7 @@
 #include "../src/llama-ext.h"
 #include "../src/unicode.h"
 #include "../src/llama-model.h"
+#include "../src/llama-ridgefill.h"
 #include "json.h"
 
 #include "fit.h"
@@ -1435,6 +1436,8 @@ common_init_result::common_init_result(common_params & params, bool model_only) 
             pimpl->context.reset();
             return;
         }
+        if (!std::getenv("LLAMA_RIDGEFILL_TRIM_KV")) { pimpl->ridgefill->trim_kv = params.ridgefill_trim_kv; }
+        COM_INF("RidgeFill: trim K/V %s\n", pimpl->ridgefill->trim_kv ? "on" : "off");
         if (llama_set_ridgefill(lctx, pimpl->ridgefill.get()) < 0) {
             COM_ERR("%s", "RidgeFill: the compute buffers of the RidgeFill graphs do not fit on this device; "
                     "reduce the context, batch or ubatch size, or run without --ridgefill\n");
@@ -1808,6 +1811,9 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         }
         if (option == "--ridgefill-certificate-tau") { params.ridgefill_certificate_tau = fraction; }
         else { params.ridgefill_certificate_cap = fraction; }
+    } else if (option == "--ridgefill-trim-kv") {
+        if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
+        params.ridgefill_trim_kv = value == "on";
     } else if (option == "--ridgefill-stream-projector") {
         if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
         params.ridgefill_stream_projector = value == "on";

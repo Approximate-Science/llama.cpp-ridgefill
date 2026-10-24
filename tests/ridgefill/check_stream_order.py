@@ -59,7 +59,7 @@ def run(args):
                             ("--ridgefill-stream-projector", "on" if streamed else "off")):
             cmd[cmd.index(flag) + 1] = value
         env = dict(os.environ, LD_LIBRARY_PATH=str(binary.parent))
-        env.pop("LLAMA_RIDGEFILL_TRIM_KV", None)
+        env["LLAMA_RIDGEFILL_TRIM_KV"] = "0"
         env.pop("LLAMA_RIDGEFILL_PROFILE", None)
         if trim:
             env["LLAMA_RIDGEFILL_TRIM_KV"] = "1"
