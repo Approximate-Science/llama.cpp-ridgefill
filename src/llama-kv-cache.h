@@ -260,6 +260,7 @@ public:
 private:
     const llama_model & model;
     const llama_hparams & hparams;
+    const bool ridgefill_profile;
 
     struct kv_layer {
         // layer index in the model

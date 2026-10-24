@@ -65,7 +65,7 @@ static void check_rows() {
 
 int main(int argc, char ** argv) {
     try {
-        if (argc != 2) { throw std::runtime_error("usage: LLAMA_RIDGEFILL_REPLAY_INDEX=1 test-replay-index TINY_MODEL"); }
+        if (argc != 2) { throw std::runtime_error("usage: test-replay-index TINY_MODEL"); }
         check_rows();
         llama_backend_init();
         auto mp = llama_model_default_params();

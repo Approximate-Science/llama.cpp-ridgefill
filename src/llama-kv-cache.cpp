@@ -83,7 +83,7 @@ llama_kv_cache::llama_kv_cache(
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
              const char *   name_tag) :
-    model(model), hparams(hparams), v_trans(v_trans),
+    model(model), hparams(hparams), ridgefill_profile(std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),
@@ -1131,8 +1131,7 @@ void llama_kv_cache::get_cell_pos(const slot_info & sinfo, llama_seq_id seq_id, 
 }
 
 llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & ubatch) const {
-    const bool profile = std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr;
-    const int64_t started = profile ? ggml_time_us() : 0;
+    const int64_t started = ridgefill_profile ? ggml_time_us() : 0;
     struct profile_scope {
         bool enabled;
         llama_pos pos;
@@ -1142,7 +1141,7 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & 
                 LLAMA_LOG_INFO("RF_PROFILE phase=replay_lookup layer=-2 pos=%d begin_us=%" PRId64 " end_us=%" PRId64 "\n", pos, begin, ggml_time_us());
             }
         }
-    } trace{profile, ubatch.n_tokens ? ubatch.pos[0] : -1, started};
+    } trace{ridgefill_profile, ubatch.n_tokens ? ubatch.pos[0] : -1, started};
     slot_info res = {
         /*.s0   =*/ 0,
         /*.s1   =*/ 0,
@@ -1158,18 +1157,8 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & 
     const uint32_t     strm   = seq_to_stream[seq_id];
     const auto &       cells  = v_cells[strm];
 
-    const char * index_env = std::getenv("LLAMA_RIDGEFILL_REPLAY_INDEX");
-    const bool use_index = !index_env || std::strcmp(index_env, "1") == 0;
     const uint32_t missing = UINT32_MAX;
     const auto & index = cells.seq_pos_get(seq_id);
-    std::unordered_map<llama_pos, uint32_t> cell_of;
-    if (!use_index) {
-        for (uint32_t i = 0; i < cells.size(); ++i) {
-            if (!cells.is_empty(i) && cells.seq_has(i, seq_id)) {
-                cell_of[cells.pos_get(i)] = i;
-            }
-        }
-    }
 
     res.s0 = strm;
     res.s1 = strm;
@@ -1177,18 +1166,15 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & 
     res.strm[0] = strm;
     res.idxs[0].reserve(ubatch.n_tokens);
 
-    const bool merge = use_index && llama_ridgefill_ubatch_dense(ubatch);
+    const bool merge = llama_ridgefill_ubatch_dense(ubatch);
     auto cursor = merge ? index.lower_bound({ubatch.pos[0], 0}) : index.end();
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         uint32_t cell = missing;
         if (merge) {
             while (cursor != index.end() && cursor->first == ubatch.pos[i]) { cell = cursor->second; ++cursor; }
-        } else if (use_index) {
+        } else {
             auto it = index.upper_bound({ubatch.pos[i], missing});
             if (it != index.begin() && (--it)->first == ubatch.pos[i]) { cell = it->second; }
-        } else {
-            const auto it = cell_of.find(ubatch.pos[i]);
-            if (it != cell_of.end()) { cell = it->second; }
         }
         if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq_id || cell == missing || cells.seq_count(cell) != 1) {
             res.clear();
