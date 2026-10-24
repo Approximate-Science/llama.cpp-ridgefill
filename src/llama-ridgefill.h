@@ -12,6 +12,13 @@
 #include <string>
 #include <vector>
 
+struct llama_ridgefill_debug_options {
+    bool profiling;
+    bool graph_check;
+};
+
+const llama_ridgefill_debug_options & llama_ridgefill_debug();
+
 // RidgeFill: the prompt tokens before the exact tail run layers [0, split) only. For each layer il >= split,
 // the input of layer il is predicted from the input of layer split with a linear map, and only the cache of
 // layer il is written from it: K/V for attention layers, the conv and recurrent state for Gated DeltaNet layers.
@@ -22,6 +29,7 @@ struct llama_ridgefill {
     bool streamed = false;
     bool profiling = false;
     bool trim_kv = true;
+    bool trim_kv_override = false;
 
     // per layer, nullptr for il < split; w and b are nullptr for a GDN layer filled with the identity map
     std::vector<ggml_tensor *> w;  // [n_embd, n_embd]

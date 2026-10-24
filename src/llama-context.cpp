@@ -795,7 +795,7 @@ void llama_context::sched_reserve() {
 
         graph_has_logits = get_gf_res_reserve()->get_logits() != nullptr;
 
-        if (ridgefill && getenv("LLAMA_RIDGEFILL_GRAPH_CHECK")) {
+        if (ridgefill && llama_ridgefill_debug().graph_check) {
             // test aid: the stock graph's figures, the baseline of the RidgeFill graphs' (ridgefill_reserve_graphs)
             const size_t * pk = ridgefill_check_peaks; // taken in graph_reserve, before the split
             LLAMA_LOG_INFO("%s: RidgeFill graph check stock: live tensors in graph order %.2f MiB, in any dependency order %.2f MiB, "
@@ -1673,7 +1673,7 @@ void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outpu
                         ggml_backend_buft_name(backend_buft[i]), sizes[i] / (1024.0*1024.0));
             }
         }
-        if (gm && getenv("LLAMA_RIDGEFILL_GRAPH_CHECK")) {
+        if (gm && llama_ridgefill_debug().graph_check) {
             // test aid: the memory a backend that reorders independent nodes could need for this graph
             const size_t * pk = ridgefill_check_peaks; // taken in graph_reserve, before the split
             LLAMA_LOG_INFO("%s: RidgeFill graph check %s: live tensors in graph order %.2f MiB, in any dependency order %.2f MiB, "
@@ -3509,7 +3509,7 @@ ggml_cgraph * llama_context::graph_reserve(
 
     auto * gf = model.build_graph(gparams);
 
-    if (gf && ridgefill && getenv("LLAMA_RIDGEFILL_GRAPH_CHECK")) {
+    if (gf && ridgefill && llama_ridgefill_debug().graph_check) {
         llama_ridgefill_graph_peaks(gf, ridgefill_check_peaks[0], ridgefill_check_peaks[1], ridgefill_check_peaks[2]);
     }
 

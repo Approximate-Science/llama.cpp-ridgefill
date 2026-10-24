@@ -49,7 +49,8 @@ def run(args):
     assert bad.returncode > 0 and '--ridgefill-trim-kv must be on or off' in bad.stderr and 'GGML_ASSERT' not in bad.stderr
     checks.append('invalid-value')
     for label, flags, override, expected in [('default', [], None, 'on'), ('on', ['on'], None, 'on'),
-                                               ('off', ['off'], None, 'off'), ('legacy', ['off'], '1', 'on')]:
+                                               ('off', ['off'], None, 'off'), ('legacy', ['off'], '1', 'on'),
+                                               ('legacy-off', ['on'], '0', 'off')]:
         with socket.socket() as sock:
             sock.bind(('127.0.0.1', 0))
             port = sock.getsockname()[1]

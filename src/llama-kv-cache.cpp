@@ -83,7 +83,7 @@ llama_kv_cache::llama_kv_cache(
     const  layer_reuse_cb & reuse,
     const  layer_share_cb & share,
              const char *   name_tag) :
-    model(model), hparams(hparams), ridgefill_profile(std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr), v_trans(v_trans),
+    model(model), hparams(hparams), ridgefill_profile(llama_ridgefill_debug().profiling), v_trans(v_trans),
     n_seq_max(n_seq_max), n_stream(unified ? 1 : n_seq_max), n_pad(n_pad), n_swa(n_swa), swa_type(swa_type),
     other(static_cast<llama_kv_cache *>(mem_other)),
     v_cells_impl(other ? other->v_cells_impl : std::make_shared<llama_kv_cells_vec>()),

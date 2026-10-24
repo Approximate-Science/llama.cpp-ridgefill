@@ -11,7 +11,6 @@
 #include <cmath>
 #include <climits>
 #include <cinttypes>
-#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
@@ -192,8 +191,7 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
 }
 
 void server_ridgefill_sweep::question_mass(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) {
-    const char * host_windows = std::getenv("LLAMA_RIDGEFILL_HOST_WINDOWS");
-    if (ctx->get_ridgefill_stream() && (!host_windows || std::strcmp(host_windows, "1") == 0)) {
+    if (ctx->get_ridgefill_stream()) {
         ctx->synchronize();
         const bool profiling = params.projector && params.projector->profiling;
         const int64_t begin = profiling ? ggml_time_us() : 0;
@@ -495,9 +493,7 @@ void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq,
 }
 
 void server_ridgefill_sweep::prefetch_hidden(llama_context * ctx, const server_ridgefill_sweep_params & params) {
-    const char * enabled = std::getenv("LLAMA_RIDGEFILL_PREFETCH_HIDDEN");
-    if ((enabled && std::strcmp(enabled, "1") != 0) || !ctx->get_ridgefill_stream() ||
-            ggml_backend_buffer_is_host(hidden->tensor()->buffer)) { return; }
+    if (!ctx->get_ridgefill_stream() || ggml_backend_buffer_is_host(hidden->tensor()->buffer)) { return; }
     auto * source = hidden->tensor();
     hidden_readback = std::async(std::launch::async, [source, params]() {
         const bool profiling = params.projector && params.projector->profiling;

@@ -27,6 +27,15 @@
 #include <stdexcept>
 #include <unordered_map>
 
+static const llama_ridgefill_debug_options ridgefill_debug_options = {
+    std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr,
+    std::getenv("LLAMA_RIDGEFILL_GRAPH_CHECK") != nullptr,
+};
+
+const llama_ridgefill_debug_options & llama_ridgefill_debug() {
+    return ridgefill_debug_options;
+}
+
 static const char * LLAMA_RIDGEFILL_KV_SPLIT   = "adapter.ridgefill.split";
 
 struct llama_ridgefill_mask_cache {
@@ -545,13 +554,14 @@ static llama_ridgefill * ridgefill_load(const llama_model * model, const char * 
 
     llama_ridgefill * rf = new llama_ridgefill();
     rf->streamed = streamed;
-    rf->profiling = std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr;
+    rf->profiling = llama_ridgefill_debug().profiling;
 
     try {
         if (const char * legacy = std::getenv("LLAMA_RIDGEFILL_TRIM_KV")) {
             const std::string value(legacy);
             if (value != "0" && value != "1") { throw std::runtime_error("LLAMA_RIDGEFILL_TRIM_KV must be 0 or 1; use --ridgefill-trim-kv on|off"); }
             rf->trim_kv = value == "1";
+            rf->trim_kv_override = true;
             LLAMA_LOG_WARN("%s: LLAMA_RIDGEFILL_TRIM_KV is deprecated and overrides --ridgefill-trim-kv; use the flag instead\n", __func__);
         }
         if (streamed && model->arch != LLM_ARCH_QWEN35) {
@@ -926,8 +936,7 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
             (!p.fill || p.n_rows > 0)) {
         inp->kv = static_cast<const llama_memory_hybrid_context *>(mctx)->get_attn();
         inp->seq = ubatch.seq_id[0][0];
-        const char * device_mask = std::getenv("LLAMA_RIDGEFILL_DEVICE_MASK");
-        if ((!device_mask || std::strcmp(device_mask, "1") == 0) && cparams.causal_attn &&
+        if (cparams.causal_attn &&
                 !hparams.use_alibi && !hparams.n_swa && inp->kv->ridgefill_dense_causal(ubatch)) {
             inp->mask_past = ubatch.pos[0];
             const int64_t keys = inp->kv->get_n_kv();
@@ -1214,8 +1223,7 @@ ggml_tensor * build_ridgefill_h_input(llm_graph_context & g, const llm_graph_inp
 }
 
 bool llama_ridgefill_ubatch_dense(const llama_ubatch & ubatch) {
-    const char * merge = std::getenv("LLAMA_RIDGEFILL_ROW_MERGE");
-    if ((merge && std::strcmp(merge, "1") != 0) || !ubatch.n_tokens || ubatch.n_seqs_unq != 1 || ubatch.n_seq_id[0] != 1) { return false; }
+    if (!ubatch.n_tokens || ubatch.n_seqs_unq != 1 || ubatch.n_seq_id[0] != 1) { return false; }
     const auto seq = ubatch.seq_id[0][0];
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq || int64_t(ubatch.pos[i]) != int64_t(ubatch.pos[0]) + i) { return false; }
@@ -1224,7 +1232,7 @@ bool llama_ridgefill_ubatch_dense(const llama_ubatch & ubatch) {
 }
 
 int32_t llama_ridgefill_ubatch_rows(const llama_ubatch & ubatch, const std::vector<llama_pos> * rows_seq, std::vector<int32_t> * idx) {
-    const int64_t begin = std::getenv("LLAMA_RIDGEFILL_PROFILE") ? ggml_time_us() : 0;
+    const int64_t begin = llama_ridgefill_debug().profiling ? ggml_time_us() : 0;
     auto finish = [&](int32_t count) {
         if (begin) {
             LLAMA_LOG_INFO("RF_PROFILE phase=row_lookup layer=-2 pos=%d begin_us=%" PRId64 " end_us=%" PRId64 "\n", ubatch.n_tokens ? ubatch.pos[0] : -1, begin, ggml_time_us());

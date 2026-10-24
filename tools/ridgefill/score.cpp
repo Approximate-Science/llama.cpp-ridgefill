@@ -429,7 +429,7 @@ int main(int argc, char ** argv) {
                 o.mode == "off" ? nullptr : o.stream_projector ? llama_ridgefill_init_streamed(model.get(), o.projector.c_str()) :
                         llama_ridgefill_init(model.get(), o.projector.c_str()), llama_ridgefill_free);
         require(o.mode == "off" || bool(rf), "projector load failed");
-        if (rf && !std::getenv("LLAMA_RIDGEFILL_TRIM_KV")) { rf->trim_kv = o.trim_kv; }
+        if (rf && !rf->trim_kv_override) { rf->trim_kv = o.trim_kv; }
         require(!rf || o.tail >= llama_ridgefill_tail_min(rf.get()), "tail is below this projector's tail_min");
         auto cp = llama_context_default_params();
         cp.n_ctx = o.ctx ? o.ctx : max_n; cp.n_batch = o.batch; cp.n_ubatch = o.ubatch; cp.n_seq_max = 1;
