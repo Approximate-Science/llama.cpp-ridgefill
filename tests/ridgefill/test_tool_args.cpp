@@ -19,6 +19,22 @@ int main() {
         catch (const std::invalid_argument &) { caught = true; }
         check(caught);
     }
+    common_params coexist;
+    coexist.ridgefill_path = "projector.gguf";
+    for (const bool mtp : {false, true}) {
+        coexist.speculative.draft.mparams.path = mtp ? "" : "draft.gguf";
+        coexist.speculative.types = {mtp ? COMMON_SPECULATIVE_TYPE_DRAFT_MTP : COMMON_SPECULATIVE_TYPE_NONE};
+        bool caught = false;
+        try { common_ridgefill_validate_options(coexist); }
+        catch (const std::invalid_argument & error) {
+            const std::string message(error.what());
+            caught = message.find(mtp ? "--spec-type draft-mtp" : "--model-draft") != std::string::npos;
+        }
+        check(caught);
+    }
+    coexist.ridgefill_path.clear();
+    common_ridgefill_validate_options(coexist);
+    check(true);
     common_params params;
     check(!params.ridgefill_special_exact && params.ridgefill_header_rows == 0 && params.ridgefill_qattn_window_mode == "last" && params.ridgefill_qattn_turn_cap == 256);
     check(params.ridgefill_s1_window == 0 && params.ridgefill_s1_factor == 1.0f && !params.ridgefill_vtail && params.ridgefill_vtail_rows == 512);

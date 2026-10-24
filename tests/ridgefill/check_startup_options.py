@@ -19,6 +19,19 @@ def run(args):
     (args.out / 'help.txt').write_text(help_text)
     assert '--ridgefill-trim-kv' in help_text and 'reuse S1 bulk K/V in the late sweep (default: on)' in help_text
     checks = ['help']
+    if args.coexistence:
+        for parallel in (1, 2):
+            for label, flags, named in [('draft', ['-md', 'missing-draft.gguf'], '--model-draft'),
+                                        ('mtp', ['--spec-type', 'draft-mtp'], 'built-in MTP')]:
+                command = [str(binary), '-m', 'missing-model.gguf', '--ridgefill', 'missing-projector.gguf', '-np', str(parallel), *flags]
+                rejected = subprocess.run(command, capture_output=True, text=True, env=env, timeout=15)
+                text = rejected.stdout + rejected.stderr
+                (args.out / (label + '-' + str(parallel) + '.log')).write_text(text)
+                assert rejected.returncode > 0 and named in text and ('remove --' in text or '--spec-type none' in text)
+                assert 'GGML_ASSERT' not in text and 'loading model' not in text and 'failed to load model' not in text
+                checks.append(label + ':' + str(parallel))
+        (args.out / 'result.json').write_text(json.dumps(dict(result='PASS', checks=checks), indent=2) + '\n')
+        return
     if args.retired_certificate:
         assert '--ridgefill-certificate' not in help_text
         for name in ('llama-server', 'llama-ridgefill-score'):
@@ -78,4 +91,5 @@ if __name__ == '__main__':
     parser.add_argument('--projector', required=True, type=Path)
     parser.add_argument('--out', required=True, type=Path)
     parser.add_argument('--retired-certificate', action='store_true')
+    parser.add_argument('--coexistence', action='store_true')
     run(parser.parse_args())

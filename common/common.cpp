@@ -1247,8 +1247,24 @@ common_gguf_info common_get_gguf_info(const std::string & fname) {
     return info;
 }
 
+static void common_ridgefill_check_speculative(const common_params & params) {
+    if (params.ridgefill_path.empty()) { return; }
+    if (params.speculative.has_dft()) {
+        throw std::invalid_argument("RidgeFill: --model-draft (-md) is not supported; remove --model-draft or --ridgefill");
+    }
+    if (std::find(params.speculative.types.begin(), params.speculative.types.end(), COMMON_SPECULATIVE_TYPE_DRAFT_MTP) != params.speculative.types.end()) {
+        throw std::invalid_argument("RidgeFill: built-in MTP (--spec-type draft-mtp) is not supported; use --spec-type none or remove --ridgefill");
+    }
+}
+
 common_init_result::common_init_result(common_params & params, bool model_only) :
     pimpl(new impl{}) {
+    try {
+        common_ridgefill_check_speculative(params);
+    } catch (const std::invalid_argument & error) {
+        COM_ERR("%s\n", error.what());
+        return;
+    }
     if (!params.ridgefill_path.empty()) {
         if (params.split_mode == LLAMA_SPLIT_MODE_ROW) {
             COM_ERR("%s", "RidgeFill does not support --split-mode row; use --split-mode layer\n");
@@ -1869,6 +1885,7 @@ static void common_ridgefill_check_quality_alpha(const common_params & params, c
 static void common_ridgefill_lexical_validate(const common_ridgefill_lexical_params & params);
 
 void common_ridgefill_validate_options(const common_params & params, const std::string & mode) {
+    common_ridgefill_check_speculative(params);
     common_ridgefill_lexical_validate({params.ridgefill_lexical_window, params.ridgefill_lexical_min_words,
             params.ridgefill_lexical_span_rows, params.ridgefill_lexical_max_occurrences});
     const auto & selected_mode = mode.empty() ? params.ridgefill_mode : mode;

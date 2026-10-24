@@ -249,3 +249,5 @@ Build against a GPU-enabled directory and append `--gpu` to exercise the failing
 `check_startup_options.py --bin-dir BUILD/bin --model TINY_MODEL --projector TINY_PROJECTOR --out out/startup-options` checks the default-on trim flag, help, strict values, actual startup resolution, and the deprecated environment override. It uses CPU only. The order checker explicitly selects both trim states.
 
 Append `--retired-certificate` to `check_startup_options.py` to check that server/scorer help and parsers no longer expose the removed prefill selector.
+
+Append `--coexistence` to `check_startup_options.py` to require named draft-model and built-in MTP startup refusals at one and two slots, before model IO. Run the default mode for actual RidgeFill-alone startup controls.
