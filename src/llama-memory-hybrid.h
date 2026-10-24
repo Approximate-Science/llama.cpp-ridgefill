@@ -107,6 +107,9 @@ public:
     // init full
     explicit llama_memory_hybrid_context(llama_memory_hybrid * mem);
 
+    // RidgeFill graph reservation with one KV stream
+    llama_memory_hybrid_context(llama_memory_hybrid * mem, bool single_stream);
+
     // init update
     explicit llama_memory_hybrid_context(
         llama_memory_hybrid * mem,

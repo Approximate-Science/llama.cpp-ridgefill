@@ -1557,6 +1557,14 @@ int32_t llama_context::set_ridgefill(const llama_ridgefill * rf) {
 }
 
 void llama_context::ridgefill_reserve_graphs(uint32_t n_tokens, uint32_t n_outputs, const llama_memory_context_i * mctx) {
+    std::unique_ptr<llama_memory_hybrid_context> single_stream;
+    if (auto * hybrid = dynamic_cast<llama_memory_hybrid *>(memory.get())) {
+        if (hybrid->get_mem_attn()->get_n_stream() > 1) {
+            // Every sweep graph has one sequence, including with separate KV streams.
+            single_stream.reset(new llama_memory_hybrid_context(hybrid, true));
+            mctx = single_stream.get();
+        }
+    }
     // the RidgeFill graphs a decode may build, at their worst case (all rows exact, the whole ubatch calibrating vtail);
     // graph shapes depend on counts, not on the rows or positions, so stand-in state is enough
     std::vector<llm_graph_params_ridgefill> variants;
@@ -2281,9 +2289,9 @@ bool llama_context::ridgefill_mark() {
                         "which this build does not implement; use alpha 0\n", __func__, batch.seq_id[i][0], ridgefill_alpha);
                 return false;
             }
-            if (!cparams.kv_unified && cparams.n_seq_max > 1) {
-                LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill quality mode with parallel sequences needs a unified KV cache "
-                        "(kv_unified, -kvu)\n", __func__, batch.seq_id[i][0]);
+            if (!cparams.kv_unified && cparams.n_seq_max > 1 && ridgefill_part[batch.seq_id[i][0]].part == LLM_RIDGEFILL_PART_FULL) {
+                LLAMA_LOG_ERROR("%s: seq_id %d: RidgeFill single-pass quality mode with parallel sequences needs a unified KV cache "
+                        "(--kv-unified); use the two-sweep flow for separate KV streams\n", __func__, batch.seq_id[i][0]);
                 return false;
             }
         }

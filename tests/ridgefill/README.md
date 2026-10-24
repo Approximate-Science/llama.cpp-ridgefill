@@ -247,6 +247,8 @@ The short tiny-model native/HTTP check verifies parameter inheritance and reques
 
 The replay-lookup regression compares the production finder with exhaustive cell scans after sharing, removal, division and shifts. It checks unordered/repeated queries, missing/negative positions, mixed owners and the highest-cell rule when cache positions repeat. It needs no model compute beyond the existing tiny fixture.
 
+Append `--separate` to `test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON` for the separate-KV regression. It runs resident and streamed S1/vtail sweeps with two and eight sequences, placing the injector in the first and last slot. It requires byte-identical prefill/final cache and recurrent state, five full-vocabulary logit rows, selection and calibration, and unchanged background state. Repeat with `LLAMA_RIDGEFILL_TRIM_KV=1` to cover cache reuse. The old reservation exposes all streams to a one-sequence graph and aborts before this test can complete; the full one-hundred-check suite without this argument keeps the unified-cache controls.
+
 ### Shared-KV S1 probe regression
 
 `test_s1_unified.cpp` places a tiny-model injector in sequence7 after another sequence occupies16,30000 or33000 zero-valued KV cells. It checks F32/F16 KV, resident/streamed cache/logit/selection bytes, finite nonzero probe mass, actual probe pair counts and unchanged background state. The16-cell case is a passing placement control. On the affected Vulkan backend the old dense S1 graph fails the30000-cell case even with trim disabled: a long masked prefix exposes a bad large-row softmax maximum reduction. The fixed shared-KV probe gathers only its own prompt cells before attention. No kernel change is part of this test or fix.

@@ -99,13 +99,15 @@ static int check_replay_lookup(const llama_model & model) {
 }
 
 static snapshot run(llama_model * model, const char * projector, const std::vector<llama_token> & ids,
-        bool streamed, bool stock, int window, bool vtail, int tau, bool cancel_first = false, ggml_type hidden_type = GGML_TYPE_F16, bool other_sequence = false) {
+        bool streamed, bool stock, int window, bool vtail, int tau, bool cancel_first = false, ggml_type hidden_type = GGML_TYPE_F16, bool other_sequence = false,
+        bool unified = true, uint32_t parallel = 2, llama_seq_id injector = 0) {
     std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(streamed ?
             llama_ridgefill_init_streamed(model, projector) : llama_ridgefill_init(model, projector), llama_ridgefill_free);
     require(bool(rf), "projector load failed");
     auto cp = llama_context_default_params();
-    cp.n_ctx = (ids.size() + 256)*(other_sequence ? 2 : 1); cp.n_batch = cp.n_ubatch = 128; cp.n_seq_max = other_sequence ? 2 : 1;
-    cp.kv_unified = true;
+    cp.n_seq_max = other_sequence ? parallel : 1;
+    cp.n_ctx = (ids.size() + 256)*cp.n_seq_max; cp.n_batch = cp.n_ubatch = 128;
+    cp.kv_unified = unified;
     cp.n_threads = cp.n_threads_batch = 4; cp.type_k = cp.type_v = GGML_TYPE_F32;
     cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
     std::unique_ptr<llama_context, decltype(&llama_free)> ctx(llama_init_from_model(model, cp), llama_free);
@@ -113,16 +115,16 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
     require(llama_set_ridgefill(ctx.get(), rf.get()) == 0, "projector attach failed");
     if (streamed) { require(llama_ridgefill_set_alpha(ctx.get(), 1) < 0, "stream accepted nonzero alpha"); }
     require(llama_ridgefill_set_alpha(ctx.get(), 0) == 0, "alpha refused");
-    llama_ridgefill_seq_set(ctx.get(), 0, 1);
+    llama_ridgefill_seq_set(ctx.get(), injector, 1);
     auto single_pass = llama_batch_init(1, 0, 1);
     single_pass.n_tokens = 1; single_pass.token[0] = ids[0]; single_pass.pos[0] = 0;
-    single_pass.n_seq_id[0] = 1; single_pass.seq_id[0][0] = 0; single_pass.logits[0] = false;
+    single_pass.n_seq_id[0] = 1; single_pass.seq_id[0][0] = injector; single_pass.logits[0] = false;
     const int single_rc = llama_decode(ctx.get(), single_pass);
     llama_batch_free(single_pass);
     require(streamed ? single_rc < 0 : single_rc == 0, "single-pass storage guard or resident control failed");
     llama_memory_clear(llama_get_memory(ctx.get()), true);
-    llama_ridgefill_seq_set(ctx.get(), 0, 0);
-    auto decode = [&](int begin, int count, bool output, const llama_token * tokens, llama_seq_id seq = 0) {
+    llama_ridgefill_seq_set(ctx.get(), injector, 0);
+    auto decode = [&](int begin, int count, bool output, const llama_token * tokens, llama_seq_id seq) {
         auto batch = llama_batch_init(count, 0, 1);
         batch.n_tokens = count;
         for (int i = 0; i < count; ++i) {
@@ -133,8 +135,9 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         llama_batch_free(batch);
         require(rc == 0, "decode failed");
     };
-    if (other_sequence) { decode(0, 16, false, ids.data(), 1); }
-    const auto other_before = other_sequence ? state(ctx.get(), 1) : std::vector<uint8_t>();
+    const llama_seq_id background = injector == 0 ? 1 : 0;
+    if (other_sequence) { decode(0, 16, false, ids.data(), background); }
+    const auto other_before = other_sequence ? state(ctx.get(), background) : std::vector<uint8_t>();
     snapshot result;
     if (streamed) {
         result.map_bytes = ctx->get_ridgefill_stream()->buffer_bytes();
@@ -146,10 +149,10 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         require(result.map_bytes <= 2*(largest + 3*alignment), "more than two map payloads staged");
     }
     if (stock) {
-        llama_ridgefill_seq_set(ctx.get(), 0, 0);
+        llama_ridgefill_seq_set(ctx.get(), injector, 0);
         for (size_t pos = 0; pos < ids.size(); pos += 128) {
             const int count = std::min<size_t>(128, ids.size() - pos);
-            decode(pos, count, pos + count == ids.size(), ids.data() + pos);
+            decode(pos, count, pos + count == ids.size(), ids.data() + pos, injector);
         }
     } else {
         server_ridgefill_sweep_params params;
@@ -158,56 +161,57 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         params.type = hidden_type;
         params.s1 = window > 0; params.s1_window = window; params.projector = rf.get();
         params.vtail = vtail; params.vtail_rows = 32; params.certificate = tau >= 0; params.certificate_tau = tau;
-        llama_ridgefill_seq_set(ctx.get(), 0, params.n_prefix);
+        llama_ridgefill_seq_set(ctx.get(), injector, params.n_prefix);
         if (cancel_first) {
             server_ridgefill_sweep partial;
             auto status = server_ridgefill_sweep_result::pending;
             int steps = 0;
             while (status == server_ridgefill_sweep_result::pending && ++steps < 10000) {
-                status = server_ridgefill_sweep_step(partial, ctx.get(), 0, ids.data(), {}, params);
+                status = server_ridgefill_sweep_step(partial, ctx.get(), injector, ids.data(), {}, params);
                 if (std::strcmp(partial.phase_name(), "stream_tail") == 0 && partial.step_tokens() > 0) { break; }
             }
             require(status == server_ridgefill_sweep_result::pending && partial.step_tokens() > 0 && steps < 10000, "did not reach an active streamed prefix");
             auto narrowed = params;
             narrowed.n_batch = 127;
             require(partial.next_tokens(ctx.get(), narrowed) == 128, "atomic first-tail span shrank with the prompt budget");
-            require(partial.next_work(ctx.get(), 0, params, 128) <= 128, "atomic span refused a full prompt budget");
+            require(partial.next_work(ctx.get(), injector, params, 128) <= 128, "atomic span refused a full prompt budget");
             bool refused = false;
-            try { partial.next_work(ctx.get(), 0, narrowed, 127); }
+            try { partial.next_work(ctx.get(), injector, narrowed, 127); }
             catch (const std::runtime_error & error) {
                 refused = std::strstr(error.what(), "exceeds the stock prompt chunk budget") != nullptr;
             }
             require(refused, "server budget check admitted an oversized atomic span");
-            partial.cancel(ctx.get(), 0);
-            require(llama_memory_seq_pos_max(llama_get_memory(ctx.get()), 0) < 0, "cancel retained sequence memory");
-            llama_ridgefill_seq_set(ctx.get(), 0, params.n_prefix);
+            partial.cancel(ctx.get(), injector);
+            require(llama_memory_seq_pos_max(llama_get_memory(ctx.get()), injector) < 0, "cancel retained sequence memory");
+            llama_ridgefill_seq_set(ctx.get(), injector, params.n_prefix);
         }
         server_ridgefill_sweep sweep;
         auto status = server_ridgefill_sweep_result::pending;
         int steps = 0;
         while (status == server_ridgefill_sweep_result::pending && ++steps < 10000) {
-            status = server_ridgefill_sweep_step(sweep, ctx.get(), 0, ids.data(), {}, params);
+            status = server_ridgefill_sweep_step(sweep, ctx.get(), injector, ids.data(), {}, params);
         }
         require(status == server_ridgefill_sweep_result::complete, "sweep did not complete");
         result.mass = sweep.get_s1_mass(); result.rows = sweep.get_rows(); result.scales = sweep.get_vtail_scales();
         result.beta = sweep.get_certificate().beta;
     }
-    result.prefill = state(ctx.get());
-    if (other_sequence) { require(other_before == state(ctx.get(), 1), "prefill changed the other sequence state"); }
+    result.prefill = state(ctx.get(), injector);
+    if (other_sequence) { require(other_before == state(ctx.get(), background), "prefill changed the other sequence state"); }
     const int vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
     for (int i = 0; i < 5; ++i) {
         const auto * logits = llama_get_logits(ctx.get());
         require(logits && vocab > 0, "missing full-vocabulary logits");
         result.logits.insert(result.logits.end(), logits, logits + vocab);
-        if (i < 4) { decode(ids.size() + i, 1, true, ids.data() + i); }
+        if (i < 4) { decode(ids.size() + i, 1, true, ids.data() + i, injector); }
     }
-    result.final = state(ctx.get());
+    result.final = state(ctx.get(), injector);
     return result;
 }
 
 int main(int argc, char ** argv) {
     try {
-        require(argc == 5, "usage: test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON");
+        const bool separate = argc == 6 && std::strcmp(argv[5], "--separate") == 0;
+        require(argc == 5 || separate, "usage: test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON [--separate]");
         std::ifstream input(argv[3]); json document; input >> document;
         const auto ids = document.at("ids").get<std::vector<llama_token>>();
         require(ids.size() > 400 && ids.size() < 4096, "use a short CPU fixture with an exact tail");
@@ -215,6 +219,30 @@ int main(int argc, char ** argv) {
         auto mp = llama_model_default_params(); mp.n_gpu_layers = 0;
         std::unique_ptr<llama_model, decltype(&llama_model_free)> model(llama_model_load_from_file(argv[1], mp), llama_model_free);
         require(bool(model), "model load failed");
+        if (separate) {
+            json cases = json::array();
+            int checks = 0;
+            auto check = [&](bool ok, const char * message) { require(ok, message); ++checks; };
+            for (const uint32_t parallel : {2, 8}) {
+                for (const llama_seq_id injector : {0, int32_t(parallel - 1)}) {
+                    const auto a = run(model.get(), argv[2], ids, false, false, 256, true, -1, false, GGML_TYPE_F16, true, false, parallel, injector);
+                    const auto b = run(model.get(), argv[2], ids, true, false, 256, true, -1, false, GGML_TYPE_F16, true, false, parallel, injector);
+                    check(!a.rows.empty() && a.rows.size() < ids.size() - 400, "missing separate-KV approximate prefix");
+                    check(a.mass.size() == ids.size() - 400 && *std::max_element(a.mass.begin(), a.mass.end()) > 0, "separate-KV S1 mass was not measured");
+                    check(a.prefill == b.prefill && a.final == b.final, "separate-KV resident/streamed state bytes differ");
+                    check(same_logits(a.logits, b.logits), "separate-KV resident/streamed logit bytes differ");
+                    check(a.rows == b.rows && a.mass == b.mass, "separate-KV resident/streamed selection differs");
+                    check(!a.scales.empty() && a.scales == b.scales, "separate-KV vtail scales differ");
+                    cases.push_back({{"parallel", parallel}, {"injector", injector}, {"state_bytes", b.prefill.size()}, {"exact_rows", b.rows.size()}});
+                }
+            }
+            std::ofstream output(argv[4]);
+            require(bool(output), "cannot open result file");
+            output << json({{"result", "PASS"}, {"checks", checks}, {"cases", cases}}).dump(2) << '\n';
+            require(bool(output), "cannot write result file");
+            std::printf("separate KV: %d checks passed\n", checks);
+            return 0;
+        }
         const auto stock = run(model.get(), argv[2], ids, false, true, 0, false, -1);
         const auto stock_stream = run(model.get(), argv[2], ids, true, true, 0, false, -1);
         int checks = check_replay_lookup(*model);

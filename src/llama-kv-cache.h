@@ -376,6 +376,11 @@ public:
     llama_kv_cache_context(
             llama_kv_cache * kv);
 
+    // RidgeFill reserves one-sequence graphs without changing cache cells
+    llama_kv_cache_context(
+            llama_kv_cache * kv,
+            bool single_stream);
+
     // used to create an update context
     llama_kv_cache_context(
             llama_kv_cache * kv,

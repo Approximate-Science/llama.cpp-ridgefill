@@ -213,7 +213,7 @@ The following combinations and invalid inputs refuse by name; there is no fallba
 | speed with special-exact on or header-rows > 0 | names the chat flags; use a quality mode |
 | question-window-mode turn | requires quality+qattn; refuses blind selection and missing or empty user turns by name |
 | alpha != 0 in either quality mode | names the missing rho-scaled correction; use `--ridgefill-alpha 0` |
-| parallel quality with non-unified KV | names unified KV and `-kvu`; enable `--kv-unified` |
+| single-pass parallel quality with non-unified KV | names `--kv-unified`; the server/scorer two-sweep flow supports separate KV streams |
 | bench/perplexity `quality+qattn` | names the server question-attention sweep; use the server or ordinary quality |
 | positive-share server qattn with shared/parent/child prompts, speculative decoding, LoRA or a non-completion task | names the requirement for an independent text completion without speculative decoding or LoRA |
 | qattn replay with recurrent rollback (`n_rs_seq > 0`) | names recurrent rollback snapshots; disable that combination |
@@ -518,3 +518,5 @@ After synchronization, the log records cumulative context map-upload bytes. A di
 Set `LLAMA_RIDGEFILL_TRIM_KV=1` before starting the server/scorer to reuse S1_FILL's bulk attention cache in the ordered late pass. This startup switch is default off and requires the S1 two-sweep path. The pass skips the bulk ridge projector, retains the original K/V GEMM dimensions and updates only exact-row cache entries. Keys are gathered before normalization/RoPE to preserve the fused cache-store arithmetic. The GDN Q projection and decode path are unchanged. The 16K resident-projector smoke matched full logit bytes and reduced median TTFT by0.95%; other configurations still need separate measurement.
 
 For S1 probes in a unified cache with multiple sequence slots, only the active sequence's K/V cells are gathered, one KV head at a time, into prompt position order before attention. The causal mask still excludes the unrun tail gap and future query rows. Probe mass maps directly to prompt positions, and reported probe pairs exclude other sequences. This prevents unrelated physical cache placement from creating long wholly masked leading ranges in the probe softmax. Single-sequence probes and ordinary decoding keep their previous graphs. The server's scheduling estimate remains a conservative bound based on the shared cache extent.
+
+The two-sweep flow also supports separate KV streams with parallel slots (`--no-kv-unified`). RidgeFill reserves its one-sequence graphs against a full-size view of one KV stream; runtime replay uses the active sequence's stream. This view changes no cache cells or recurrent state and allocates no device memory. Single-pass parallel quality still requires `--kv-unified`.
