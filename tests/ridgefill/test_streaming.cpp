@@ -31,7 +31,6 @@ struct snapshot {
     std::vector<float> logits, scales;
     std::vector<double> mass;
     std::vector<llama_pos> rows;
-    std::vector<std::vector<float>> beta;
     size_t map_bytes = 0;
 };
 
@@ -100,7 +99,7 @@ static int check_replay_lookup(const llama_model & model) {
 }
 
 static snapshot run(llama_model * model, const char * projector, const std::vector<llama_token> & ids,
-        bool streamed, bool stock, int window, bool vtail, int tau, bool cancel_first = false, ggml_type hidden_type = GGML_TYPE_F16, bool other_sequence = false,
+        bool streamed, bool stock, int window, bool vtail, bool cancel_first = false, ggml_type hidden_type = GGML_TYPE_F16, bool other_sequence = false,
         bool unified = true, uint32_t parallel = 2, llama_seq_id injector = 0) {
     std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(streamed ?
             llama_ridgefill_init_streamed(model, projector) : llama_ridgefill_init(model, projector), llama_ridgefill_free);
@@ -162,7 +161,7 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         params.n_batch = 128; params.split = llama_ridgefill_split(rf.get()); params.qattn_share = 0.2f;
         params.type = hidden_type;
         params.s1 = window > 0; params.s1_window = window; params.projector = rf.get();
-        params.vtail = vtail; params.vtail_rows = 32; params.certificate = tau >= 0; params.certificate_tau = tau;
+        params.vtail = vtail; params.vtail_rows = 32;
         llama_ridgefill_seq_set(ctx.get(), injector, params.n_prefix);
         if (cancel_first) {
             server_ridgefill_sweep partial;
@@ -195,7 +194,6 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         }
         require(status == server_ridgefill_sweep_result::complete, "sweep did not complete");
         result.mass = sweep.get_s1_mass(); result.rows = sweep.get_rows(); result.scales = sweep.get_vtail_scales();
-        result.beta = sweep.get_certificate().beta;
     }
     result.prefill = state(ctx.get(), injector);
     if (other_sequence) { require(other_before == state(ctx.get(), background), "prefill changed the other sequence state"); }
@@ -227,8 +225,8 @@ int main(int argc, char ** argv) {
             auto check = [&](bool ok, const char * message) { require(ok, message); ++checks; };
             for (const uint32_t parallel : {2, 8}) {
                 for (const llama_seq_id injector : {0, int32_t(parallel - 1)}) {
-                    const auto a = run(model.get(), argv[2], ids, false, false, 256, true, -1, false, GGML_TYPE_F16, true, false, parallel, injector);
-                    const auto b = run(model.get(), argv[2], ids, true, false, 256, true, -1, false, GGML_TYPE_F16, true, false, parallel, injector);
+                    const auto a = run(model.get(), argv[2], ids, false, false, 256, true, false, GGML_TYPE_F16, true, false, parallel, injector);
+                    const auto b = run(model.get(), argv[2], ids, true, false, 256, true, false, GGML_TYPE_F16, true, false, parallel, injector);
                     check(!a.rows.empty() && a.rows.size() < ids.size() - 400, "missing separate-KV approximate prefix");
                     check(a.mass.size() == ids.size() - 400 && *std::max_element(a.mass.begin(), a.mass.end()) > 0, "separate-KV S1 mass was not measured");
                     check(a.prefill == b.prefill && a.final == b.final, "separate-KV resident/streamed state bytes differ");
@@ -245,64 +243,55 @@ int main(int argc, char ** argv) {
             std::printf("separate KV: %d checks passed\n", checks);
             return 0;
         }
-        const auto stock = run(model.get(), argv[2], ids, false, true, 0, false, -1);
-        const auto stock_stream = run(model.get(), argv[2], ids, true, true, 0, false, -1);
+        const auto stock = run(model.get(), argv[2], ids, false, true, 0, false);
+        const auto stock_stream = run(model.get(), argv[2], ids, true, true, 0, false);
         int checks = check_replay_lookup(*model);
         auto check = [&](bool ok, const char * message) { require(ok, message); ++checks; };
         check(stock.prefill == stock_stream.prefill, "off prefill-state bytes differ");
         check(stock.final == stock_stream.final, "off final-state bytes differ");
         check(same_logits(stock.logits, stock_stream.logits), "off full-vocabulary logits differ");
         json cases = json::array();
-        size_t s1_rows = 0;
-        for (int index = 0; index < 6; ++index) {
-            const int window = index == 0 ? 0 : index == 5 ? 256 : 64;
+        for (int index = 0; index < 4; ++index) {
+            const int window = index == 0 ? 0 : index == 3 ? 256 : 64;
             const bool vt = index == 2;
-            const int tau = index == 3 ? 1 : index >= 4 ? 0 : -1;
-            std::printf("streaming case %d: window %d vtail %d tau %d\n", index, window, vt, tau);
+            std::printf("streaming case %d: window %d vtail %d\n", index, window, vt);
             std::fflush(stdout);
-            const auto a = run(model.get(), argv[2], ids, false, false, window, vt, tau);
-            const auto b = run(model.get(), argv[2], ids, true, false, window, vt, tau);
+            const auto a = run(model.get(), argv[2], ids, false, false, window, vt);
+            const auto b = run(model.get(), argv[2], ids, true, false, window, vt);
             check(!a.rows.empty() && a.rows.size() < ids.size() - 400, "missing approximate-prefix control");
             check(a.prefill != stock.prefill, "RidgeFill positive control is stock");
             check(a.prefill == b.prefill, "streamed prefill KV/conv/recurrent-state bytes differ");
             check(a.final == b.final, "streamed final KV/conv/recurrent-state bytes differ");
             check(same_logits(a.logits, b.logits), "streamed full-vocabulary logits differ");
             check(a.rows == b.rows && a.mass == b.mass, "S1 rows or mass differ");
-            check(a.beta == b.beta, "per-head probe beta differs");
             check(a.scales == b.scales, "vtail scales differ");
             check(b.map_bytes > 0 && b.map_bytes == stock_stream.map_bytes, "staging buffer grows with prompt work");
             if (window) { check(a.mass.size() == ids.size() - 400 && *std::max_element(a.mass.begin(), a.mass.end()) > 0, "S1 mass was not measured"); }
             if (vt) { check(!a.scales.empty(), "vtail scales were not measured"); }
-            if (tau >= 0) { check(!a.beta.empty() && !a.beta[0].empty() && a.beta[0][0] > 0, "beta was not measured"); }
-            if (index == 1) { s1_rows = a.rows.size(); }
-            if (index == 3) { check(a.rows.size() == s1_rows, "tau1 negative control added rows"); }
-            if (index == 4) { check(a.rows.size() > s1_rows && a.rows.size() <= size_t(0.23*(ids.size() - 400)), "tau0 positive control did not repair within cap"); }
-            cases.push_back({{"window", window}, {"vtail", vt}, {"tau", tau}, {"map_bytes", b.map_bytes},
-                    {"state_bytes", b.prefill.size()}, {"exact_rows", b.rows}, {"beta", b.beta}});
+            cases.push_back({{"window", window}, {"vtail", vt}, {"map_bytes", b.map_bytes},
+                    {"state_bytes", b.prefill.size()}, {"exact_rows", b.rows}});
         }
-        const auto reference = run(model.get(), argv[2], ids, true, false, 64, true, 0);
-        const auto reused = run(model.get(), argv[2], ids, true, false, 64, true, 0, true);
+        const auto reference = run(model.get(), argv[2], ids, true, false, 64, true);
+        const auto reused = run(model.get(), argv[2], ids, true, false, 64, true, true);
         check(reference.prefill == reused.prefill && reference.final == reused.final, "cancel/reuse state bytes differ");
         check(same_logits(reference.logits, reused.logits), "cancel/reuse logit bytes differ");
-        check(reference.rows == reused.rows && reference.mass == reused.mass && reference.beta == reused.beta && reference.scales == reused.scales,
+        check(reference.rows == reused.rows && reference.mass == reused.mass && reference.scales == reused.scales,
                 "cancel/reuse selection or calibration leaked");
         for (const auto type : {GGML_TYPE_BF16, GGML_TYPE_F32}) {
-            const auto a = run(model.get(), argv[2], ids, false, false, 64, true, -1, false, type);
-            const auto b = run(model.get(), argv[2], ids, true, false, 64, true, -1, false, type);
+            const auto a = run(model.get(), argv[2], ids, false, false, 64, true, false, type);
+            const auto b = run(model.get(), argv[2], ids, true, false, 64, true, false, type);
             check(a.prefill == b.prefill, "compact alternate-type prefill bytes differ");
             check(a.final == b.final, "compact alternate-type final bytes differ");
             check(same_logits(a.logits, b.logits), "compact alternate-type logits differ");
             check(a.rows == b.rows && a.mass == b.mass, "compact alternate-type selection differs");
-            check(a.beta == b.beta, "compact alternate-type beta differs");
             check(a.scales == b.scales, "compact alternate-type vtail differs");
         }
-        const auto background_a = run(model.get(), argv[2], ids, false, false, 64, true, 0, false, GGML_TYPE_F16, true);
-        const auto background_b = run(model.get(), argv[2], ids, true, false, 64, true, 0, false, GGML_TYPE_F16, true);
+        const auto background_a = run(model.get(), argv[2], ids, false, false, 64, true, false, GGML_TYPE_F16, true);
+        const auto background_b = run(model.get(), argv[2], ids, true, false, 64, true, false, GGML_TYPE_F16, true);
         check(background_a.prefill == background_b.prefill, "other-layout prefill bytes differ");
         check(background_a.final == background_b.final, "other-layout final bytes differ");
         check(same_logits(background_a.logits, background_b.logits), "other-layout logits differ");
         check(background_a.rows == background_b.rows && background_a.mass == background_b.mass, "other-layout selection differs");
-        check(background_a.beta == background_b.beta, "other-layout beta differs");
         check(background_a.scales == background_b.scales, "other-layout vtail differs");
         std::ofstream output(argv[4]);
         require(bool(output), "cannot open result file");

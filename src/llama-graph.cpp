@@ -1406,7 +1406,6 @@ void llm_graph_result::reset() {
     t_embd        = nullptr;
     t_embd_pooled = nullptr;
     t_h_nextn     = nullptr;
-    t_rf_calibration.clear();
     t_rf_mass     = nullptr;
     t_rf_vtail    = nullptr;
 

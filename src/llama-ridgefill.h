@@ -119,18 +119,6 @@ struct llama_ridgefill_part_state {
     bool prefix_kv_filled = false;
 };
 
-struct llama_ridgefill_calibration {
-    int32_t layer = 0;
-    int32_t dim = 0;
-    int32_t heads = 0;
-    int32_t kv_heads = 0;
-    int32_t rows = 0;
-    int32_t begin = 0;
-    std::vector<float> queries; // [dim, heads, rows], post-RoPE and cache rotation
-    std::vector<float> beta; // maximum probe key L2 error per KV head
-    std::vector<std::pair<int32_t, int32_t>> probe_chunks; // streamed beta reuses the original projection shapes
-};
-
 class llama_kv_cache_context;
 
 // graph input of a LOWER / LATE ubatch (one sequence)
@@ -158,7 +146,6 @@ public:
     ggml_tensor * s1_mask  = nullptr;
     ggml_tensor * s1_rows  = nullptr; // I32: this sequence's cells in prompt order, for a shared KV stream
     ggml_tensor * ones     = nullptr;
-    ggml_tensor * cert_rows = nullptr; // I32 [n_tokens]: probe cells in the attention cache
     int64_t                    s1_qb = 0;
     std::vector<ggml_tensor *> s1_mask_blk;
     std::vector<ggml_tensor *> s1_ones_blk;

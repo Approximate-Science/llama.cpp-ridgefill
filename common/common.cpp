@@ -1801,25 +1801,12 @@ void common_ridgefill_set_option(common_params & params, const std::string & opt
         if (end != value.size() || count < minimum) { throw std::invalid_argument(option + " has an invalid row count"); }
         if (option == "--ridgefill-s1-window") { params.ridgefill_s1_window = count; }
         else { params.ridgefill_vtail_rows = count; }
-    } else if (option == "--ridgefill-certificate-tau" || option == "--ridgefill-certificate-cap") {
-        size_t end = 0;
-        double fraction;
-        try { fraction = std::stod(value, &end); }
-        catch (const std::exception &) { throw std::invalid_argument(option + " must be finite and in [0, 1]"); }
-        if (end != value.size() || !std::isfinite(fraction) || fraction < 0 || fraction > 1) {
-            throw std::invalid_argument(option + " must be finite and in [0, 1]");
-        }
-        if (option == "--ridgefill-certificate-tau") { params.ridgefill_certificate_tau = fraction; }
-        else { params.ridgefill_certificate_cap = fraction; }
     } else if (option == "--ridgefill-trim-kv") {
         if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
         params.ridgefill_trim_kv = value == "on";
     } else if (option == "--ridgefill-stream-projector") {
         if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
         params.ridgefill_stream_projector = value == "on";
-    } else if (option == "--ridgefill-certificate") {
-        if (value != "on" && value != "off") { throw std::invalid_argument(option + " must be on or off"); }
-        params.ridgefill_certificate = value == "on";
     } else if (option == "--ridgefill-alpha") {
         params.ridgefill_alpha = number();
     } else if (option == "--ridgefill-share") {
@@ -1896,13 +1883,8 @@ void common_ridgefill_validate_options(const common_params & params, const std::
     if (params.ridgefill_lexical && selected_mode != "off" && params.ridgefill_qattn_share == 0) {
         throw std::invalid_argument("RidgeFill: --ridgefill-lexical requires positive --ridgefill-qattn-share for its exact-row budget");
     }
-    if (!std::isfinite(params.ridgefill_certificate_tau) || params.ridgefill_certificate_tau < 0 || params.ridgefill_certificate_tau > 1 ||
-            !std::isfinite(params.ridgefill_certificate_cap) || params.ridgefill_certificate_cap < 0 || params.ridgefill_certificate_cap > 1) {
-        throw std::invalid_argument("RidgeFill certificate: tau and cap must be in [0, 1]");
-    }
-    if (params.ridgefill_certificate && selected_mode != "off" && (selected_mode != "quality+qattn" || params.ridgefill_s1_window <= 0)) {
-        throw std::invalid_argument("RidgeFill certificate: requires quality+qattn with a positive S1 window");
-    }
+
+
     if (params.ridgefill_header_rows < 0) { throw std::invalid_argument("RidgeFill: --ridgefill-header-rows must be nonnegative"); }
     if (params.ridgefill_qattn_window_mode != "last" && params.ridgefill_qattn_window_mode != "turn") {
         throw std::invalid_argument("RidgeFill: --ridgefill-qattn-window-mode must be last or turn");
@@ -2275,19 +2257,7 @@ common_json common_ridgefill_report::to_json() const {
     if (s1_begin >= 0 || vtail_rows > 0) {
         result["mac_model"] = "kva cold prefill + S1 dense probe pairs and recomputed prefix projector/KV + vtail projector and two V projections";
     }
-    if (certificate_enabled) {
-        result["n_exact_prefix_by_source"]["certificate"] = exact_by_source[7];
-        result["certificate"] = common_json {{"enabled", true}, {"tau", certificate.tau}, {"cap", certificate.cap},
-            {"row_cap", certificate.row_cap}, {"flagged", certificate.flagged}, {"added", certificate.added},
-            {"n_added", certificate.added.size()}, {"dropped", certificate.dropped}, {"capped", certificate.capped},
-            {"complete", !certificate.capped}, {"probe_rows", certificate.probe_rows},
-            {"layers", certificate.layers}, {"beta", common_json::array()}, {"macs", certificate.macs},
-            {"seconds", certificate.seconds}, {"compute_bytes", certificate.compute_bytes},
-            {"calibration", "probe maximum L2 key error per late KV head; empirical, prefix transfer unverified"},
-            {"normalizer", "causal exact probe keys plus interval lower bounds for all filled prefix keys"}};
-        for (const auto & beta : certificate.beta) { result["certificate"]["beta"].push_back(beta); }
-        result["mac_model"] = "kva cold prefill + S1/vtail + certificate calibration and dense bound scores";
-    }
+
     return result;
 }
 
@@ -2333,13 +2303,7 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
         report.lexical = *lexical;
         require(std::includes(rows.begin(), rows.end(), lexical->rows.begin(), lexical->rows.end()), "lexical rows must be exact");
     }
-    if (params.ridgefill_certificate && mode != "off" && n_prefix > 0) {
-        require(sweep && sweep->certificate, "certificate needs completed selection metadata");
-        report.certificate_enabled = true;
-        report.certificate = *sweep->certificate;
-        require(std::includes(rows.begin(), rows.end(), report.certificate.added.begin(), report.certificate.added.end()),
-                "certificate additions must be exact");
-    }
+
     const bool s1 = mode != "off" && params.ridgefill_s1_window > 0;
     const bool vtail = mode != "off" && params.ridgefill_vtail;
     if (s1 || vtail) {
@@ -2370,7 +2334,7 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
             require(!special || selected, "S1 special rows differ from the reported exact rows");
             if (!selected) { continue; }
             if (i < filled_begin || i >= filled_end) { ++report.n_cached_exact_prefix; }
-            else { ++report.exact_by_source[std::binary_search(report.lexical.rows.begin(), report.lexical.rows.end(), i) ? 6 : std::binary_search(report.certificate.added.begin(), report.certificate.added.end(), i) ? 7 : special ? 2 : 5]; }
+            else { ++report.exact_by_source[std::binary_search(report.lexical.rows.begin(), report.lexical.rows.end(), i) ? 6 : special ? 2 : 5]; }
         }
     } else if (n_prefix > 0 && (mode == "quality" || mode == "quality+qattn")) {
         require(rf && tokens, "quality breakdown needs the projector and prompt tokens");
@@ -2487,7 +2451,7 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
         report.macs_ridgefill += il < split ? exact :
             (n - p) * (linear + mlp) + tail_context + filled * (fill + hidden * hidden) + r * (linear + mlp) + row_context;
     }
-    report.macs_ridgefill += report.macs_s1_fill + report.macs_s1_probe + report.macs_vtail + report.certificate.macs;
+    report.macs_ridgefill += report.macs_s1_fill + report.macs_s1_probe + report.macs_vtail;
     require(std::isfinite(report.macs_exact) && std::isfinite(report.macs_ridgefill) && report.macs_exact > 0,
             "nonfinite analytic MAC count");
     return report;

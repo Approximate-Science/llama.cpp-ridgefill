@@ -3114,18 +3114,6 @@ common_params_context common_params_parser_init(common_params & params, llama_ex
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-trim-kv", value); }
     ));
     add_opt(common_arg(
-        {"--ridgefill-certificate"}, "on|off", "RidgeFill: empirical prefill interval selection (default: off; requires S1)",
-        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-certificate", value); }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
-        {"--ridgefill-certificate-tau"}, "N", "RidgeFill: flag probability upper bounds above N (default: 0.01)",
-        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-certificate-tau", value); }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
-        {"--ridgefill-certificate-cap"}, "F", "RidgeFill: total exact-prefix fraction cap (default: 0.23)",
-        [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-certificate-cap", value); }
-    ).set_examples({LLAMA_EXAMPLE_SERVER}));
-    add_opt(common_arg(
         {"--ridgefill-s1-factor"}, "F", "RidgeFill: S1 exact-row budget factor (default: 1.0)",
         [](common_params & params, const std::string & value) { common_ridgefill_set_option(params, "--ridgefill-s1-factor", value); }
     ).set_examples({LLAMA_EXAMPLE_CLI, LLAMA_EXAMPLE_SERVER, LLAMA_EXAMPLE_PERPLEXITY}));

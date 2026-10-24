@@ -567,9 +567,6 @@ struct common_params {
     int32_t ridgefill_qattn_turn_cap = 256;
     int32_t ridgefill_s1_window = 0;
     double ridgefill_s1_factor = 1.0;
-    bool ridgefill_certificate = false;
-    double ridgefill_certificate_tau = 0.01;
-    double ridgefill_certificate_cap = 0.23;
     bool ridgefill_vtail = false;
     bool ridgefill_stream_projector = false;
     bool ridgefill_trim_kv = true;
@@ -1102,9 +1099,7 @@ struct common_ridgefill_report {
     int32_t n_prefix = 0;
     int32_t n_exact_prefix = 0;
     int32_t n_cached_exact_prefix = 0;
-    std::array<int32_t, 8> exact_by_source = {}; // class, digit, special, header, qattn, s1, lexical, certificate; disjoint
-    bool certificate_enabled = false;
-    llama_ridgefill_certificate_result certificate;
+    std::array<int32_t, 7> exact_by_source = {}; // class, digit, special, header, qattn, s1, lexical; disjoint
     bool lexical_enabled = false;
     common_ridgefill_lexical_result lexical;
     double macs_exact = 0;
@@ -1126,7 +1121,6 @@ struct common_ridgefill_sweep_report {
     int32_t s1_end = -1;
     uint64_t s1_probe_kv_pairs = 0;
     int32_t vtail_rows = 0;
-    const llama_ridgefill_certificate_result * certificate = nullptr;
 };
 
 common_ridgefill_report common_ridgefill_get_report(const llama_model * model, const llama_ridgefill * rf,

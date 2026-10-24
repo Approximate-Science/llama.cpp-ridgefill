@@ -12,19 +12,12 @@ int main() {
         if (!condition) { throw std::runtime_error("RidgeFill argument check failed"); }
         ++checked;
     };
-    common_params cert;
-    check(!cert.ridgefill_certificate && cert.ridgefill_certificate_tau == 0.01 && cert.ridgefill_certificate_cap == 0.23);
-    common_ridgefill_set_option(cert, "--ridgefill-certificate", "on");
-    common_ridgefill_set_option(cert, "--ridgefill-certificate-tau", "0.003");
-    common_ridgefill_set_option(cert, "--ridgefill-certificate-cap", "0.29");
-    check(cert.ridgefill_certificate && cert.ridgefill_certificate_tau == 0.003 && cert.ridgefill_certificate_cap == 0.29);
-    for (const auto & option : {"--ridgefill-certificate-tau", "--ridgefill-certificate-cap"}) {
-        for (const auto & value : {"nan", "inf", "-0.1", "1.1", "0.2bad"}) {
-            bool caught = false;
-            try { common_ridgefill_set_option(cert, option, value); }
-            catch (const std::invalid_argument &) { caught = true; }
-            check(caught);
-        }
+    common_params retired;
+    for (const auto & option : {"--ridgefill-certificate", "--ridgefill-certificate-tau", "--ridgefill-certificate-cap"}) {
+        bool caught = false;
+        try { common_ridgefill_set_option(retired, option, "off"); }
+        catch (const std::invalid_argument &) { caught = true; }
+        check(caught);
     }
     common_params params;
     check(!params.ridgefill_special_exact && params.ridgefill_header_rows == 0 && params.ridgefill_qattn_window_mode == "last" && params.ridgefill_qattn_turn_cap == 256);

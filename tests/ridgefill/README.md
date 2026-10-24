@@ -200,29 +200,15 @@ S1/vtail tests: compile `test_s1_reporting.cpp` against common/engine libraries 
 
 `check_scheduling.py --config CONFIG.json --out NEW_OUTPUT_DIR` starts a server from the config's `command` array, streams two requests from its `background` token array, then submits its `prompt` token array to slot 2. Supply `batch`, three slots, unified KV, a large enough context and `--verbose`. It requires sweep progress in consecutive scheduling iterations and at most batch-2 stock-row work units per iteration, then completes the target while both generators remain active. `expect_multi_step: true` also requires multiple steps and more than n_batch physical rows in at least one iteration. It records stream gaps for a separate stock-chunk comparison; it has no machine-specific timing threshold. `expect_steps: false` supports a stock control; `expect_error` checks a named refusal, including an atomic vtail sample that cannot fit beside the generators. Optional `vram` names a host-readable byte counter. Example configs and raw lane-A runs are under `out/a2/` and `out/a2b/`; no model is downloaded.
 
-## Prefill certificate checks
+## Projector streaming controls
 
-`test_certificate.cpp` executes the actual ggml interval-bound graph on CPU and compares it with independent double-precision maximizing corners and admissible perturbations. It covers exact denominator keys, masks, zero/large radii and underflow, then checks capped descending-bound selection, ties, preserved base rows and invalid inputs. FP32 comparisons allow 2e-6 absolute numerical error.
-
-```sh
-c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include tests/ridgefill/test_certificate.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama -lggml -lggml-cpu -lggml-base -o build-cpu/test-certificate
-build-cpu/test-certificate
-python3 tests/ridgefill/check_certificate.py --bin-dir build-cpu/bin --parent-bin /path/to/accepted-a2/bin --model /path/to/tiny-qwen35-f32.gguf --projector /path/to/projector-s4-f32.gguf --input /path/to/tiny-match.json --out out/certificate-cpu
-```
-
-The short native/HTTP driver checks accepted-parent byte identity (including full-vocabulary generated probabilities), tau=1 as a no-flag/no-output-change control, tau=0 as a forced/capped positive control, multi-ubatch calibration, per-head beta, source counts, invalid parameters and request-state cleanup. The synthetic input has 2000 tiny-model tokens; the lexical fixture from A1 is suitable. NLL-path controls exclude the scored target from selection. A separate HTTP parity control explicitly uses the full document endpoint to match the server; it does not measure NLL quality. These checks do not establish beta transfer or full-model quality. Run full-model GPU smoke only through the worker's bridge and leave benchmark screens to lane Q.
-
-### Projector streaming controls
-
-`test_streaming.cpp` compares resident and streamed maps on the tiny CPU model. It requires complete serialized prefill/final KV, convolution and recurrent-state bytes and five full-vocabulary logit vectors to match. It covers qattn, S1, vtail, positive/negative certificate controls and a multi-ubatch probe; S1 mass/rows, beta and vtail scales also match exactly. Nonzero alpha refuses, staging is bounded by two map payloads, and cancellation after compact carry allocation followed by replay must match a fresh run. Between streamed layers it narrows a128-row budget to127: the planned first-tail span must remain128, and the server's capacity check must refuse it;128 remains an admitted control. Stock/off is a byte control; an approximate prefix must differ from stock.
+`test_streaming.cpp` compares resident and streamed maps on the tiny CPU model. It requires complete serialized prefill/final KV, convolution and recurrent-state bytes and five full-vocabulary logit vectors to match. It covers qattn, S1, vtail and a multi-ubatch probe; S1 mass/rows and vtail scales also match exactly. Nonzero alpha refuses, staging is bounded by two map payloads, and cancellation after compact carry allocation followed by replay must match a fresh run. Between streamed layers it narrows a128-row budget to127: the planned first-tail span must remain128, and the server's capacity check must refuse it;128 remains an admitted control. Stock/off is a byte control; an approximate prefix must differ from stock.
 
 ```sh
 c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include -Icommon -Itools/server -Ivendor tests/ridgefill/test_streaming.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama-server-impl -lllama-common -lllama -lggml -lggml-cpu -lggml-base -o build-cpu/test-streaming
 build-cpu/test-streaming /path/to/tiny-qwen35-f32.gguf /path/to/projector-s4-f32.gguf /path/to/tiny-match.json out/streaming-unit.json
-python3 tests/ridgefill/check_certificate.py --bin-dir build-cpu/bin --parent-bin /path/to/accepted-parent/bin --model /path/to/tiny-qwen35-f32.gguf --projector /path/to/projector-s4-f32.gguf --input /path/to/tiny-match.json --out out/streaming-http --stream-projector
 ```
 
-The optional `--stream-projector` runs the new scorer/server with streaming enabled against the resident parent. It compares full output bytes and reports, ignoring only the new storage flag; certificate runtime/buffer measurements remain visible. Without the option the existing default-off gate is unchanged.
 
 The streaming unit also covers h_S compaction with BF16/F32 storage and a second sequence occupying earlier KV cells. The latter checks masking of the other sequence's keys and requires its complete state to remain unchanged. Native comparisons include every prefill/final KV, convolution and recurrent-state byte and full-vocabulary logits.
 
@@ -247,7 +233,7 @@ The short tiny-model native/HTTP check verifies parameter inheritance and reques
 
 The replay-lookup regression compares the production finder with exhaustive cell scans after sharing, removal, division and shifts. It checks unordered/repeated queries, missing/negative positions, mixed owners and the highest-cell rule when cache positions repeat. It needs no model compute beyond the existing tiny fixture.
 
-Append `--separate` to `test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON` for the separate-KV regression. It runs resident and streamed S1/vtail sweeps with two and eight sequences, placing the injector in the first and last slot. It requires byte-identical prefill/final cache and recurrent state, five full-vocabulary logit rows, selection and calibration, and unchanged background state. K/V reuse defaults on; repeat with `LLAMA_RIDGEFILL_TRIM_KV=0` to cover the disabled native control. The old reservation exposes all streams to a one-sequence graph and aborts before this test can complete; the full one-hundred-check suite without this argument keeps the unified-cache controls.
+Append `--separate` to `test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON` for the separate-KV regression. It runs resident and streamed S1/vtail sweeps with two and eight sequences, placing the injector in the first and last slot. It requires byte-identical prefill/final cache and recurrent state, five full-vocabulary logit rows, selection and calibration, and unchanged background state. K/V reuse defaults on; repeat with `LLAMA_RIDGEFILL_TRIM_KV=0` to cover the disabled native control. The old reservation exposes all streams to a one-sequence graph and aborts before this test can complete; the full unified-cache suite without this argument keeps the unified-cache controls.
 
 ### Shared-KV S1 probe regression
 
@@ -261,3 +247,5 @@ build-cpu/test-s1-unified /path/to/tiny-qwen35-f32.gguf /path/to/projector-s4-f3
 Build against a GPU-enabled directory and append `--gpu` to exercise the failing backend placement and require real offload. Run that command only through the permitted GPU bridge. The same executable with the old libraries must pass the16-cell control and fail the large placement. Bulk K/V reuse defaults on; `LLAMA_RIDGEFILL_TRIM_KV=0` repeats the disabled native control. CPU checks cover both V-cache layouts when combined with the GPU/FA-on run; CPU alone does not reproduce the backend defect.
 
 `check_startup_options.py --bin-dir BUILD/bin --model TINY_MODEL --projector TINY_PROJECTOR --out out/startup-options` checks the default-on trim flag, help, strict values, actual startup resolution, and the deprecated environment override. It uses CPU only. The order checker explicitly selects both trim states.
+
+Append `--retired-certificate` to `check_startup_options.py` to check that server/scorer help and parsers no longer expose the removed prefill selector.

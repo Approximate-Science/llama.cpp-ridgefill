@@ -89,9 +89,6 @@ struct task_params {
     int32_t ridgefill_qattn_turn_cap = 256;
     int32_t ridgefill_s1_window = 0;
     double ridgefill_s1_factor = 1.0;
-    bool ridgefill_certificate = false;
-    double ridgefill_certificate_tau = 0.01;
-    double ridgefill_certificate_cap = 0.23;
     bool ridgefill_vtail = false;
     int32_t ridgefill_vtail_rows = 512;
 

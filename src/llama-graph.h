@@ -824,7 +824,6 @@ struct llm_graph_params_ridgefill {
     int32_t stream_layer = -1;
     ggml_tensor * stream_w = nullptr;
     ggml_tensor * stream_b = nullptr;
-    bool    certificate  = false; // S1_PROBE: capture calibration errors and queries
     bool    s1_probe     = false; // S1_PROBE: explicit-softmax attention over the prefix + window, mass output
     int32_t vtail_rows   = 0;     // > 0: the first tail ubatch of a LATE replay; scale the bulk prefix V (vtail)
     const std::vector<llama_pos> * rows_vtail = nullptr; // vtail: the sequence's exact rows (they keep their V)
@@ -833,7 +832,7 @@ struct llm_graph_params_ridgefill {
         return rf == o.rf && fill == o.fill && part == o.part && n_rows == o.n_rows && reuse_kv == o.reuse_kv && correct == o.correct &&
                alpha == o.alpha && p_end == o.p_end && rows_seq == o.rows_seq &&
                part_state == o.part_state && part_gen == o.part_gen && n_win == o.n_win &&
-               certificate == o.certificate && s1_attn_only == o.s1_attn_only && s1_probe == o.s1_probe && vtail_rows == o.vtail_rows &&
+               s1_attn_only == o.s1_attn_only && s1_probe == o.s1_probe && vtail_rows == o.vtail_rows &&
                rows_vtail == o.rows_vtail && stream_layer == o.stream_layer && stream_host_tail == o.stream_host_tail && stream_w == o.stream_w && stream_b == o.stream_b;
     }
 };
@@ -1021,13 +1020,6 @@ public:
 
     ggml_tensor * t_rf_mass     = nullptr; // RidgeFill S1_PROBE: F32 [n_kv] attention mass per KV cell
     ggml_tensor * t_rf_vtail    = nullptr; // RidgeFill vtail: F32 [n_head_kv, n_late_attn] the scales applied
-
-    struct ridgefill_calibration {
-        int32_t layer;
-        ggml_tensor * queries;
-        ggml_tensor * errors;
-    };
-    std::vector<ridgefill_calibration> t_rf_calibration;
 
     std::vector<ggml_tensor *> t_layer_inp;
 

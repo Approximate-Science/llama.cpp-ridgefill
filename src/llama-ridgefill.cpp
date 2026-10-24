@@ -951,10 +951,7 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
                 ggml_set_input(inp->s1_rows);
             }
             // the stock KQ mask's type and shape (build_attn_inp_kq_mask), one sequence / stream
-            if (p.certificate && !p.rf->streamed) {
-                inp->cert_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
-                ggml_set_input(inp->cert_rows);
-            }
+
             inp->s1_mask = ggml_new_tensor_4d(ctx0, cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32, n_kv, n_tokens, 1, 1);
             ggml_set_input(inp->s1_mask);
             inp->ones = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, 1, n_tokens);
@@ -1071,15 +1068,7 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
         std::vector<llama_pos> cell_pos;
         kv->get_cell_pos(seq, cell_pos);
         const llama_pos p_end = params.p_end[seq];
-        if (cert_rows) {
-            std::vector<int32_t> cells(ubatch->n_tokens);
-            for (uint32_t t = 0; t < ubatch->n_tokens; ++t) {
-                auto it = std::find(cell_pos.begin(), cell_pos.end(), ubatch->pos[t]);
-                GGML_ASSERT(it != cell_pos.end());
-                cells[t] = std::distance(cell_pos.begin(), it);
-            }
-            ggml_backend_tensor_set(cert_rows, cells.data(), 0, cells.size()*sizeof(int32_t));
-        }
+
         if (s1_mask) {
             // query i sees the sequence's cells at positions <= its own (causal, as the stock mask), except the tail
             // rows [p_end, s1_begin) the probe does not run: the prefix [0, p_end) as filled and the window rows
@@ -1887,34 +1876,7 @@ ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model &
     ggml_build_forward_expand(g.gf, mctx_cur->cpy_v(ctx0, Vcur, inp_attn->get_v_idxs(), il));
 
     ggml_tensor * k = mctx_cur->get_k(ctx0, il);
-    if (g.ridgefill_params.certificate) {
-        const auto * rf = g.ridgefill;
-        ggml_tensor * error = nullptr;
-        if (!rf->streamed) {
-            ggml_tensor * x = build_ridgefill_h_input(g, inp);
-            if (rf->w[il]) { x = ggml_add(ctx0, ggml_mul_mat(ctx0, rf->w[il], x), rf->b[il]); }
-            x = g.build_norm(x, layer.attn_norm, nullptr, LLM_NORM_RMS, il);
-            auto predicted = g.build_qkv(layer, x, n_embd_head*2, g.n_head, n_embd_head, g.n_head_kv,
-                    n_embd_head, g.n_head_kv, il, false);
-            ggml_tensor * kp = ggml_reshape_3d(ctx0, predicted.k, n_embd_head, g.n_head_kv, n_tokens);
-            kp = g.build_norm(kp, layer.attn_k_norm, nullptr, LLM_NORM_RMS, il);
-            kp = ggml_rope_multi(ctx0, kp, inp_pos, nullptr, g.n_rot, sections, g.rope_type, g.n_ctx_orig, g.freq_base,
-                    g.freq_scale, g.ext_factor, g.attn_factor, g.beta_fast, g.beta_slow);
-            if (inp_attn->self_k_rot) { kp = llama_mul_mat_hadamard(ctx0, kp, inp_attn->self_k_rot); }
-            auto stored = [&](ggml_tensor * t) { return ggml_cast(ctx0, ggml_cast(ctx0, t, k->type), GGML_TYPE_F32); };
-            // Read the written cache; an extra Kcur consumer would break the existing fused store.
-            ggml_tensor * exact = ggml_get_rows(ctx0, ggml_reshape_2d(ctx0, k, n_embd_head*g.n_head_kv, k->ne[2]), inp->cert_rows);
-            exact = ggml_reshape_3d(ctx0, exact, n_embd_head, g.n_head_kv, n_tokens);
-            error = ggml_sub(ctx0, stored(kp), exact);
-            error = ggml_sqrt(ctx0, ggml_sum_rows(ctx0, ggml_sqr(ctx0, error)));
-        }
-        ggml_tensor * queries = ggml_cont(ctx0, Qcur);
-        ggml_set_output(queries);
-        if (error) { ggml_set_output(error); }
-        ggml_build_forward_expand(g.gf, queries);
-        if (error) { ggml_build_forward_expand(g.gf, error); }
-        g.res->t_rf_calibration.push_back({il, queries, error});
-    }
+
 
     ggml_tensor * v = mctx_cur->get_v(ctx0, il);
     GGML_ASSERT(k->ne[3] == 1 && "RidgeFill S1 probe: one KV stream");

@@ -19,6 +19,19 @@ def run(args):
     (args.out / 'help.txt').write_text(help_text)
     assert '--ridgefill-trim-kv' in help_text and 'reuse S1 bulk K/V in the late sweep (default: on)' in help_text
     checks = ['help']
+    if args.retired_certificate:
+        assert '--ridgefill-certificate' not in help_text
+        for name in ('llama-server', 'llama-ridgefill-score'):
+            exe = args.bin_dir / name
+            help_run = subprocess.run([str(exe), '--help'], capture_output=True, text=True, env=env, check=True)
+            assert '--ridgefill-certificate' not in help_run.stdout + help_run.stderr
+            for flag in ('--ridgefill-certificate', '--ridgefill-certificate-tau', '--ridgefill-certificate-cap'):
+                invalid = subprocess.run([str(exe), flag, 'on' if flag.endswith('certificate') else '0.1'], capture_output=True, text=True, env=env)
+                text = invalid.stdout + invalid.stderr
+                assert invalid.returncode > 0 and flag in text and 'GGML_ASSERT' not in text
+                checks.append(name + ':' + flag)
+        (args.out / 'result.json').write_text(json.dumps(dict(result='PASS', checks=checks), indent=2) + '\n')
+        return
     bad = subprocess.run([str(binary), '--ridgefill-trim-kv', 'invalid'], capture_output=True, text=True, env=env)
     assert bad.returncode > 0 and '--ridgefill-trim-kv must be on or off' in bad.stderr and 'GGML_ASSERT' not in bad.stderr
     checks.append('invalid-value')
@@ -64,4 +77,5 @@ if __name__ == '__main__':
     parser.add_argument('--model', required=True, type=Path)
     parser.add_argument('--projector', required=True, type=Path)
     parser.add_argument('--out', required=True, type=Path)
+    parser.add_argument('--retired-certificate', action='store_true')
     run(parser.parse_args())
