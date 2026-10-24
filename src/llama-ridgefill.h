@@ -134,6 +134,8 @@ public:
     ggml_tensor * h_rows   = nullptr; // I32 [n_tokens]: the h_buf row (position) of every ubatch row
     ggml_tensor * carry_rows = nullptr; // I32: compact exact prefix or first-tail residual rows
     ggml_tensor * attention_mask = nullptr;
+    ggml_tensor * mask_rows = nullptr;
+    llama_pos mask_past = -1;
     ggml_tensor * win_sel  = nullptr; // I32 [n_win]: LOWER, the ubatch rows inside the capture window
     ggml_tensor * win_rows = nullptr; // I32 [n_win]: their rows in the window buffers
 
@@ -252,6 +254,7 @@ public:
 
 // the ubatch row indices of the exact rows (positions in rows_seq[seq], sorted), ascending; returns their count
 int32_t llama_ridgefill_ubatch_rows(const llama_ubatch & ubatch, const std::vector<llama_pos> * rows_seq, std::vector<int32_t> * idx);
+bool llama_ridgefill_ubatch_dense(const llama_ubatch & ubatch);
 
 struct llm_build_delta_net_base;
 

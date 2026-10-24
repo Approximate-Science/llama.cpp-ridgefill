@@ -926,9 +926,40 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
             (!p.fill || p.n_rows > 0)) {
         inp->kv = static_cast<const llama_memory_hybrid_context *>(mctx)->get_attn();
         inp->seq = ubatch.seq_id[0][0];
-        inp->attention_mask = ggml_new_tensor_4d(ctx0, cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32,
-                inp->kv->get_n_kv(), p.fill ? p.n_rows : n_tokens, 1, 1);
-        ggml_set_input(inp->attention_mask);
+        const char * device_mask = std::getenv("LLAMA_RIDGEFILL_DEVICE_MASK");
+        if ((!device_mask || std::strcmp(device_mask, "1") == 0) && cparams.causal_attn &&
+                !hparams.use_alibi && !hparams.n_swa && inp->kv->ridgefill_dense_causal(ubatch)) {
+            inp->mask_past = ubatch.pos[0];
+            const int64_t keys = inp->kv->get_n_kv();
+            const int64_t queries = p.fill ? p.n_rows : n_tokens;
+            const auto type = cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32;
+            auto * out = ggml_fill_inplace(ctx0, ggml_new_tensor_2d(ctx0, type, keys, queries), -INFINITY);
+            if (inp->mask_past > 0) {
+                auto * zero = ggml_fill_inplace(ctx0, ggml_new_tensor_1d(ctx0, type, inp->mask_past), 0.0f);
+                auto * source = ggml_repeat(ctx0, zero, ggml_new_tensor_2d(ctx0, type, inp->mask_past, queries));
+                auto * target = ggml_view_2d(ctx0, out, inp->mask_past, queries, out->nb[1], 0);
+                ggml_build_forward_expand(gf, ggml_cpy(ctx0, source, target));
+            }
+            const int64_t band = std::min(n_tokens, keys - inp->mask_past);
+            auto * shape = ggml_new_tensor_2d(ctx0, GGML_TYPE_F32, band, n_tokens);
+            auto * mask = ggml_diag_mask_inf_inplace(ctx0, ggml_fill_inplace(ctx0, shape, 0.0f), 0);
+            if (p.fill) {
+                inp->mask_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, p.n_rows);
+                ggml_set_input(inp->mask_rows);
+                mask = ggml_get_rows(ctx0, mask, inp->mask_rows);
+            }
+            if (mask->type != type) { mask = ggml_cast(ctx0, mask, type); }
+            auto * target = ggml_view_2d(ctx0, out, band, queries, out->nb[1], size_t(inp->mask_past)*ggml_type_size(type));
+            ggml_build_forward_expand(gf, ggml_cpy(ctx0, mask, target));
+            inp->attention_mask = out;
+            if (p.rf->profiling) {
+                LLAMA_LOG_INFO("RF_MASK source=device layer=%d pos=%d bytes=%zu\n", p.stream_layer, inp->mask_past, ggml_nbytes(inp->attention_mask));
+            }
+        } else {
+            inp->attention_mask = ggml_new_tensor_4d(ctx0, cparams.flash_attn ? GGML_TYPE_F16 : GGML_TYPE_F32,
+                    inp->kv->get_n_kv(), p.fill ? p.n_rows : n_tokens, 1, 1);
+            ggml_set_input(inp->attention_mask);
+        }
         ggml_set_name(inp->attention_mask, "ridgefill_attention_mask");
     }
 
@@ -998,11 +1029,16 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
         ggml_backend_tensor_set(h_rows, compact_rows.data(), 0, compact_rows.size()*sizeof(int32_t));
     } else { ggml_backend_tensor_set(h_rows, rows.data(), 0, rows.size()*sizeof(int32_t)); }
     if (carry_rows) {
+        const int64_t begin = params.rf->profiling ? ggml_time_us() : 0;
         const auto & exact = *ps->stream_rows;
         const llama_pos prefix = params.p_end[ubatch->seq_id[0][0]];
         std::vector<int32_t> indices;
+        indices.reserve(carry_rows->ne[0]);
+        const bool merge = llama_ridgefill_ubatch_dense(*ubatch);
+        auto cursor = merge ? std::lower_bound(exact.begin(), exact.end(), rows[0]) : exact.end();
         for (const auto pos : rows) {
-            const auto it = std::lower_bound(exact.begin(), exact.end(), pos);
+            if (merge) { while (cursor != exact.end() && *cursor < pos) { ++cursor; } }
+            const auto it = merge ? cursor : std::lower_bound(exact.begin(), exact.end(), pos);
             if (pos < prefix && (it == exact.end() || *it != pos)) { continue; }
             const int64_t index = pos < prefix ? it - exact.begin() : int64_t(exact.size()) + pos - prefix;
             GGML_ASSERT(index >= 0 && index < ps->stream_carry->ne[1]);
@@ -1010,8 +1046,19 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
         }
         GGML_ASSERT(indices.size() == size_t(carry_rows->ne[0]));
         ggml_backend_tensor_set(carry_rows, indices.data(), 0, indices.size()*sizeof(int32_t));
+        if (begin) { llama_ridgefill_profile(params.rf, "carry_rows", params.stream_layer, rows[0], begin, ggml_time_us()); }
     }
-    if (attention_mask && attention_mask->buffer) {
+    if (mask_past >= 0) {
+        if (mask_rows) {
+            std::vector<int32_t> selected;
+            llama_ridgefill_ubatch_rows(*ubatch, params.rows_seq, &selected);
+            GGML_ASSERT(selected.size() == size_t(mask_rows->ne[0]));
+            ggml_backend_tensor_set(mask_rows, selected.data(), 0, selected.size()*sizeof(int32_t));
+        }
+    } else if (attention_mask && attention_mask->buffer) {
+        if (params.rf->profiling) {
+            LLAMA_LOG_INFO("RF_MASK source=host layer=%d pos=%d bytes=%zu\n", params.stream_layer, rows[0], ggml_nbytes(attention_mask));
+        }
         std::vector<int32_t> selected;
         if (params.fill) { llama_ridgefill_ubatch_rows(*ubatch, params.rows_seq, &selected); }
         else { for (uint32_t i = 0; i < ubatch->n_tokens; ++i) { selected.push_back(i); } }
@@ -1133,6 +1180,7 @@ bool llm_graph_input_ridgefill_part::can_reuse(const llm_graph_params & p) {
     if (attention_mask) {
         kv = static_cast<const llama_memory_hybrid_context *>(p.mctx)->get_attn();
         if (attention_mask->ne[0] != kv->get_n_kv()) { return false; }
+        if (mask_past >= 0 && (p.ubatch.pos[0] != mask_past || !kv->ridgefill_dense_causal(p.ubatch))) { return false; }
     }
     return p.ridgefill == params && h_rows->ne[0] == (int64_t) p.ubatch.n_tokens;
 }
@@ -1165,15 +1213,44 @@ ggml_tensor * build_ridgefill_h_input(llm_graph_context & g, const llm_graph_inp
     return cur;
 }
 
+bool llama_ridgefill_ubatch_dense(const llama_ubatch & ubatch) {
+    const char * merge = std::getenv("LLAMA_RIDGEFILL_ROW_MERGE");
+    if ((merge && std::strcmp(merge, "1") != 0) || !ubatch.n_tokens || ubatch.n_seqs_unq != 1 || ubatch.n_seq_id[0] != 1) { return false; }
+    const auto seq = ubatch.seq_id[0][0];
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq || int64_t(ubatch.pos[i]) != int64_t(ubatch.pos[0]) + i) { return false; }
+    }
+    return true;
+}
+
 int32_t llama_ridgefill_ubatch_rows(const llama_ubatch & ubatch, const std::vector<llama_pos> * rows_seq, std::vector<int32_t> * idx) {
+    const int64_t begin = std::getenv("LLAMA_RIDGEFILL_PROFILE") ? ggml_time_us() : 0;
+    auto finish = [&](int32_t count) {
+        if (begin) {
+            LLAMA_LOG_INFO("RF_PROFILE phase=row_lookup layer=-2 pos=%d begin_us=%" PRId64 " end_us=%" PRId64 "\n", ubatch.n_tokens ? ubatch.pos[0] : -1, begin, ggml_time_us());
+        }
+        return count;
+    };
     if (idx) {
         idx->clear();
     }
     if (!rows_seq) {
-        return 0;
+        return finish(0);
     }
 
     int32_t n = 0;
+    if (llama_ridgefill_ubatch_dense(ubatch)) {
+        const auto & rows = rows_seq[ubatch.seq_id[0][0]];
+        auto it = std::lower_bound(rows.begin(), rows.end(), ubatch.pos[0]);
+        for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+            while (it != rows.end() && *it < ubatch.pos[i]) { ++it; }
+            if (it != rows.end() && *it == ubatch.pos[i]) {
+                if (idx) { idx->push_back(i); }
+                ++n;
+            }
+        }
+        return finish(n);
+    }
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
         const auto & rows = rows_seq[ubatch.seq_id[i][0]];
         if (!rows.empty() && std::binary_search(rows.begin(), rows.end(), ubatch.pos[i])) {
@@ -1184,7 +1261,7 @@ int32_t llama_ridgefill_ubatch_rows(const llama_ubatch & ubatch, const std::vect
         }
     }
 
-    return n;
+    return finish(n);
 }
 
 llm_graph_input_ridgefill * llm_graph_context::build_inp_ridgefill(llm_graph_input_attn_kv * inp_attn) const {

@@ -6,6 +6,7 @@
 #include "../../src/llama-ridgefill-sweep.h"
 
 #include <cstddef>
+#include <future>
 #include <memory>
 #include <string>
 #include <vector>
@@ -106,6 +107,8 @@ private:
     bool active = false;
     bool vtail_enabled = false;
     std::unique_ptr<llama_ridgefill_sweep_buffer> hidden;
+    // Destroy the future before its source buffer.
+    std::future<std::unique_ptr<llama_ridgefill_sweep_buffer>> hidden_readback;
     std::unique_ptr<llama_ridgefill_sweep_buffer> stream_carry;
     std::unique_ptr<llama_ridgefill_sweep_buffer> compact_hidden, tail_hidden;
     std::vector<int32_t> hidden_indices;
@@ -132,6 +135,7 @@ private:
     void sweep_tail(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, const server_ridgefill_sweep_params & params);
     bool advance_stream(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params, bool attn_only);
     void compact_hidden_rows(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params);
+    void prefetch_hidden(llama_context * ctx, const server_ridgefill_sweep_params & params);
     void decode(llama_context * ctx, llama_seq_id seq, const llama_token * tokens, int32_t count, bool output_all, bool output_last,
             int32_t logits_begin = -1, int32_t logits_end = -1);
 

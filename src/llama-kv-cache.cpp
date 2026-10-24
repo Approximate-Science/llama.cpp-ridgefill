@@ -4,10 +4,13 @@
 #include "llama-io.h"
 #include "llama-model.h"
 #include "llama-context.h"
+#include "llama-ridgefill.h"
 
 #include <algorithm>
 #include <cassert>
+#include <cinttypes>
 #include <cmath>
+#include <cstdlib>
 #include <cstring>
 #include <limits>
 #include <map>
@@ -1128,6 +1131,18 @@ void llama_kv_cache::get_cell_pos(const slot_info & sinfo, llama_seq_id seq_id, 
 }
 
 llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & ubatch) const {
+    const bool profile = std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr;
+    const int64_t started = profile ? ggml_time_us() : 0;
+    struct profile_scope {
+        bool enabled;
+        llama_pos pos;
+        int64_t begin;
+        ~profile_scope() {
+            if (enabled) {
+                LLAMA_LOG_INFO("RF_PROFILE phase=replay_lookup layer=-2 pos=%d begin_us=%" PRId64 " end_us=%" PRId64 "\n", pos, begin, ggml_time_us());
+            }
+        }
+    } trace{profile, ubatch.n_tokens ? ubatch.pos[0] : -1, started};
     slot_info res = {
         /*.s0   =*/ 0,
         /*.s1   =*/ 0,
@@ -1143,11 +1158,16 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & 
     const uint32_t     strm   = seq_to_stream[seq_id];
     const auto &       cells  = v_cells[strm];
 
-    // position -> cell of this sequence
+    const char * index_env = std::getenv("LLAMA_RIDGEFILL_REPLAY_INDEX");
+    const bool use_index = !index_env || std::strcmp(index_env, "1") == 0;
+    const uint32_t missing = UINT32_MAX;
+    const auto & index = cells.seq_pos_get(seq_id);
     std::unordered_map<llama_pos, uint32_t> cell_of;
-    for (uint32_t i = 0; i < cells.size(); ++i) {
-        if (!cells.is_empty(i) && cells.seq_has(i, seq_id)) {
-            cell_of[cells.pos_get(i)] = i;
+    if (!use_index) {
+        for (uint32_t i = 0; i < cells.size(); ++i) {
+            if (!cells.is_empty(i) && cells.seq_has(i, seq_id)) {
+                cell_of[cells.pos_get(i)] = i;
+            }
         }
     }
 
@@ -1157,14 +1177,24 @@ llama_kv_cache::slot_info llama_kv_cache::find_slot_replay(const llama_ubatch & 
     res.strm[0] = strm;
     res.idxs[0].reserve(ubatch.n_tokens);
 
+    const bool merge = use_index && llama_ridgefill_ubatch_dense(ubatch);
+    auto cursor = merge ? index.lower_bound({ubatch.pos[0], 0}) : index.end();
     for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
-        const auto it = cell_of.find(ubatch.pos[i]);
-        if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq_id || it == cell_of.end() ||
-            cells.seq_count(it->second) != 1) {
+        uint32_t cell = missing;
+        if (merge) {
+            while (cursor != index.end() && cursor->first == ubatch.pos[i]) { cell = cursor->second; ++cursor; }
+        } else if (use_index) {
+            auto it = index.upper_bound({ubatch.pos[i], missing});
+            if (it != index.begin() && (--it)->first == ubatch.pos[i]) { cell = it->second; }
+        } else {
+            const auto it = cell_of.find(ubatch.pos[i]);
+            if (it != cell_of.end()) { cell = it->second; }
+        }
+        if (ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq_id || cell == missing || cells.seq_count(cell) != 1) {
             res.clear();
             return res;
         }
-        res.idxs[0].push_back(it->second);
+        res.idxs[0].push_back(cell);
     }
 
     return res;
@@ -2958,6 +2988,26 @@ const llama_ubatch & llama_kv_cache_context::get_ubatch() const {
 
 void llama_kv_cache_context::get_cell_pos(llama_seq_id seq_id, std::vector<llama_pos> & out) const {
     kv->get_cell_pos(sinfos[i_cur], seq_id, n_kv, out);
+}
+
+bool llama_kv_cache_context::ridgefill_dense_causal(const llama_ubatch & ubatch) const {
+    if (!ubatch.n_tokens || ubatch.n_seqs_unq != 1 || sinfos[i_cur].n_stream() != 1) { return false; }
+    const auto seq = ubatch.seq_id_unq[0];
+    const auto & cells = kv->get_cells(seq);
+    const int64_t first = ubatch.pos[0];
+    const int64_t last = first + ubatch.n_tokens - 1;
+    if (first < 0 || last >= n_kv || last >= int64_t(cells.size())) { return false; }
+    for (uint32_t i = 0; i < uint32_t(n_kv); ++i) {
+        if (i >= cells.size() || cells.is_empty(i) || !cells.seq_has(i, seq)) {
+            if (i <= uint64_t(last)) { return false; }
+        } else if (cells.pos_get(i) != int64_t(i)) { return false; }
+    }
+    for (uint32_t i = 0; i < ubatch.n_tokens; ++i) {
+        if (ubatch.pos[i] != first + i || ubatch.n_seq_id[i] != 1 || ubatch.seq_id[i][0] != seq) { return false; }
+        if (ubatch.is_pos_2d() && cells.ext_get(ubatch.pos[i]).is_2d_gt(
+                ubatch.pos[i + 2*ubatch.n_tokens], ubatch.pos[i + ubatch.n_tokens])) { return false; }
+    }
+    return true;
 }
 
 uint32_t llama_kv_cache_context::get_n_kv() const {

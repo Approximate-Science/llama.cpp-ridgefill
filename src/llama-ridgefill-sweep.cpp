@@ -12,7 +12,10 @@
 #include "ggml-backend.h"
 
 #include <algorithm>
+#include <cinttypes>
 #include <cmath>
+#include <cstdlib>
+#include <cstring>
 #include <limits>
 #include <numeric>
 #include <stdexcept>
@@ -51,72 +54,90 @@ std::vector<double> llama_ridgefill_sweep_question_mass(
             cpu = backend;
         }
     }
-    // the window's Q per layer, then per KV head its key gather and score blocks
-    int64_t hb = 1, qb = 1;
-    llama_ridgefill_attn_mass_split(n_tokens, count, model.hparams.n_head(layers[0]) / model.hparams.n_head_kv(layers[0]),
-            LLAMA_RIDGEFILL_QMASS_BLOCK, hb, qb);
-    const int64_t blocks = (model.hparams.n_head(layers[0]) / model.hparams.n_head_kv(layers[0]) / hb) * ((int64_t(count) + qb - 1) / qb);
-    const size_t graph_size = layers.size() * size_t(512 + model.hparams.n_head_kv(layers[0]) * (16 + 12 * blocks));
-    llm_graph_result result(graph_size);
-    llama_adapter_loras loras;
-    llm_graph_params params = {};
-    params.arch = model.arch;
-    params.hparams = model.hparams;
-    params.cparams = ctx.get_cparams();
-    params.ubatch.n_tokens = params.ubatch.n_seq_tokens = count;
-    params.ubatch.n_seqs = params.ubatch.n_seqs_unq = 1;
-    params.loras = &loras;
-    params.backend_cpu = cpu;
-    params.res = &result;
-    llm_graph_context g(params);
-    auto * row_input = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, n_tokens);
-    auto * positions = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, count * model.hparams.n_pos_per_embd());
-    ggml_set_input(row_input);
-    ggml_set_input(positions);
-    auto * rotation = cache.build_input_k_rot(g.ctx0);
-    std::vector<ggml_tensor *> outputs;
-    for (size_t i = 0; i < layers.size(); ++i) {
-        const int32_t il = layers[i];
-        auto * input = windows[i];
-        // the keys of one KV head at a time (F32, prompt order): the gather is never all heads x all prompt rows
-        auto * mass = build_ridgefill_question_mass_by_head(g, model.layers[il], input, positions, cache, seq_id, row_input,
-                window_end, il, rotation);
-        ggml_set_output(mass);
-        ggml_build_forward_expand(g.gf, mass);
-        outputs.push_back(mass);
-    }
-    ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(), nullptr, backends.size(), graph_size, false, true));
-    if (!sched || !ggml_backend_sched_alloc_graph(sched.get(), g.gf)) {
-        throw std::runtime_error("RidgeFill quality+qattn: question graph allocation failed");
-    }
-    for (auto * backend : backends) {
-        const size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
-        if (size > 0) {
-            LLAMA_LOG_INFO("%s: RidgeFill question-mass graph: %s compute buffer %.4f MiB (%d keys)\n", __func__,
-                    ggml_backend_name(backend), size / (1024.0*1024.0), n_tokens);
-        }
-    }
-    ggml_backend_tensor_set(row_input, rows.data(), 0, rows.size() * sizeof(int32_t));
-    std::vector<int32_t> pos(ggml_nelements(positions));
-    for (size_t i = 0; i < pos.size(); ++i) {
-        pos[i] = window_end - count + i % count;
-    }
-    ggml_backend_tensor_set(positions, pos.data(), 0, pos.size() * sizeof(int32_t));
-    if (rotation) {
-        cache.set_input_k_rot(rotation);
-    }
-    if (ggml_backend_sched_graph_compute(sched.get(), g.gf) != GGML_STATUS_SUCCESS) {
-        throw std::runtime_error("RidgeFill quality+qattn: question graph execution failed");
-    }
     std::vector<double> mass(n_tokens, 0.0);
-    for (auto * output : outputs) {
-        std::vector<float> groups(ggml_nelements(output));
-        ggml_backend_tensor_get(output, groups.data(), 0, groups.size() * sizeof(float));
-        for (size_t i = 0; i < groups.size(); ++i) {
-            if (!std::isfinite(groups[i])) {
-                throw std::runtime_error("RidgeFill quality+qattn: question mass is non-finite");
+    const char * layerwise_env = std::getenv("LLAMA_RIDGEFILL_QMASS_LAYERWISE");
+    const size_t step = !layerwise_env || std::strcmp(layerwise_env, "1") == 0 ? 1 : layers.size();
+    for (size_t first = 0; first < layers.size(); first += step) {
+        const size_t last = std::min(first + step, layers.size());
+        // the window's Q per layer, then per KV head its key gather and score blocks
+        int64_t hb = 1, qb = 1;
+        llama_ridgefill_attn_mass_split(n_tokens, count, model.hparams.n_head(layers[0]) / model.hparams.n_head_kv(layers[0]),
+                LLAMA_RIDGEFILL_QMASS_BLOCK, hb, qb);
+        const int64_t blocks = (model.hparams.n_head(layers[0]) / model.hparams.n_head_kv(layers[0]) / hb) * ((int64_t(count) + qb - 1) / qb);
+        const size_t graph_size = (last - first) * size_t(512 + model.hparams.n_head_kv(layers[0]) * (16 + 12 * blocks));
+        llm_graph_result result(graph_size);
+        llama_adapter_loras loras;
+        llm_graph_params params = {};
+        params.arch = model.arch;
+        params.hparams = model.hparams;
+        params.cparams = ctx.get_cparams();
+        params.ubatch.n_tokens = params.ubatch.n_seq_tokens = count;
+        params.ubatch.n_seqs = params.ubatch.n_seqs_unq = 1;
+        params.loras = &loras;
+        params.backend_cpu = cpu;
+        params.res = &result;
+        llm_graph_context g(params);
+        auto * row_input = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, n_tokens);
+        auto * positions = ggml_new_tensor_1d(g.ctx0, GGML_TYPE_I32, count * model.hparams.n_pos_per_embd());
+        ggml_set_input(row_input);
+        ggml_set_input(positions);
+        auto * rotation = cache.build_input_k_rot(g.ctx0);
+        std::vector<ggml_tensor *> outputs;
+        std::vector<std::unique_ptr<llama_ridgefill_sweep_buffer>> staged_windows;
+        for (size_t i = first; i < last; ++i) {
+            const int32_t il = layers[i];
+            auto * input = windows[i];
+            const auto buft = model.select_buft(il);
+            if (ggml_backend_buffer_is_host(input->buffer) && !ggml_backend_buft_is_host(buft)) {
+                const bool profile = std::getenv("LLAMA_RIDGEFILL_PROFILE") != nullptr;
+                const int64_t begin = profile ? ggml_time_us() : 0;
+                auto stage = std::make_unique<llama_ridgefill_sweep_buffer>(buft, width, count, GGML_TYPE_F32);
+                ggml_backend_tensor_set(stage->tensor(), input->data, 0, ggml_nbytes(input));
+                input = stage->tensor();
+                staged_windows.push_back(std::move(stage));
+                if (profile) {
+                    LLAMA_LOG_INFO("RF_PROFILE phase=window_upload layer=%d pos=0 begin_us=%" PRId64 " end_us=%" PRId64 "\n", il, begin, ggml_time_us());
+                }
             }
-            mass[i % n_tokens] += groups[i];
+            // the keys of one KV head at a time (F32, prompt order): the gather is never all heads x all prompt rows
+            auto * mass = build_ridgefill_question_mass_by_head(g, model.layers[il], input, positions, cache, seq_id, row_input,
+                    window_end, il, rotation);
+            ggml_set_output(mass);
+            ggml_build_forward_expand(g.gf, mass);
+            outputs.push_back(mass);
+        }
+        ggml_backend_sched_ptr sched(ggml_backend_sched_new(backends.data(), nullptr, backends.size(), graph_size, false, true));
+        if (!sched || !ggml_backend_sched_alloc_graph(sched.get(), g.gf)) {
+            throw std::runtime_error("RidgeFill quality+qattn: question graph allocation failed");
+        }
+        for (auto * backend : backends) {
+            const size_t size = ggml_backend_sched_get_buffer_size(sched.get(), backend);
+            if (size > 0) {
+                LLAMA_LOG_INFO("%s: RidgeFill question-mass graph: %s compute buffer %.4f MiB (%d keys)\n", __func__,
+                        ggml_backend_name(backend), size / (1024.0*1024.0), n_tokens);
+            }
+        }
+        ggml_backend_tensor_set(row_input, rows.data(), 0, rows.size() * sizeof(int32_t));
+        std::vector<int32_t> pos(ggml_nelements(positions));
+        for (size_t i = 0; i < pos.size(); ++i) {
+            pos[i] = window_end - count + i % count;
+        }
+        ggml_backend_tensor_set(positions, pos.data(), 0, pos.size() * sizeof(int32_t));
+        if (rotation) {
+            cache.set_input_k_rot(rotation);
+        }
+        if (ggml_backend_sched_graph_compute(sched.get(), g.gf) != GGML_STATUS_SUCCESS) {
+            throw std::runtime_error("RidgeFill quality+qattn: question graph execution failed");
+        }
+        for (auto * output : outputs) {
+            std::vector<float> groups(ggml_nelements(output));
+            ggml_backend_tensor_get(output, groups.data(), 0, groups.size() * sizeof(float));
+            for (size_t i = 0; i < groups.size(); ++i) {
+                if (!std::isfinite(groups[i])) {
+                    throw std::runtime_error("RidgeFill quality+qattn: question mass is non-finite");
+                }
+                mass[i % n_tokens] += groups[i];
+            }
         }
     }
     return mass;

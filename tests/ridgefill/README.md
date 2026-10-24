@@ -202,13 +202,22 @@ S1/vtail tests: compile `test_s1_reporting.cpp` against common/engine libraries 
 
 ## Projector streaming controls
 
-`test_streaming.cpp` compares resident and streamed maps on the tiny CPU model. It requires complete serialized prefill/final KV, convolution and recurrent-state bytes and five full-vocabulary logit vectors to match. It covers qattn, S1, vtail and a multi-ubatch probe; S1 mass/rows and vtail scales also match exactly. Nonzero alpha refuses, staging is bounded by two map payloads, and cancellation after compact carry allocation followed by replay must match a fresh run. Between streamed layers it narrows a128-row budget to127: the planned first-tail span must remain128, and the server's capacity check must refuse it;128 remains an admitted control. Stock/off is a byte control; an approximate prefix must differ from stock.
+`test_streaming.cpp` compares resident and streamed maps on the tiny CPU model. It requires complete serialized prefill/final KV, convolution and recurrent-state bytes and five full-vocabulary logit vectors to match. It covers qattn, S1, vtail and a multi-ubatch probe; S1 mass/rows and vtail scales also match exactly. Nonzero alpha refuses, staging is bounded by two map payloads, and cancellation after compact carry allocation or the first S1 fill chunk followed by replay must match a fresh run. Between streamed layers it narrows a128-row budget to127: the planned first-tail span must remain128, and the server's capacity check must refuse it;128 remains an admitted control. Stock/off is a byte control; an approximate prefix must differ from stock.
 
 ```sh
-c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include -Icommon -Itools/server -Ivendor tests/ridgefill/test_streaming.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama-server-impl -lllama-common -lllama -lggml -lggml-cpu -lggml-base -o build-cpu/test-streaming
+c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include -Icommon -Itools/server -Ivendor tests/ridgefill/test_streaming.cpp build-cpu/vendor/hash/libvendor-hash.a -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama-server-impl -lllama-common -lllama -lggml -lggml-cpu -lggml-base -o build-cpu/test-streaming
 build-cpu/test-streaming /path/to/tiny-qwen35-f32.gguf /path/to/projector-s4-f32.gguf /path/to/tiny-match.json out/streaming-unit.json
 ```
 
+
+`--gpu` loads backend modules, requires real offload, enables flash attention and runs the same state/logit checks. `--gpu-pair` runs one full-model resident/streamed pair and emits SHA256 hashes of prefill/final state, logits, raw lower/S1 question mass, selected rows and vtail scales. Run it with `LLAMA_RIDGEFILL_QMASS_LAYERWISE=0` and `=1` and require every hash to match; a four-layer lower capture checks that layer splitting preserves FP64 accumulation. Repeat GPU mask controls with `LLAMA_RIDGEFILL_DEVICE_MASK=0` and `=1`; profiling must show generated masks only in the enabled arm. Odd prefix lengths cover half-precision mask copy offsets. Repeat the native and full-model pair checks with each combination of `LLAMA_RIDGEFILL_PREFETCH_HIDDEN=0|1` and `LLAMA_RIDGEFILL_HOST_WINDOWS=0|1`; all hashes must match. Profiling requires worker reads and window uploads only in their enabled arms. Cancellation after the first S1 fill chunk joins any pending read before freeing its source. The replay fixture compares the maintained position index against exhaustive cell lookup, including holes, shared cells, missing/sparse/duplicate/shifted positions and invalid owners.
+
+`test_replay_index.cpp` counts allocations only during a512-query replay in16K/32K occupied caches. It requires at most32 allocations and exact cell indices. The original hash path (`LLAMA_RIDGEFILL_REPLAY_INDEX=0`) fails this bound; the maintained index passes. It also checks membership with dense, negative, sparse, repeated and mixed-owner queries, duplicate selected/cache positions, cache holes and ownerless rows. Run with `LLAMA_RIDGEFILL_ROW_MERGE=0` for the lookup reference. This checks allocation scaling and membership without a timing threshold.
+
+```sh
+c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include tests/ridgefill/test_replay_index.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama -lggml -lggml-cpu -lggml-base -o build-cpu/test-replay-index
+build-cpu/test-replay-index /path/to/tiny-qwen35-f32.gguf
+```
 
 The streaming unit also covers h_S compaction with BF16/F32 storage and a second sequence occupying earlier KV cells. The latter checks masking of the other sequence's keys and requires its complete state to remain unchanged. Native comparisons include every prefill/final KV, convolution and recurrent-state byte and full-vocabulary logits.
 

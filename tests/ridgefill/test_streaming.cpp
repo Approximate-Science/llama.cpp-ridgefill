@@ -5,6 +5,7 @@
 #include "llama-model.h"
 #include "server-ridgefill-sweep.h"
 #include "ggml-cpu.h"
+#include "hash/hash.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -18,6 +19,8 @@
 
 using json = nlohmann::json;
 
+static bool gpu_fixture = false;
+
 static void require(bool ok, const char * message) {
     if (!ok) { throw std::runtime_error(message); }
 }
@@ -29,9 +32,10 @@ static bool same_logits(const std::vector<float> & a, const std::vector<float> &
 struct snapshot {
     std::vector<uint8_t> prefill, final;
     std::vector<float> logits, scales;
-    std::vector<double> mass;
+    std::vector<double> mass, question_mass;
     std::vector<llama_pos> rows;
     size_t map_bytes = 0;
+    int question_layers = 0;
 };
 
 static std::vector<uint8_t> state(llama_context * ctx, llama_seq_id seq = 0) {
@@ -76,6 +80,14 @@ static int check_replay_lookup(const llama_model & model) {
     require(!slot.empty(), "cannot seed replay lookup fixture");
     cache.apply_ubatch(slot, batch);
     compare();
+    llama_kv_cache_context view(&cache, true);
+    require(view.ridgefill_dense_causal(batch), "dense causal layout was refused");
+    ++checks;
+    batch.n_tokens = batch.n_seq_tokens = 2;
+    positions[0] = 0; positions[1] = 31;
+    compare();
+    require(!view.ridgefill_dense_causal(batch), "nonconsecutive queries accepted a diagonal mask");
+    ++checks;
     batch.n_tokens = batch.n_seq_tokens = 5;
     const auto queries = {0, 8, 4, 8, 31};
     std::copy(queries.begin(), queries.end(), positions.begin());
@@ -86,6 +98,12 @@ static int check_replay_lookup(const llama_model & model) {
     cache.seq_cp(0, 1, 8, 9); compare();
     cache.seq_rm(1, -1, -1);
     cache.seq_rm(0, 3, 5); compare();
+    auto hole = batch;
+    std::vector<llama_pos> consecutive{0, 1, 2, 3};
+    hole.n_tokens = hole.n_seq_tokens = consecutive.size();
+    hole.pos = consecutive.data();
+    require(!view.ridgefill_dense_causal(hole), "a cache hole accepted a diagonal mask");
+    ++checks;
     cache.seq_div(0, 0, 32, 2);
     const auto repeated = {0, 4, 2, 4, 15};
     std::copy(repeated.begin(), repeated.end(), positions.begin());
@@ -99,7 +117,7 @@ static int check_replay_lookup(const llama_model & model) {
 }
 
 static snapshot run(llama_model * model, const char * projector, const std::vector<llama_token> & ids,
-        bool streamed, bool stock, int window, bool vtail, bool cancel_first = false, ggml_type hidden_type = GGML_TYPE_F16, bool other_sequence = false,
+        bool streamed, bool stock, int window, bool vtail, int cancel_first = 0, ggml_type hidden_type = GGML_TYPE_F16, bool other_sequence = false,
         bool unified = true, uint32_t parallel = 2, llama_seq_id injector = 0) {
     std::unique_ptr<llama_ridgefill, decltype(&llama_ridgefill_free)> rf(streamed ?
             llama_ridgefill_init_streamed(model, projector) : llama_ridgefill_init(model, projector), llama_ridgefill_free);
@@ -110,7 +128,7 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
     cp.n_ctx = (ids.size() + 256)*cp.n_seq_max; cp.n_batch = cp.n_ubatch = 128;
     cp.kv_unified = unified;
     cp.n_threads = cp.n_threads_batch = 4; cp.type_k = cp.type_v = GGML_TYPE_F32;
-    cp.flash_attn_type = LLAMA_FLASH_ATTN_TYPE_DISABLED;
+    cp.flash_attn_type = gpu_fixture ? LLAMA_FLASH_ATTN_TYPE_ENABLED : LLAMA_FLASH_ATTN_TYPE_DISABLED;
     std::unique_ptr<llama_context, decltype(&llama_free)> ctx(llama_init_from_model(model, cp), llama_free);
     require(bool(ctx), "context creation failed");
     require(llama_set_ridgefill(ctx.get(), rf.get()) == 0, "projector attach failed");
@@ -160,7 +178,8 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         params.n_embd = llama_model_n_embd(model); params.n_tokens = ids.size(); params.n_prefix = ids.size() - 400;
         params.n_batch = 128; params.split = llama_ridgefill_split(rf.get()); params.qattn_share = 0.2f;
         params.type = hidden_type;
-        params.s1 = window > 0; params.s1_window = window; params.projector = rf.get();
+        params.s1 = window > 0; params.s1_window = window;
+        params.projector = window > 0 || vtail ? rf.get() : nullptr;
         params.vtail = vtail; params.vtail_rows = 32;
         llama_ridgefill_seq_set(ctx.get(), injector, params.n_prefix);
         if (cancel_first) {
@@ -169,19 +188,22 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
             int steps = 0;
             while (status == server_ridgefill_sweep_result::pending && ++steps < 10000) {
                 status = server_ridgefill_sweep_step(partial, ctx.get(), injector, ids.data(), {}, params);
-                if (std::strcmp(partial.phase_name(), "stream_tail") == 0 && partial.step_tokens() > 0) { break; }
+                if ((cancel_first == 1 && std::strcmp(partial.phase_name(), "stream_tail") == 0 && partial.step_tokens() > 0) ||
+                        (cancel_first == 2 && std::strcmp(partial.phase_name(), "s1_fill") == 0 && partial.cursor() > 0)) { break; }
             }
-            require(status == server_ridgefill_sweep_result::pending && partial.step_tokens() > 0 && steps < 10000, "did not reach an active streamed prefix");
-            auto narrowed = params;
-            narrowed.n_batch = 127;
-            require(partial.next_tokens(ctx.get(), narrowed) == 128, "atomic first-tail span shrank with the prompt budget");
-            require(partial.next_work(ctx.get(), injector, params, 128) <= 128, "atomic span refused a full prompt budget");
-            bool refused = false;
-            try { partial.next_work(ctx.get(), injector, narrowed, 127); }
-            catch (const std::runtime_error & error) {
-                refused = std::strstr(error.what(), "exceeds the stock prompt chunk budget") != nullptr;
+            require(status == server_ridgefill_sweep_result::pending && steps < 10000, "did not reach the cancellation stage");
+            if (cancel_first == 1) {
+                auto narrowed = params;
+                narrowed.n_batch = 127;
+                require(partial.next_tokens(ctx.get(), narrowed) == 128, "atomic first-tail span shrank with the prompt budget");
+                require(partial.next_work(ctx.get(), injector, params, 128) <= 128, "atomic span refused a full prompt budget");
+                bool refused = false;
+                try { partial.next_work(ctx.get(), injector, narrowed, 127); }
+                catch (const std::runtime_error & error) {
+                    refused = std::strstr(error.what(), "exceeds the stock prompt chunk budget") != nullptr;
+                }
+                require(refused, "server budget check admitted an oversized atomic span");
             }
-            require(refused, "server budget check admitted an oversized atomic span");
             partial.cancel(ctx.get(), injector);
             require(llama_memory_seq_pos_max(llama_get_memory(ctx.get()), injector) < 0, "cancel retained sequence memory");
             llama_ridgefill_seq_set(ctx.get(), injector, params.n_prefix);
@@ -194,6 +216,9 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
         }
         require(status == server_ridgefill_sweep_result::complete, "sweep did not complete");
         result.mass = sweep.get_s1_mass(); result.rows = sweep.get_rows(); result.scales = sweep.get_vtail_scales();
+        result.question_mass = sweep.get_mass();
+        for (int il = 0; il < params.split; ++il) { if (!model->hparams.is_recr(il)) { ++result.question_layers; } }
+        result.question_layers = std::min(result.question_layers, 4);
     }
     result.prefill = state(ctx.get(), injector);
     if (other_sequence) { require(other_before == state(ctx.get(), background), "prefill changed the other sequence state"); }
@@ -211,14 +236,39 @@ static snapshot run(llama_model * model, const char * projector, const std::vect
 int main(int argc, char ** argv) {
     try {
         const bool separate = argc == 6 && std::strcmp(argv[5], "--separate") == 0;
-        require(argc == 5 || separate, "usage: test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON [--separate]");
+        const bool pair = argc == 6 && std::strcmp(argv[5], "--gpu-pair") == 0;
+        gpu_fixture = pair || (argc == 6 && std::strcmp(argv[5], "--gpu") == 0);
+        require(argc == 5 || separate || gpu_fixture, "usage: test-streaming MODEL PROJECTOR INPUT_JSON OUTPUT_JSON [--separate|--gpu|--gpu-pair]");
         std::ifstream input(argv[3]); json document; input >> document;
         const auto ids = document.at("ids").get<std::vector<llama_token>>();
         require(ids.size() > 400 && ids.size() < 4096, "use a short CPU fixture with an exact tail");
+        if (gpu_fixture) { ggml_backend_load_all(); }
         llama_backend_init();
-        auto mp = llama_model_default_params(); mp.n_gpu_layers = 0;
+        auto mp = llama_model_default_params(); mp.n_gpu_layers = gpu_fixture ? 99 : 0;
         std::unique_ptr<llama_model, decltype(&llama_model_free)> model(llama_model_load_from_file(argv[1], mp), llama_model_free);
         require(bool(model), "model load failed");
+        if (gpu_fixture) {
+            const auto dev = ggml_backend_buft_get_device(model->select_buft(0));
+            require(dev && ggml_backend_dev_type(dev) != GGML_BACKEND_DEVICE_TYPE_CPU, "GPU fixture was not offloaded");
+        }
+        if (pair) {
+            const auto a = run(model.get(), argv[2], ids, false, false, 256, true);
+            const auto b = run(model.get(), argv[2], ids, true, false, 256, true);
+            require(a.prefill == b.prefill && a.final == b.final, "GPU pair state bytes differ");
+            require(same_logits(a.logits, b.logits), "GPU pair logit bytes differ");
+            auto hash = [](const auto & data) { return hash_sha256_hex(data.data(), data.size()*sizeof(data[0])); };
+            require(!a.question_mass.empty() && hash(a.question_mass) == hash(b.question_mass), "GPU pair question mass bytes differ");
+            require(a.rows == b.rows && a.mass == b.mass && a.scales == b.scales, "GPU pair selectors differ");
+            std::ofstream output(argv[4]);
+            require(bool(output), "cannot open result file");
+            output << json({{"result", "PASS"}, {"checks", 4}, {"question_layers", a.question_layers},
+                    {"prefill_bytes", a.prefill.size()}, {"question_mass_rows", a.question_mass.size()},
+                    {"hashes", {{"prefill", hash(a.prefill)}, {"final", hash(a.final)}, {"logits", hash(a.logits)},
+                                {"question_mass", hash(a.question_mass)}, {"probe_mass", hash(a.mass)},
+                                {"rows", hash(a.rows)}, {"scales", hash(a.scales)}}}}).dump(2) << '\n';
+            require(bool(output), "cannot write result file");
+            return 0;
+        }
         if (separate) {
             json cases = json::array();
             int checks = 0;
@@ -277,6 +327,11 @@ int main(int argc, char ** argv) {
         check(same_logits(reference.logits, reused.logits), "cancel/reuse logit bytes differ");
         check(reference.rows == reused.rows && reference.mass == reused.mass && reference.scales == reused.scales,
                 "cancel/reuse selection or calibration leaked");
+        const auto readback_reused = run(model.get(), argv[2], ids, true, false, 64, true, 2);
+        check(reference.prefill == readback_reused.prefill && reference.final == readback_reused.final, "readback cancellation changed state bytes");
+        check(same_logits(reference.logits, readback_reused.logits), "readback cancellation changed logit bytes");
+        check(reference.rows == readback_reused.rows && reference.mass == readback_reused.mass && reference.scales == readback_reused.scales,
+                "readback cancellation changed selection or calibration");
         for (const auto type : {GGML_TYPE_BF16, GGML_TYPE_F32}) {
             const auto a = run(model.get(), argv[2], ids, false, false, 64, true, false, type);
             const auto b = run(model.get(), argv[2], ids, true, false, 64, true, false, type);
@@ -286,6 +341,15 @@ int main(int argc, char ** argv) {
             check(a.rows == b.rows && a.mass == b.mass, "compact alternate-type selection differs");
             check(a.scales == b.scales, "compact alternate-type vtail differs");
         }
+        auto odd = ids;
+        if (odd.size() % 2 == 0) { odd.pop_back(); }
+        const auto odd_a = run(model.get(), argv[2], odd, false, false, 64, true);
+        const auto odd_b = run(model.get(), argv[2], odd, true, false, 64, true);
+        check(odd_a.prefill == odd_b.prefill, "odd-prefix prefill bytes differ");
+        check(odd_a.final == odd_b.final, "odd-prefix final bytes differ");
+        check(same_logits(odd_a.logits, odd_b.logits), "odd-prefix logits differ");
+        check(odd_a.rows == odd_b.rows && odd_a.mass == odd_b.mass && odd_a.question_mass == odd_b.question_mass, "odd-prefix selector differs");
+        check(odd_a.scales == odd_b.scales, "odd-prefix vtail differs");
         const auto background_a = run(model.get(), argv[2], ids, false, false, 64, true, false, GGML_TYPE_F16, true);
         const auto background_b = run(model.get(), argv[2], ids, true, false, 64, true, false, GGML_TYPE_F16, true);
         check(background_a.prefill == background_b.prefill, "other-layout prefill bytes differ");

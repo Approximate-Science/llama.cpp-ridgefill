@@ -422,6 +422,8 @@ public:
     // RidgeFill: the position of seq_id in each of the current ubatch's n_kv cells (-1: not seq_id)
     void get_cell_pos(llama_seq_id seq_id, std::vector<llama_pos> & out) const;
 
+    bool ridgefill_dense_causal(const llama_ubatch & ubatch) const;
+
     ggml_type type_k() const;
     ggml_type type_v() const;
 

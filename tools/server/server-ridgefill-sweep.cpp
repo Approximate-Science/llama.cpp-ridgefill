@@ -11,6 +11,7 @@
 #include <cmath>
 #include <climits>
 #include <cinttypes>
+#include <cstdlib>
 #include <cstring>
 #include <iterator>
 #include <stdexcept>
@@ -191,6 +192,20 @@ void server_ridgefill_sweep::sweep_lower(llama_context * ctx, llama_seq_id seq, 
 }
 
 void server_ridgefill_sweep::question_mass(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) {
+    const char * host_windows = std::getenv("LLAMA_RIDGEFILL_HOST_WINDOWS");
+    if (ctx->get_ridgefill_stream() && (!host_windows || std::strcmp(host_windows, "1") == 0)) {
+        ctx->synchronize();
+        const bool profiling = params.projector && params.projector->profiling;
+        const int64_t begin = profiling ? ggml_time_us() : 0;
+        for (auto & window : windows) {
+            if (ggml_backend_buffer_is_host(window->tensor()->buffer)) { continue; }
+            auto host = std::make_unique<llama_ridgefill_sweep_buffer>(ggml_backend_cpu_buffer_type(),
+                    params.n_embd, win_end - win_begin, GGML_TYPE_F32);
+            ggml_backend_tensor_get(window->tensor(), host->tensor()->data, 0, window->size_bytes());
+            window = std::move(host);
+        }
+        if (profiling) { llama_ridgefill_profile(params.projector, "window_offload", -1, 0, begin, ggml_time_us()); }
+    }
     std::vector<ggml_tensor *> buffers;
     for (const auto & window : windows) { buffers.push_back(window->tensor()); }
     mass = llama_ridgefill_sweep_question_mass(*ctx, seq, params.n_tokens, win_end, layers, buffers);
@@ -237,7 +252,8 @@ static uint32_t sweep_cache_rows(const llama_kv_cache & cache, llama_seq_id seq)
 void server_ridgefill_sweep::sweep_s1_fill(llama_context * ctx, llama_seq_id seq, const llama_token * tokens,
         const server_ridgefill_sweep_params & params) {
     auto * maps = ctx->get_ridgefill_stream();
-    if (position == 0 && stream_layer < 0) {
+    const bool first = position == 0 && stream_layer < 0;
+    if (first) {
         auto part = llama_ridgefill_part_default_params();
         part.part = LLAMA_RIDGEFILL_PART_S1_FILL;
         part.h_buf = hidden->tensor();
@@ -256,6 +272,8 @@ void server_ridgefill_sweep::sweep_s1_fill(llama_context * ctx, llama_seq_id seq
         maps->stage(*ctx, stream_layer, next_layer < int32_t(ctx->get_model().hparams.n_layer()) ? next_layer : -1);
     }
     decode(ctx, seq, tokens, std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), params.n_prefix - position}), false, false);
+    // S1 only reads hS; LOWER is complete and the first fill graph is submitted.
+    if (first && maps) { prefetch_hidden(ctx, params); }
     if (maps && position == params.n_prefix) { advance_stream(ctx, seq, params, true); }
 }
 
@@ -314,6 +332,8 @@ void server_ridgefill_sweep::select_s1_rows(llama_context * ctx, llama_seq_id se
 
 int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params, int32_t capacity) const {
     if (next == phase::external || next == phase::done) { return 0; }
+    const bool profiling = params.projector && params.projector->profiling;
+    const int64_t begin = profiling ? ggml_time_us() : 0;
     const auto & model = ctx->get_model();
     const auto & hp = model.hparams;
     const double h = hp.n_embd;
@@ -417,6 +437,7 @@ int32_t server_ridgefill_sweep::next_work(llama_context * ctx, llama_seq_id seq,
     if (count > capacity || result > capacity) {
         throw std::runtime_error("RidgeFill: sweep step exceeds the stock prompt chunk budget; reduce probe/vtail rows or increase n_batch");
     }
+    if (profiling) { llama_ridgefill_profile(params.projector, "budget_estimate", stream_layer, position, begin, ggml_time_us()); }
     return result;
 }
 
@@ -473,10 +494,43 @@ void server_ridgefill_sweep::sweep_prefix(llama_context * ctx, llama_seq_id seq,
     }
 }
 
+void server_ridgefill_sweep::prefetch_hidden(llama_context * ctx, const server_ridgefill_sweep_params & params) {
+    const char * enabled = std::getenv("LLAMA_RIDGEFILL_PREFETCH_HIDDEN");
+    if ((enabled && std::strcmp(enabled, "1") != 0) || !ctx->get_ridgefill_stream() ||
+            ggml_backend_buffer_is_host(hidden->tensor()->buffer)) { return; }
+    auto * source = hidden->tensor();
+    hidden_readback = std::async(std::launch::async, [source, params]() {
+        const bool profiling = params.projector && params.projector->profiling;
+        const int64_t begin = profiling ? ggml_time_us() : 0;
+        auto host = std::make_unique<llama_ridgefill_sweep_buffer>(ggml_backend_cpu_buffer_type(),
+                params.n_embd, params.n_tokens, params.type, params.max_bytes);
+        ggml_backend_tensor_get(source, host->tensor()->data, 0, host->size_bytes());
+        if (profiling) { llama_ridgefill_profile(params.projector, "download_worker", -1, 0, begin, ggml_time_us()); }
+        return host;
+    });
+}
+
 void server_ridgefill_sweep::compact_hidden_rows(llama_context * ctx, llama_seq_id seq, const server_ridgefill_sweep_params & params) {
+    const bool profiling = params.projector && params.projector->profiling;
+    int64_t started = profiling ? ggml_time_us() : 0;
+    auto profile = [&](const char * phase) {
+        if (profiling) {
+            const int64_t end = ggml_time_us();
+            llama_ridgefill_profile(params.projector, phase, stream_layer, 0, started, end);
+            started = end;
+        }
+    };
     ctx->synchronize();
-    auto host = std::make_unique<llama_ridgefill_sweep_buffer>(ggml_backend_cpu_buffer_type(), params.n_embd, params.n_tokens, params.type, params.max_bytes);
-    ggml_backend_tensor_get(hidden->tensor(), host->tensor()->data, 0, hidden->size_bytes());
+    profile("compact_wait");
+    std::unique_ptr<llama_ridgefill_sweep_buffer> host;
+    if (hidden_readback.valid()) {
+        host = hidden_readback.get();
+    } else {
+        host = std::make_unique<llama_ridgefill_sweep_buffer>(ggml_backend_cpu_buffer_type(), params.n_embd, params.n_tokens, params.type, params.max_bytes);
+        profile("compact_host_alloc");
+        ggml_backend_tensor_get(hidden->tensor(), host->tensor()->data, 0, hidden->size_bytes());
+    }
+    profile("compact_download");
     if (!ggml_backend_buffer_is_host(hidden->tensor()->buffer)) { hidden_download_bytes += hidden->size_bytes(); }
     ctx->ridgefill_seq_replace_hidden(seq, host->tensor());
     hidden = std::move(host);
@@ -496,12 +550,16 @@ void server_ridgefill_sweep::compact_hidden_rows(llama_context * ctx, llama_seq_
         }
     }
     if (target != n_compact || exact != rows.size()) { throw std::runtime_error("RidgeFill compact: incomplete exact row coverage"); }
+    profile("compact_pack");
     const auto buft = ctx->get_model().select_buft(params.split);
     compact_hidden = std::make_unique<llama_ridgefill_sweep_buffer>(buft, params.n_embd, n_compact, params.type, params.max_bytes);
+    profile("compact_device_alloc");
     ggml_backend_tensor_set(compact_hidden->tensor(), packed.data(), 0, packed.size());
+    profile("compact_upload");
     if (!ggml_backend_buffer_is_host(compact_hidden->tensor()->buffer)) { hidden_upload_bytes += packed.size(); }
     tail_hidden = std::make_unique<llama_ridgefill_sweep_buffer>(buft, params.n_embd, llama_n_ubatch(ctx), params.type, params.max_bytes);
     ctx->ridgefill_seq_compact_hidden(seq, compact_hidden->tensor(), tail_hidden->tensor(), hidden_keep_end, &hidden_indices);
+    profile("compact_finish");
     LLAMA_LOG_INFO("%s: RidgeFill hS host %.4f MiB, compact %.4f MiB, tail staging %.4f MiB\n", __func__,
             hidden->size_bytes()/1048576.0, compact_hidden->size_bytes()/1048576.0, tail_hidden->size_bytes()/1048576.0);
 }
@@ -574,6 +632,10 @@ void server_ridgefill_sweep::sweep_tail(llama_context * ctx, llama_seq_id seq, c
 
 void server_ridgefill_sweep::finish_external_tail(llama_context * ctx, llama_seq_id seq) {
     llama_synchronize(ctx);
+    if (hidden_readback.valid()) {
+        auto readback = hidden_readback.get();
+        hidden_download_bytes += readback->size_bytes();
+    }
     if (auto * maps = ctx->get_ridgefill_stream()) {
         LLAMA_LOG_INFO("%s: RidgeFill context map uploads total %" PRIu64 " bytes\n", __func__, maps->uploaded_bytes());
         LLAMA_LOG_INFO("%s: RidgeFill hS link uploaded %" PRIu64 " downloaded %" PRIu64 " bytes\n", __func__, hidden_upload_bytes, hidden_download_bytes);
