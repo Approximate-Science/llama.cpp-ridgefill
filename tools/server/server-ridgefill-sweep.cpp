@@ -273,7 +273,9 @@ void server_ridgefill_sweep::sweep_s1_probe(llama_context * ctx, llama_seq_id se
         if (params.certificate) { ctx->ridgefill_certificate_start(seq); }
     }
     const int32_t count = std::min({params.n_batch, int32_t(llama_n_ubatch(ctx)), win_end - position});
-    const uint64_t pairs = uint64_t(count) * sweep_cache_rows(sweep_cache(ctx), seq);
+    const auto & cp = ctx->get_cparams();
+    const uint32_t keys = cp.kv_unified && cp.n_seq_max > 1 ? uint32_t(params.n_tokens) : sweep_cache_rows(sweep_cache(ctx), seq);
+    const uint64_t pairs = uint64_t(count) * keys;
     decode(ctx, seq, tokens, count, false, false);
     cost.s1_probe_kv_pairs += pairs;
     const auto & hp = ctx->get_model().hparams;

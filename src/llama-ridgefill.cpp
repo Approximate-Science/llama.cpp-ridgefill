@@ -22,6 +22,7 @@
 #include <cinttypes>
 #include <map>
 #include <limits>
+#include <numeric>
 #include <set>
 #include <stdexcept>
 #include <unordered_map>
@@ -936,8 +937,14 @@ llm_graph_input_ridgefill_part * llm_graph_context::build_inp_ridgefill_part() c
     if (p.s1_probe || p.vtail_rows > 0) {
         inp->kv  = static_cast<const llama_memory_hybrid_context *>(mctx)->get_attn();
         inp->seq = ubatch.seq_id[0][0];
-        const int64_t n_kv = inp->kv->get_n_kv();
+        int64_t n_kv = inp->kv->get_n_kv();
         if (p.s1_probe) {
+            // The reserve state has no prompt. Keep its dense graph as the allocation upper bound.
+            if (cparams.kv_unified && cparams.n_seq_max > 1 && p.part_state->lower_end > 0) {
+                n_kv = p.part_state->lower_end;
+                inp->s1_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_kv);
+                ggml_set_input(inp->s1_rows);
+            }
             // the stock KQ mask's type and shape (build_attn_inp_kq_mask), one sequence / stream
             if (p.certificate && !p.rf->streamed) {
                 inp->cert_rows = ggml_new_tensor_1d(ctx0, GGML_TYPE_I32, n_tokens);
@@ -1072,6 +1079,23 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
             // query i sees the sequence's cells at positions <= its own (causal, as the stock mask), except the tail
             // rows [p_end, s1_begin) the probe does not run: the prefix [0, p_end) as filled and the window rows
             const int64_t n_kv = s1_mask->ne[0];
+            if (s1_rows) {
+                std::vector<int32_t> cells(n_kv, -1);
+                for (size_t c = 0; c < cell_pos.size(); ++c) {
+                    if (cell_pos[c] >= 0 && cell_pos[c] < n_kv) {
+                        if (c > size_t(std::numeric_limits<int32_t>::max())) {
+                            throw std::runtime_error("RidgeFill S1: key row exceeds the gather index range");
+                        }
+                        cells[cell_pos[c]] = int32_t(c);
+                    }
+                }
+                if (std::find(cells.begin(), cells.end(), -1) != cells.end()) {
+                    throw std::runtime_error("RidgeFill S1: incomplete sequence key rows");
+                }
+                ggml_backend_tensor_set(s1_rows, cells.data(), 0, cells.size()*sizeof(int32_t));
+                cell_pos.resize(n_kv);
+                std::iota(cell_pos.begin(), cell_pos.end(), 0);
+            }
             GGML_ASSERT((int64_t) cell_pos.size() == n_kv && s1_mask->ne[1] == ubatch->n_tokens);
             std::vector<float> row(n_kv);
             std::vector<ggml_fp16_t> row16(s1_mask->type == GGML_TYPE_F16 ? n_kv : 0);
@@ -1900,7 +1924,8 @@ ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model &
     k = ggml_permute(ctx0, k, 0, 2, 1, 3); // [d, n_kv, n_head_kv]
     v = ggml_permute(ctx0, v, 0, 2, 1, 3);
 
-    const int64_t n_kv = k->ne[1];
+    const int64_t n_cells = k->ne[1];
+    const int64_t n_kv = inp->s1_rows ? inp->s1_rows->ne[0] : n_cells;
     GGML_ASSERT(inp->s1_mask->ne[0] == n_kv && inp->s1_mask->ne[1] == n_tokens);
     const int64_t qb = inp->s1_qb; // the query blocks of the mask / ones views made once per graph
 
@@ -1908,9 +1933,15 @@ ggml_tensor * build_ridgefill_s1_attn(llm_graph_context & g, const llama_model &
     ggml_tensor * m_layer = nullptr;
     std::vector<ggml_tensor *> heads; // [d, n_tokens, 1] per query head
     for (int64_t kh = 0; kh < n_head_kv; ++kh) {
-        ggml_tensor * kg = ggml_view_3d(ctx0, k, d, n_kv, 1, k->nb[1], k->nb[2], kh*k->nb[2]);
+        ggml_tensor * kg = ggml_view_3d(ctx0, k, d, n_cells, 1, k->nb[1], k->nb[2], kh*k->nb[2]);
         ggml_tensor * vg = ggml_view_3d(ctx0, v, v->ne[0], v->ne[1], 1, v->nb[1], v->nb[2], kh*v->nb[2]);
-        if (!v_trans) {
+        if (inp->s1_rows) {
+            // Exclude other sequences' cells before attention, keeping this prompt in position order.
+            kg = ggml_cast(ctx0, ggml_get_rows(ctx0, kg, inp->s1_rows), k->type);
+            if (v_trans) { vg = ggml_cont(ctx0, ggml_transpose(ctx0, vg)); }
+            vg = ggml_cast(ctx0, ggml_get_rows(ctx0, vg, inp->s1_rows), v->type);
+            vg = ggml_cont(ctx0, ggml_transpose(ctx0, vg));
+        } else if (!v_trans) {
             // [n_kv, d, 1], as the unsliced cont(transpose(v)) (not chained: at most one copy per key head is alive)
             vg = ggml_cont(ctx0, ggml_transpose(ctx0, vg));
         }

@@ -156,6 +156,7 @@ public:
     // an input is a separate split input, which a non-CPU backend copies into the compute buffer for the whole split
     // (one view per head and layer was 288 copies of the mask, 2.7 GiB at 9K cells on Vulkan)
     ggml_tensor * s1_mask  = nullptr;
+    ggml_tensor * s1_rows  = nullptr; // I32: this sequence's cells in prompt order, for a shared KV stream
     ggml_tensor * ones     = nullptr;
     ggml_tensor * cert_rows = nullptr; // I32 [n_tokens]: probe cells in the attention cache
     int64_t                    s1_qb = 0;

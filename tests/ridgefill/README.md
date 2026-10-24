@@ -246,3 +246,14 @@ python3 tests/ridgefill/check_lexical_http.py --bin-dir build-cpu/bin --model /p
 The short tiny-model native/HTTP check verifies parameter inheritance and request overrides, strict integer bounds, mandatory rows within the existing budget, report/anchor parity, whole-span cap and oversize reporting, and no-op/next-request byte identity. These random-weight model checks establish implementation behavior, not model quality.
 
 The replay-lookup regression compares the production finder with exhaustive cell scans after sharing, removal, division and shifts. It checks unordered/repeated queries, missing/negative positions, mixed owners and the highest-cell rule when cache positions repeat. It needs no model compute beyond the existing tiny fixture.
+
+### Shared-KV S1 probe regression
+
+`test_s1_unified.cpp` places a tiny-model injector in sequence7 after another sequence occupies16,30000 or33000 zero-valued KV cells. It checks F32/F16 KV, resident/streamed cache/logit/selection bytes, finite nonzero probe mass, actual probe pair counts and unchanged background state. The16-cell case is a passing placement control. On the affected Vulkan backend the old dense S1 graph fails the30000-cell case even with trim disabled: a long masked prefix exposes a bad large-row softmax maximum reduction. The fixed shared-KV probe gathers only its own prompt cells before attention. No kernel change is part of this test or fix.
+
+```sh
+c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include -Icommon -Itools/server -Ivendor tests/ridgefill/test_s1_unified.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama-server-impl -lllama-common -lllama -lggml -lggml-cpu -lggml-base -o build-cpu/test-s1-unified
+build-cpu/test-s1-unified /path/to/tiny-qwen35-f32.gguf /path/to/projector-s4-f32.gguf /path/to/tiny-match.json out/s1-unified.json
+```
+
+Build against a GPU-enabled directory and append `--gpu` to exercise the failing backend placement and require real offload. Run that command only through the permitted GPU bridge. The same executable with the old libraries must pass the16-cell control and fail the large placement. `LLAMA_RIDGEFILL_TRIM_KV=1` repeats the check with bulk K/V reuse. CPU checks cover both V-cache layouts when combined with the GPU/FA-on run; CPU alone does not reproduce the backend defect.

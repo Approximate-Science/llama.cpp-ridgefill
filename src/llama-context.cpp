@@ -2906,6 +2906,11 @@ int llama_context::decode(const llama_batch_ext & batch_inp) {
                 ggml_backend_tensor_get(res->t_rf_mass, mass.data(), 0, mass.size()*sizeof(float));
                 std::vector<llama_pos> cell_pos;
                 static_cast<const llama_memory_hybrid_context *>(mctx.get())->get_attn()->get_cell_pos(seq, cell_pos);
+                if (cparams.kv_unified && cparams.n_seq_max > 1) {
+                    GGML_ASSERT(mass.size() == size_t(ridgefill_part[seq].lower_end));
+                    cell_pos.resize(mass.size());
+                    for (size_t p = 0; p < cell_pos.size(); ++p) { cell_pos[p] = p; }
+                }
                 auto & acc = ridgefill_s1_mass[seq];
                 for (size_t c = 0; c < cell_pos.size() && c < mass.size(); ++c) {
                     if (cell_pos[c] >= 0 && cell_pos[c] < (llama_pos) acc.size()) {
