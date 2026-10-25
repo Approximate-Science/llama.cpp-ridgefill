@@ -4166,7 +4166,8 @@ private:
                             const int32_t p_fill = tparams.ridgefill && !slot.need_embd() && !input_tokens.has_mtmd ?
                                 common_ridgefill_p_end(params_base, slot.task->n_tokens(), tparams.ridgefill_tail, mode) : 0;
                             const bool extra_sweep = mode != "off" && (tparams.ridgefill_s1_window > 0 || tparams.ridgefill_vtail);
-                            if (extra_sweep) {
+                            // a prompt below min_prompt has no fill (p_fill == 0) and runs exact, so it needs no sweep checks
+                            if (extra_sweep && p_fill > 0) {
                                 try {
                                     char architecture[32] = {};
                                     if (llama_model_meta_val_str(model_tgt, "general.architecture", architecture, sizeof(architecture)) <= 0 || std::string(architecture) != "qwen35") {

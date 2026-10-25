@@ -2321,8 +2321,9 @@ common_ridgefill_report common_ridgefill_get_report(const llama_model * model, c
         require(std::includes(rows.begin(), rows.end(), lexical->rows.begin(), lexical->rows.end()), "lexical rows must be exact");
     }
 
-    const bool s1 = mode != "off" && params.ridgefill_s1_window > 0;
-    const bool vtail = mode != "off" && params.ridgefill_vtail;
+    // no filled prefix (prompt below min_prompt) means no sweep ran, so there is no S1/vtail work to report
+    const bool s1 = mode != "off" && params.ridgefill_s1_window > 0 && n_prefix > 0;
+    const bool vtail = mode != "off" && params.ridgefill_vtail && n_prefix > 0;
     if (s1 || vtail) {
         require(rf && tokens && model->arch == LLM_ARCH_QWEN35, "S1/vtail requires qwen35 and a projector");
         require(sweep != nullptr, "S1/vtail needs completed sweep metadata");
