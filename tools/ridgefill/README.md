@@ -19,11 +19,25 @@ Build in the configured CPU, HIP, Vulkan, or CUDA build directory:
 cmake --build build --target llama-ridgefill-score -j4
 ```
 
-Input may be a JSON token-ID array, a `{ "name": "doc", "ids": [...] }` object, an array of document objects, or JSONL with one document object per line. Output is JSONL with one record per document: target positions, raw full-vocabulary next-token log-probabilities, full-vocabulary logsumexp, all-token mean NLL, selected exact rows, the selector window, and build/settings metadata. Only the K prediction rows have logits enabled. Full logits are reduced in float64 on the host and are not retained. Invalid tokens, incomplete output, non-finite logits, and unsupported settings fail with a nonzero exit code; partial output is not a completed run.
+Input may be a JSON token-ID array, a `{ "name": "doc", "ids": [...] }` object, an array of document objects, or JSONL with one document object per line. Output is JSONL with one record per document: target positions, target-token log-probabilities, full-vocabulary logsumexp, all-token mean NLL, selected exact rows, the selector window, and build/settings metadata. Only the K prediction rows have logits enabled. Full logits are reduced in float64 on the host and are not retained; optional full-vocabulary log-probability files are described below. Invalid tokens, incomplete output, non-finite logits, and unsupported settings fail with a nonzero exit code; partial output is not a completed run.
 
 Defaults match the server recipe: split from the projector, tail 4096, min prompt 8192, class share 0.5, digits on, qattn share 0.2, window 64 ending at N, alpha 0, F16 KV and h_S. The scorer supports `--cache-type` and `--h-type` f32/f16/bf16. CPU is the default; pass `--gpu-layers 99` in lane Q's assigned GPU environment. `--help` lists runtime controls. JSON/JSONL is the supported interchange format; no NPY dependency is needed.
 
 `--ridgefill-stream-projector on` is an experimental, default-off storage option for quality+qattn with alpha 0. It keeps maps/corrections in host RAM and uses the server's layer-major late sweep with two staged maps per device. It supports S1 and vtail; the active report adds `projector_streamed: true`. h_S and compact F32 exact-row residuals stay on their backends. Streaming does not change the selector endpoint or target-exclusion rules.
+
+## Full-vocabulary KL comparison
+
+`--save-logprobs PATH` saves the full-vocabulary log-softmax at the K scored target positions, in their existing order `[N-K,N)`. `--kl-against PATH` compares those same positions against a saved reference. Use `--mode off` to create the stock reference. Both flags work with every mode and can be combined; each invocation using either flag requires exactly one document. No prompt positions enter these statistics, and the existing NLL fields keep their float64 calculation.
+
+The little-endian RFLP format is `magic[4]="RFLP"`, `u32 version=1`, `u32 dtype=32`, `u32 n_vocab`, `u32 n_scored`, then `n_scored` signed int32 target token IDs and `n_scored*n_vocab` IEEE float32 log-probabilities in row-major order. Each value is the scorer's float64 `logit - logsumexp` converted to float32. The reference and current rows use this same representation, so an identical run has exactly zero KL. The writer streams through `PATH.tmp` and renames it to PATH only after all rows are complete. Vocabulary size, scored count, target-ID, format, and payload mismatches fail by name. One row at a time stays in host memory.
+
+Comparison uses float64 over the entire vocabulary: `sum(exp(logp_ref)*(logp_ref-logp_this))`. It adds `kl_mean`, `kl_median`, `kl_p99`, `kl_max`, `top1_agree`, `dp_target_mean`, and per-position `kl` and boolean `top1` arrays to that document's JSONL record. Percentiles interpolate at `fraction*(K-1)`, as in llama-perplexity. Top-1 ties select the lowest token ID. Target probability differences are `exp(logp_this[target])-exp(logp_ref[target])`. Float32 rows are used directly, with no probability cutoff or renormalization.
+
+```sh
+build-cpu/bin/llama-ridgefill-score --model "$MODEL" --input one-document.json --output stock.jsonl --mode off --save-logprobs stock.rflp
+build-cpu/bin/llama-ridgefill-score --model "$MODEL" --projector "$PROJ" --input one-document.json --output ridgefill.jsonl --mode quality+qattn --qattn-window-end known --kl-against stock.rflp --save-logprobs ridgefill.rflp
+python3 tests/ridgefill/check_score_kl.py --reference stock.rflp --current ridgefill.rflp --record ridgefill.jsonl
+```
 
 ## The NLL selector window excludes targets
 

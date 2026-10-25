@@ -1,5 +1,13 @@
 # RidgeFill CPU checks
 
+The scorer's KL unit needs only a C++17 compiler. It checks hand-computed KL and target probability differences, KL direction, exact self-comparison, full-vocabulary tails, percentile interpolation, the float32 little-endian file contract, named mismatches, malformed files, and atomic-write preservation. The Python checker independently recomputes every statistic from two scorer files with a 1e-9 absolute tolerance.
+
+```sh
+c++ -std=c++17 -O2 tests/ridgefill/test_score_kl.cpp -o build-cpu/test-score-kl
+build-cpu/test-score-kl out/score-kl-unit
+python3 tests/ridgefill/check_score_kl.py --reference stock.rflp --current ridgefill.rflp --record ridgefill.jsonl
+```
+
 Run from the repository root with NumPy and safetensors installed. The converter uses the repository's `gguf-py` and needs no torch.
 
 ```sh

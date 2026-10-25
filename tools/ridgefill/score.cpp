@@ -6,6 +6,7 @@
 #include "llama-ext.h"
 #include "llama-ridgefill.h"
 #include "server-ridgefill-sweep.h"
+#include "score-logprobs.h"
 #include "nlohmann/json.hpp"
 
 #include <algorithm>
@@ -30,7 +31,7 @@ static void require(bool value, const std::string & message) {
 }
 
 struct options {
-    std::string model, projector, input, output;
+    std::string model, projector, input, output, save_logprobs, kl_against;
     std::string mode = "quality+qattn", cache = "f16", hidden = "f16", flash = "auto";
     std::string window_mode = "last";
     int32_t window_end = -1; // -1: document end; -2: start of scored tokens.
@@ -79,6 +80,8 @@ static options parse(int argc, char ** argv) {
         else if (key == "--projector" || key == "--ridgefill") { o.projector = value; }
         else if (key == "--input") { o.input = value; }
         else if (key == "--output") { o.output = value; }
+        else if (key == "--save-logprobs") { o.save_logprobs = value; }
+        else if (key == "--kl-against") { o.kl_against = value; }
         else if (key == "--mode") { o.mode = value; }
         else if (key == "--scored") { o.scored = integer(value); }
         else if (key == "--tail") { o.tail = integer(value); }
@@ -231,6 +234,16 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
     const int32_t window_end = o.window_end == -2 ? n - o.scored : (o.window_end == -1 ? n : o.window_end);
     require(!qattn || o.window_mode != "last" || window_end >= o.window, "--qattn-window-end is shorter than --qattn-window");
     const int32_t vocab = llama_vocab_n_tokens(llama_model_get_vocab(model));
+    std::unique_ptr<ridgefill_logprob_reader> reference;
+    std::unique_ptr<ridgefill_logprob_writer> saved;
+    std::vector<float> current_row, reference_row;
+    ridgefill_kl_statistics comparison;
+    if (!o.save_logprobs.empty() || !o.kl_against.empty()) {
+        const std::vector<int32_t> targets(doc.ids.end() - o.scored, doc.ids.end());
+        if (!o.kl_against.empty()) { reference.reset(new ridgefill_logprob_reader(o.kl_against, vocab, targets)); }
+        if (!o.save_logprobs.empty()) { saved.reset(new ridgefill_logprob_writer(o.save_logprobs, vocab, targets)); }
+        current_row.resize(vocab);
+    }
     llama_memory_clear(llama_get_memory(ctx), true);
     llama_ridgefill_seq_set(ctx, 0, prefix);
     common_params selection;
@@ -277,6 +290,14 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
             logsumexp.push_back(lse);
             logprobs.push_back(double(logits[doc.ids[pos + 1]]) - lse);
             positions.push_back(pos + 1);
+            if (saved || reference) {
+                for (int32_t v = 0; v < vocab; ++v) { current_row[v] = float(double(logits[v]) - lse); }
+                if (saved) { saved->write(current_row); }
+                if (reference) {
+                    reference->read(reference_row);
+                    comparison.add(reference_row, current_row, doc.ids[pos + 1]);
+                }
+            }
         }
     };
     server_ridgefill_sweep sweep;
@@ -371,6 +392,13 @@ static json score(llama_context * ctx, const llama_model * model, const llama_ri
         if (o.diagnostics && s1) { result["s1_mass"] = sweep.get_s1_mass(); }
     }
     if (o.diagnostics && qattn) { result["question_mass"] = sweep.get_mass(); }
+    if (reference) {
+        result.update({{"kl_mean", comparison.mean()}, {"kl_median", comparison.percentile(0.5)},
+                {"kl_p99", comparison.percentile(0.99)}, {"kl_max", comparison.percentile(1)},
+                {"top1_agree", comparison.top1_agree()}, {"dp_target_mean", comparison.dp_target_sum/o.scored},
+                {"kl", comparison.kl}, {"top1", comparison.top1}});
+    }
+    if (saved) { saved->finish(); }
     return result;
 }
 
@@ -395,11 +423,15 @@ int main(int argc, char ** argv) {
                 "S1/vtail default to endpoint N-K in this scorer; vtail calibration must precede scored targets.\n"
                 "K/V reuse: --ridgefill-trim-kv on|off (default: on).\n"
                 "Runtime: --gpu-layers 0 --threads 4 --batch 512 --ubatch 512 --ctx-size 0 --cache-type f16 --h-type f16 --flash-attn auto\n"
+                "Distributions: --save-logprobs PATH writes RFLP v1 (dtype 32), --kl-against PATH compares KL(reference || this).\n"
+                "Both flags require one document; only the K target positions are saved/compared.\n"
                 "JSON: token ID array, {name,ids}, array of documents, or one document per JSONL line. No tokenization.\n";
             return 0;
         }
         const options o = parse(argc, argv);
         const auto docs = read_documents(o.input);
+        require((o.save_logprobs.empty() && o.kl_against.empty()) || docs.size() == 1,
+                "--save-logprobs and --kl-against require exactly one document per file");
         int32_t max_n = 0;
         int32_t calibration_rows = 0;
         for (const auto & doc : docs) {

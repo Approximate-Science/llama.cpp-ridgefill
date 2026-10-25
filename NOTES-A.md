@@ -518,3 +518,122 @@ Both startup-only132096-context stock controls exit0 (old12947 and tip5e0 withRF
 Tip5e0 stock-off single131K request exits0 after valid output (shutdown-one-results.json). Before the strict four-request comparison: old-reference-specific behaviour predicts tip5e0 stock-off closes cleanly after the same warmup+3timed inputs; a reuse/history bug predicts it aborts too. Clone the timing harness as warm_strict.py, recording child shutdown rc and failing on any nonzero code; preserve the old accepted harness/specs untouched. Use an explicitly pinned tip5e0 stock-off arm, same model/context/IDs/card/flags; do not silently count the rejected12947 shutdown as a pass. No RF jobs resume until this comparison completes.
 
 Strict current-tip5e0 stock-off four-request control passes and exits0 (749s). All4 token/text/top5-probability payloads are byte-identical to the old12947 arm; stock-tip-comparison.json records this. The old12947 shutdown abort is NOT claimed fixed or clean: its exact cause remains unexplained and that reference arm is rejected. Use explicitly pinned5e0 stock-off as the clean131K stock baseline;65K old12947 scorer/server controls were clean. The new warm_strict.py records/asserts child shutdown rc for each RF arm. Resident131K now starts; resume_after_stock.py submits remaining jobs one at a time with Q fairness and fails closed. No kernel or shared-stock source change was made.
+
+
+## Target-only KL comparison against stock (CPU, 2026-10-25)
+
+Private-fork task on rf27-cr-tiera, starting at b0439f7bb. The coordinator revised RFLP v1 to float32, adding u32 dtype=32 immediately after version. The header is magic RFLP, u32 version=1, u32 dtype=32, u32 n_vocab, u32 n_scored, then signed int32 target IDs; all integers and IEEE float32 payload values are little-endian. Each full-vocabulary row is float32(logit - the existing float64 logsumexp). KL and target probability differences use those values directly in float64, without a probability cutoff or renormalization. Existing NLL arithmetic is unchanged.
+
+Implemented --save-logprobs PATH and --kl-against PATH for every mode, including their combination. Save streams one vocabulary row through PATH.tmp and renames only after completion. Reference headers/counts/targets are checked before decode; vocab/scored/target mismatches fail by name. Statistics are kl_mean, kl_median, kl_p99, kl_max, top1_agree, dp_target_mean and per-position kl/top1. Percentiles interpolate at fraction*(K-1); ties choose the lowest token ID. Each path represents one document, so either flag requires exactly one input document, matching the evaluation driver's per-document workflow.
+
+CPU-only Release build: CUDA/HIP/Vulkan/Metal/SYCL/RPC and dynamic backend loading are OFF in build-cpu. Runtime uses --gpu-layers 0 --threads 6 --flash-attn off, default batch/ubatch 512, F16 cache/hidden state. No GPU was used.
+
+Commands and checks:
+
+```sh
+cmake --build build-cpu --target llama-ridgefill-score -j4
+cmake --build build-cpu --target llama-server -j4
+c++ -std=c++17 -O2 -Wall -Wextra -Werror tests/ridgefill/test_score_kl.cpp -o build-cpu/test-score-kl
+build-cpu/test-score-kl out/kl-score/unit
+python3 -m unittest discover -s tests/ridgefill -p 'test_*.py'
+python3 out/kl-score/run_regressions.py
+python3 out/kl-score/check_tiny.py
+python3 out/kl-score/run_e2e.py
+python3 tests/ridgefill/check_score_kl.py --reference out/kl-score/stock.rflp --current out/kl-score/e3.rflp --record out/kl-score/e3-kl.jsonl
+UV_CACHE_DIR="$PWD/out/kl-score/uv-cache" UV_PYTHON_DOWNLOADS=never uvx --from ty==0.0.88 ty check --exit-zero-on-warning tests/ridgefill/check_score_kl.py
+```
+
+Native regressions were rebuilt from tests/ridgefill against the current CPU libraries: tool-args, row-selection, s1-reporting, graph-peaks, sweep-buffer, replay-index, streaming and s1-unified. The compiler commands and individual logs are in out/kl-score/regression-commands.json and test-*.log. The KL unit covers hand-computed distributions, direction, exact self-comparison, low-probability vocabulary tails, target deltas, percentiles, byte-level file layout, round-trip, three required mismatches, malformed input and preservation of the previous file on incomplete output.
+
+Observed output:
+
+```text
+[100%] Built target llama-ridgefill-score
+PASS: 30 score KL math, float32 file, mismatch and atomic-write checks
+Ran 32 tests in 0.080s
+OK
+PASS: 83 RidgeFill argument/boundary checks
+PASS: 55 common row selector and lexical-net checks
+PASS: S1 reporting 91 checks / 16 records
+PASS: graph-peaks, long-context sweep sizing and seven refusals, replay-index
+PASS: streaming 80 checks, S1 unified cache 6 cases
+PASS: 16 tiny-scorer integration checks, all four modes, both flags, three named CLI refusals
+PASS: original/current JSONL bytes match in all four modes after replacing only wall_s
+PASS: ty 0.0.88 check of tests/ridgefill/check_score_kl.py
+PASS: changed-file EditorConfig whitespace/newline rules and ASCII code; code-style workflow validates 160 model mappings
+PASS: git diff --cached --check
+```
+
+Real-model input: the first 9000 IDs of prose_32768_0 from the validate worktree's results/engine-ppl-22ef3df4a/inputs/C-spot-32768-prose/tokens.jsonl. There are 8936 prompt tokens and 64 scored targets at positions [8936,9000), above min-prompt 8192. Model: /var/mnt/qwen-storage/models/text/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf. Projector: /var/mnt/qwen-storage/models/text/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf. Document provenance/hash is in out/kl-score/document-source.json; binary/document pins are in pins.json.
+
+The unmodified b0439f7bb scorer was rebuilt and frozen with its CPU libraries in out/kl-score/baseline-bin before edits. Its E3 run without either new flag supplies the NLL control. The three changed-scorer runs are mode off/save stock, mode off/compare stock, and E3/save+compare stock. E3 uses --mode quality+qattn --s1-window 256 --vtail on --vtail-rows 512 --ridgefill-lexical on --ridgefill-lexical-window 64 --ridgefill-lexical-min-words 4 --ridgefill-lexical-span-rows 80 --ridgefill-lexical-max-occurrences 2 --share 0.5 --digits on --special-exact on --qattn-share 0.2 --qattn-window 64 --alpha 0. The selector endpoint resolves to N-K, excluding all targets. Complete command arrays are in out/kl-score/e2e-commands.json.
+
+The stock self-comparison has 64 exactly-zero KL values and 64 true top1 values. E3's NLL, every target log-probability/logsumexp, positions, and all other existing record fields equal the original no-flag control; wall_s is excluded. Tiny runs also compare original/current serialized no-flag JSONL bytes in every mode after replacing only the inherently variable wall_s field. Both real saved files contain exactly 64 x 248320 float32 values. Stock target IDs and float32 target log-probabilities match the input and original NLL output; its largest probability-sum rounding error is 8.363825076962428e-08.
+
+Real CPU results (including independent Python float64 recomputation, absolute tolerance 1e-9):
+
+```json
+{
+  "result": "PASS",
+  "n": 9000,
+  "prompt_tokens": 8936,
+  "scored": 64,
+  "n_vocab": 248320,
+  "target_positions": [
+    8936,
+    9000
+  ],
+  "self_kl_mean": 0.0,
+  "self_top1_agree": 1.0,
+  "self_dp_target_mean": 0.0,
+  "e3_nll": 1.7898698490870086,
+  "e3_baseline_nll": 1.7898698490870086,
+  "nll_fields_equal": true,
+  "complete_record_equal_except_wall_and_kl": true,
+  "e3_stats": {
+    "dp_target_mean": -0.00017576600696898452,
+    "top1_agree": 0.953125,
+    "kl_mean": 0.0041621708033944115,
+    "kl_max": 0.023442935390617762,
+    "kl_p99": 0.018774018957741966,
+    "kl_median": 0.0027444969193321975
+  },
+  "python_check": {
+    "result": "PASS",
+    "positions": 64,
+    "n_vocab": 248320,
+    "max_abs_error": 8.291978215169138e-16,
+    "kl_mean": 0.004162170803394431,
+    "kl_median": 0.002744496919332185,
+    "kl_p99": 0.018774018957742653,
+    "kl_max": 0.023442935390618206,
+    "top1_agree": 0.953125,
+    "dp_target_mean": -0.0001757660069689846
+  },
+  "baseline_wall_s": 245.87,
+  "arms": [
+    {
+      "arm": "stock-save",
+      "wall_s": 241.9513071530091,
+      "exit": 0
+    },
+    {
+      "arm": "stock-self",
+      "wall_s": 193.75525726399792,
+      "exit": 0
+    },
+    {
+      "arm": "e3-kl",
+      "wall_s": 185.89468298800057,
+      "exit": 0
+    }
+  ],
+  "total_e2e_wall_s": 867.4712474050076,
+  "file_sizes": {
+    "out/kl-score/stock.rflp": 63570196,
+    "out/kl-score/e3.rflp": 63570196
+  }
+}
+```
+
+Raw JSONL, full per-position arrays, logs, external /usr/bin/time output, both distribution files and the Python result are retained under out/kl-score/. These are one-document correctness checks, not a quality benchmark. Self-review covered scope, security, approach, tests and general conventions; no blocking findings remain. This task makes one local commit and performs no push or PR action.
