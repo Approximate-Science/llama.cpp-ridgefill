@@ -1097,7 +1097,8 @@ void llm_graph_input_ridgefill_part::set_input(const llama_ubatch * ubatch) {
             kv->set_input_kq_mask(attention_mask, &subset, true);
             ++cache.misses;
             if (it != cache.blocks.end()) { cache.bytes -= it->second.data.size(); cache.blocks.erase(it); }
-            if (bytes <= LLAMA_RIDGEFILL_SWEEP_MAX_BYTES - cache.bytes) {
+            constexpr size_t mask_cache_max_bytes = size_t(1) << 30;
+            if (bytes <= mask_cache_max_bytes - cache.bytes) {
                 auto & saved = cache.blocks[positions[0]];
                 saved.queries = std::move(positions); saved.data.resize(bytes);
                 std::memcpy(saved.data.data(), attention_mask->data, bytes); cache.bytes += bytes;

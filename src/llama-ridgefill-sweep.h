@@ -11,7 +11,7 @@ struct llama_context;
 struct llama_layer;
 class llama_kv_cache;
 struct llama_ridgefill;
-constexpr size_t LLAMA_RIDGEFILL_SWEEP_MAX_BYTES = size_t(1) << 30;
+constexpr size_t LLAMA_RIDGEFILL_SWEEP_MAX_BYTES = size_t(2) << 30;
 
 // The slot owns this buffer until all graphs that read or write it have finished. F32 is for query windows and oracle checks.
 struct llama_ridgefill_sweep_buffer {

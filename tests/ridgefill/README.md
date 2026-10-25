@@ -260,3 +260,10 @@ Build against a GPU-enabled directory and append `--gpu` to exercise the failing
 Append `--retired-certificate` to `check_startup_options.py` to check that server/scorer help and parsers no longer expose the removed prefill selector.
 
 Append `--coexistence` to `check_startup_options.py` to require named draft-model and built-in MTP startup refusals at one and two slots, before model IO. Run the default mode for actual RidgeFill-alone startup controls.
+
+Long-context buffer sizing checks the 65K/131K F16 and BF16 paths without allocating their payloads. It also checks the 2 GiB boundary, smaller caller limits, invalid types/dimensions and multiplication overflow refusal:
+
+```sh
+c++ -std=c++17 -O2 -Isrc -Iinclude -Iggml/include tests/ridgefill/test_sweep_buffer.cpp -Lbuild-cpu/bin -Wl,-rpath,"$PWD/build-cpu/bin" -lllama -lggml -lggml-base -o build-cpu/test-sweep-buffer
+build-cpu/test-sweep-buffer
+```
