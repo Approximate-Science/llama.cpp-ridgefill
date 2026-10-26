@@ -411,10 +411,10 @@ Projectors:
 | model | split | file | size | availability |
 |---|---|---|---|---|
 | Qwen3.8-27B | 16 of 64 | `ridgefill-projector-qwen3.8-27b-i8-S16.gguf` | 1452188032 bytes | [TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8) |
-| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-bf16.gguf` | 671 MB | not published yet |
-| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-q8_0.gguf` | 357 MB | not published yet |
-| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-bf16.gguf` | 772 MB | not published yet |
-| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-q8_0.gguf` | 410 MB | not published yet |
+| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-bf16.gguf` | 671 MB | [TheCacheIsALie/Llama-3.1-8B-Instruct-RidgeFill-Projector](https://huggingface.co/TheCacheIsALie/Llama-3.1-8B-Instruct-RidgeFill-Projector) |
+| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-q8_0.gguf` | 357 MB | [TheCacheIsALie/Llama-3.1-8B-Instruct-RidgeFill-Projector](https://huggingface.co/TheCacheIsALie/Llama-3.1-8B-Instruct-RidgeFill-Projector) |
+| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-bf16.gguf` | 772 MB | [TheCacheIsALie/RidgeFill-Projector-Qwen3-8B](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3-8B) |
+| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-q8_0.gguf` | 410 MB | [TheCacheIsALie/RidgeFill-Projector-Qwen3-8B](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3-8B) |
 
 The projector works with any quantization of its model (F16, Q8_0, Q4_K_M were measured).
 
