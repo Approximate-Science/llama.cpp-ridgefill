@@ -1,5 +1,15 @@
 # llama.cpp
 
+## This fork: RidgeFill
+
+This fork implements RidgeFill, approximate long-prompt prefill for Qwen3.8-27B; see [usage and results](RIDGEFILL.md).
+
+| A100 CUDA, Qwen3.8-27B | 16K | 32K | 65K | 120K |
+|---|---|---|---|---|
+| TTFT speedup (resident projector) | 1.25x | 1.30x | 1.31x | 1.28x |
+
+Projector: [TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8).
+
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
 <div align="center">

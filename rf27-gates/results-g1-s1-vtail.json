@@ -1,7 +1,7 @@
 {
   "summary": {
     "gate": "G1-s1-vtail",
-    "reference": "/var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail",
+    "reference": "<work>/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail",
     "checks": 49,
     "passed": 49,
     "result": "PASS"

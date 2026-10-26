@@ -16,22 +16,75 @@ The filled part of the cache is approximate. The output is not identical to norm
 loss, more so when the tail is short relative to the prompt (numbers below). With RidgeFill off, this fork is
 bit-identical to upstream llama.cpp (checked, see "Tests").
 
-RidgeFill is by Dylan Johnston and tcclaviger. Method, reference implementation and paper: TODO (Dylan).
+RidgeFill is by Dylan Johnston and tcclaviger. Technical note: [doi:10.5281/zenodo.23179168](https://doi.org/10.5281/zenodo.23179168). The projector is licensed under Apache-2.0; the code follows [this repository's license](LICENSE).
 
 ## Qwen3.8-27B (`qwen35`)
 
-**Release on hold:** chat-template quality must meet the CHAT-TUNE/CHAT-HELDOUT bars before release. The new chat-row controls are experimental; defaults remain unchanged.
+The Qwen3.8-27B port supports speed, quality and quality+qattn prefill. The recommended E3 configuration uses quality+qattn with S1 attention-based row selection, V rescaling and the lexical net. S1/vtail supports the `qwen35` architecture only. The later Llama/Qwen3 tables are earlier measurements on different models.
 
-The Qwen3.8-27B port implements speed, class/digit quality and server question-attention quality prefill. The format-2 projector converter and tiny Qwen3.5 fixtures are available. On engine `3ac42957d`, the canonical tiny CPU G1 passed 27 checks each for speed (alpha 0/1) and quality with explicit exact rows (alpha 0), across three chunk sizes. The gates compare logits, KV caches, convolution state and recurrent state with the oracle and require positive/negative controls. Quality alpha 1 is refused by name until the rho-scaled correction is implemented. Real-model measurements and their limitations are below; the later Llama/Qwen3 tables are earlier measurements on different models.
+### Quick start (Qwen3.8-27B)
+
+Run these commands from a checkout of this fork. With the Hugging Face `hf` CLI installed, download the model and projector; each command prints the downloaded file path:
+
+```sh
+MODEL=$(hf download unsloth/Qwen3.8-27B-GGUF Qwen3.8-27B-UD-Q4_K_XL.gguf --revision 4ca720788d1e01f1bff70c033e0d0028fd02e502)
+PROJECTOR=$(hf download TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8 ridgefill-projector-qwen3.8-27b-i8-S16.gguf)
+printf '%s  %s\n' 8646d41a5a28d60ef53cc5e1fee4b2bfb20d0775db88d3f89d0731ad9f6b629d "$PROJECTOR" | sha256sum -c -
+```
+
+Build with CMake using CUDA (requires the CUDA toolkit) or Vulkan (requires the Vulkan SDK); see [build dependencies](docs/build.md):
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_CUDA=ON
+# For Vulkan, use this configure command instead:
+# cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DGGML_VULKAN=ON
+cmake --build build --config Release -j --target llama-server
+```
+
+Start the server with E3 settings (thinking off, F16 KV, one slot):
+
+```sh
+./build/bin/llama-server -m "$MODEL" -c 131072 -ngl 99 -fa on \
+    -ctk f16 -ctv f16 -b 2048 -ub 512 --parallel 1 \
+    --cache-reuse 0 --cache-ram 0 --port 8080 \
+    --chat-template-kwargs '{"enable_thinking":false}' \
+    --ridgefill "$PROJECTOR" \
+    --ridgefill-mode quality+qattn \
+    --ridgefill-tail 4096 \
+    --ridgefill-min-prompt 8192 \
+    --ridgefill-share 0.5 \
+    --ridgefill-digits on \
+    --ridgefill-special-exact on \
+    --ridgefill-alpha 0 \
+    --ridgefill-qattn-share 0.2 \
+    --ridgefill-qattn-window 64 \
+    --ridgefill-header-rows 0 \
+    --ridgefill-qattn-window-mode last \
+    --ridgefill-qattn-turn-cap 256 \
+    --ridgefill-s1-window 256 \
+    --ridgefill-s1-factor 1.0 \
+    --ridgefill-vtail on \
+    --ridgefill-vtail-rows 512 \
+    --ridgefill-lexical on \
+    --ridgefill-lexical-window 64 \
+    --ridgefill-lexical-min-words 4 \
+    --ridgefill-lexical-span-rows 80 \
+    --ridgefill-lexical-max-occurrences 2 \
+    --ridgefill-trim-kv on
+```
+
+For lower VRAM use, add `--ridgefill-stream-projector on` to the server command. The server listens at `http://127.0.0.1:8080`; use `/v1/chat/completions` with an OpenAI-compatible client. Prompts shorter than 8192 tokens run exact. See [measured TTFT, VRAM and quality](#measured-qwen38-27b-results) before choosing a context size.
+
+### Modes and row selection
 
 The source projector uses split 16 of 64 layers, exact tail 4096, minimum tail 512, and minimum prompt 8192. Defaults come from the projector: alpha 0, class share 0.5, digits on, question-attention share 0.2. A format-2 GGUF checks every model fingerprint field and the vocabulary token hash; the tokenizer JSON hash and source file hashes are retained as provenance. A different quantization of the same base model is allowed.
 
-| mode | exact prefix rows R | implemented/tested status |
+| mode | exact prefix rows R | availability |
 |---|---|---|
-| `off` | all prompt rows run stock | no approximate prefill; tiny off controls passed |
-| `speed` | empty | tiny CPU G1 passed at alpha 0/1; row-selector flags do not add exact rows |
-| `quality` | union of class and digit rows | implemented at alpha 0; 24-document tuning NLL measured below; tuning bar FAIL |
-| `quality+qattn` | quality rows plus question-attention rows | server and native scorer implemented at alpha 0; tuning NLL bar PASS; measured TTFT/needles below; bench/perplexity refuse this mode |
+| `off` | all prompt rows run stock | no approximate prefill |
+| `speed` | empty | row-selector flags do not add exact rows |
+| `quality` | class and digit rows, plus enabled special/header rows | alpha 0 |
+| `quality+qattn` | quality rows plus question-attention rows; S1 and lexical selection when enabled | server/scorer; alpha 0; bench/perplexity refuse this mode |
 
 For a prompt of N tokens and exact tail T, P=max(0,N-T) is the prefix length. Selection is per prompt, not per prefill chunk:
 
@@ -47,83 +100,73 @@ Speed mode writes attention KV and GDN convolution/recurrent state from each pre
 
 ### Measured Qwen3.8-27B results
 
-These are lane Q's measurements from REPORT-Q.md (2026-10-20, 22:05 CDT). Machine: AMD Ryzen 5 9600X and one AMD Radeon AI PRO R9700. Vulkan uses RADV GFX1201; HIP uses the ROCm 7.10.0a20251120 TheRock SDK with Clang 22.0.0. Host C/C++ is GNU 16.2.1. The model is `Qwen3.8-27B-UD-Q4_K_XL.gguf`, 17548181504 bytes, SHA256 `3f227079003add2511437e5b1e94812e363385225bf6a9b47b0054a72bc8b01e`; the split-16 projector is identified below. Builds are Release, based on upstream `1242be66f`. Every comparison uses a mode-off control from the same build and backend, with the projector loaded in both arms.
+| Setup | Value |
+|---|---|
+| Source | `ridgefill-results-compendium-20261026/e3-27b/RESULTS-E3.md`, 2026-10-26 |
+| Hardware | 4x NVIDIA A100 PCIe 40 GB; LongBench on a separate machine with the same GPU model |
+| Backend | CUDA, sm_80 |
+| Stock | upstream llama.cpp `1242be66f` |
+| RidgeFill | E3, final build; runtime `b0439f7bb`, scorer `b70b0c5b4` |
+| Model | `Qwen3.8-27B-UD-Q4_K_XL.gguf`, revision `4ca720788d1e01f1bff70c033e0d0028fd02e502` |
+| Runtime | `-b 2048 -ub 512`, F16 KV, flash attention on, cache reuse off |
+| Confidence intervals | 95% bootstrap, 10,000 resamples, seed 1; paired items for RULER/LongBench, documents for KL/dNLL |
 
-| measurement | build commit / build number | backend |
-|---|---|---|
-| speed prefill, decode and streaming TTFT | `6dac68bca` / 11811 | Vulkan and HIP native bench; Vulkan TTFT |
-| Tier 3 streaming TTFT and needles | `e3fc64ef2` / 11857 | Vulkan |
-| all three modes' native NLL | `36bf1218f` / 11859 | Vulkan |
+#### TTFT and VRAM (warm, median of 3, same GPU)
 
-Common runtime settings: `-ngl 99 -fa on -ctk f16 -ctv f16 -b 2048 -ub 512 -t 4`, one sequence, split 16, T=4096 and alpha=0. Quality adds class share 0.5 and digits on; Tier 3 adds qattn share 0.2, window 64 and blind off. The sweep's h_S is F16; the scorer expresses these types as `--cache-type f16 --h-type f16`. Each instrument's additional settings and repeat counts follow.
-
-**G4 native prefill:** mean tokens/s across three separate timed processes per arm, alternating off/speed, speed/off, off/speed. Each process uses `-p N -n 0 -r 1 -o jsonl`; native warmup is enabled and excluded. Values after +/- are sample standard deviations, not confidence intervals.
-
-| backend | mode | build | prompt tokens | stock off tokens/s | candidate tokens/s | candidate / stock |
+| Context | Stock s | E3 GPU s | E3 GPU speedup | E3 streamed s | E3 streamed speedup | VRAM over stock, GPU / streamed (MiB) |
 |---|---|---|---|---|---|---|
-| Vulkan / RADV | speed | `6dac68bca` | 8192 | 1109.166113 +/- 13.273352 | 1535.722486 +/- 1.927811 | 1.384574x |
-| Vulkan / RADV | speed | `6dac68bca` | 16384 | 1062.330660 +/- 5.392335 | 1856.252181 +/- 1.812477 | 1.747339x |
-| Vulkan / RADV | speed | `6dac68bca` | 32768 | 986.738162 +/- 1.462639 | 2015.278014 +/- 1.498124 | 2.042364x |
-| HIP / ROCm 7.10.0a20251120 | speed | `6dac68bca` | 8192 | 919.448272 +/- 5.549820 | 1194.427135 +/- 5.084983 | 1.299069x |
-| HIP / ROCm 7.10.0a20251120 | speed | `6dac68bca` | 16384 | 882.038781 +/- 1.783686 | 1372.149912 +/- 15.232679 | 1.555657x |
-| HIP / ROCm 7.10.0a20251120 | speed | `6dac68bca` | 32768 | 830.496230 +/- 0.384159 | 1467.261410 +/- 5.688077 | 1.766729x |
+| 16,384 | 12.97 | 10.38 | 1.249 | 10.88 | 1.192 | 1592 / 268 |
+| 32,768 | 27.49 | 21.11 | 1.302 | 21.69 | 1.267 | 1802 / 478 |
+| 65,536 | 60.50 | 46.28 | 1.307 | 46.55 | 1.300 | 2270 / 944 |
+| 120,000 | 128.10 | 100.01 | 1.281 | 99.06 | 1.293 | 3014 / 1732 |
 
-The speed-mode analytic MAC ceilings at 8K/16K/32K are 1.433150x/1.840689x/2.174029x. They include GDN convolution/scan arithmetic and exclude norms, pointwise work, RoPE and memory traffic; they are not wall-clock guarantees. Native prefill for quality and quality+qattn is NOT RUN on either backend; llama-bench refuses quality+qattn by name.
+#### RULER (official budgets)
 
-**G4 streaming TTFT:** seconds to the first generated token, three paired repetitions per arm and length, one excluded warmup per arm/length. The server uses context 33792, one slot, `--cache-ram 0 --no-warmup`; each request has `cache_prompt=false` and `n_predict=1`. Values after +/- are sample standard deviations. Each row retains its own measured stock control.
+| Context | n | Stock % [CI] | E3 % [CI] | Delta points [CI] |
+|---|---|---|---|---|
+| 16,384 | 260 | 85.69 [83.15, 88.04] | 84.51 [81.87, 87.00] | -1.19 [-3.13, +0.79] |
+| 32,768 | 260 | 87.85 [85.46, 90.04] | 86.42 [83.88, 88.81] | -1.42 [-3.21, +0.35] |
 
-| backend | mode | build | prompt tokens | stock off seconds | candidate seconds | stock / candidate |
-|---|---|---|---|---|---|---|
-| Vulkan / RADV | speed | `6dac68bca` | 8192 | 7.537798 +/- 0.036793 | 5.438809 +/- 0.017547 | 1.385928x |
-| Vulkan / RADV | speed | `6dac68bca` | 16384 | 15.637596 +/- 0.017706 | 8.962633 +/- 0.005620 | 1.744755x |
-| Vulkan / RADV | speed | `6dac68bca` | 32768 | 33.426977 +/- 0.011801 | 16.410729 +/- 0.006820 | 2.036898x |
-| Vulkan / RADV | quality+qattn | `e3fc64ef2` | 8192 | 7.459345 +/- 0.062714 | 6.546534 +/- 0.035149 | 1.139434x |
-| Vulkan / RADV | quality+qattn | `e3fc64ef2` | 16384 | 15.556874 +/- 0.022621 | 12.208560 +/- 0.012700 | 1.274260x |
-| Vulkan / RADV | quality+qattn | `e3fc64ef2` | 32768 | 33.241329 +/- 0.022334 | 25.502722 +/- 0.005813 | 1.303442x |
+#### LongBench v2 (official CoT, full length)
 
-Quality TTFT is NOT RUN on Vulkan or HIP. HIP TTFT for speed and Tier 3 is NOT RUN: the upstream HIP server hung during warmup and was killed; no timed result was accepted. Tier 3 native prefill throughput is not inferred from server TTFT.
+| Group | n | Stock % | E3 % | Delta points |
+|---|---|---|---|---|
+| overall | 503 | 38.57 | 37.18 | -1.39 [-5.17, +2.19] |
+| easy | 192 | 42.71 | 40.62 | -2.08 |
+| hard | 311 | 36.01 | 35.05 | -0.96 |
+| short | 180 | 46.11 | 44.44 | -1.67 |
+| medium | 215 | 38.14 | 36.74 | -1.40 |
+| long | 108 | 26.85 | 25.93 | -0.93 |
+| Single-Document QA | 175 | 44.00 | 42.29 | -1.71 |
+| Multi-Document QA | 125 | 30.40 | 34.40 | +4.00 |
+| Long In-context Learning | 81 | 38.27 | 30.86 | -7.41 |
+| Long-dialogue History | 39 | 48.72 | 41.03 | -7.69 |
+| Code Repository | 50 | 34.00 | 34.00 | 0.00 |
+| Long Structured Data | 33 | 36.36 | 36.36 | 0.00 |
 
-**G4 decode:** with `-p 0 -n 128`, three separate measurements per arm on `6dac68bca`, Vulkan stock/speed means are 31.045438/30.825002 tokens/s (0.992900x); HIP stock/speed means are 29.255828/29.262585 tokens/s (1.000231x). Both mean ratios meet the +/-1% decode bar. Quality and Tier 3 decode benchmarks are NOT RUN.
+#### KL and dNLL on post-prompt tokens (100 documents per length, 51,200 positions)
 
-**G3 NLL:** 24 raw-text tuning documents, eight each from encyclopedia, papers and prose, cut to 16384 tokens; score the final 512 targets. The primary estimator is the reference-compatible novel-token mean: exclude repeated 8-token spans with `kva.data.novel_mask`, then weight each document equally. One whole-document native prefill per arm/document uses [llama-ridgefill-score](tools/ridgefill/README.md), context 16896 and F16 KV/h_S. For NLL, `--qattn-window-end 15872` freezes selection at [15808,15872), before target IDs [15872,16384); no scored target influences selection. Quality and speed share the saved same-session off controls from the Tier 3 jobs.
-
-NLL values and deltas are nats per novel token. Paired BCa intervals use all 24 document deltas, 5000 resamples, seed 20261004. The tuning bar is **one-sided 95% upper <= +0.00995**. That upper is the upper endpoint of the central 90% BCa interval; the two-sided 95% interval is reported separately.
-
-| mode | stock off mean | candidate mean | candidate - stock | two-sided 95% BCa | one-sided 95% upper | tuning NLL bar |
-|---|---|---|---|---|---|---|
-| quality+qattn | 1.883891079 | 1.889337384 | +0.005446305 | [+0.001662961,+0.010649454] | +0.009789065 | PASS |
-| quality | 1.883891079 | 1.904015577 | +0.020124498 | [+0.009833257,+0.033912766] | +0.031551826 | FAIL |
-| speed | 1.883891079 | 1.914023519 | +0.030132440 | [+0.017180030,+0.045889920] | +0.043318243 | FAIL |
-
-**G3 needles:** Vulkan measurements use same-job stock controls. On `e3fc64ef2`, each of 48 tuning needles receives one request per arm, context 16896, greedy generation for 32 tokens, appended answer IDs removed, Qwen thinking-off chat template and seven-digit boundary scoring. The earlier speed HTTP run stopped after 24 of 48 needles; its subset is not a full-set result.
-
-| mode | build | paired needles | stock correct | candidate correct | accuracy delta (percentage points) | 95% paired BCa (percentage points) | status |
+| Context | Mean KL [CI] | Median KL | p99 KL | Max KL | Top-1 agreement % | Mean dNLL [CI] | Median dNLL |
 |---|---|---|---|---|---|---|---|
-| quality+qattn | `e3fc64ef2` | 48/48 | 48/48 | 48/48 | 0 | [0,0] | MEASURED |
-| speed | `6dac68bca` | 24/48 | 24/24 | 23/24 | -4.166667 | [-20.833333,0] | PARTIAL |
-| quality | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN | NOT RUN |
+| 16,384 | 0.0894 [0.0399, 0.1556] | 0.0040 | 0.965 | 35.2 | 94.64 | -0.0330 [-0.0875, +0.0059] | +0.0044 |
+| 32,768 | 0.2656 [0.0599, 0.6017] | 0.0042 | 12.77 | 33.0 | 93.60 | -0.2142 [-0.5629, -0.0025] | +0.0071 |
 
-Tier 3's interval is degenerate and is not a general noninferiority guarantee. HIP G3 NLL/needles are NOT RUN.
+#### Multi-user (16K new request among C users; E3 streamed; 2 repetitions; one GPU)
 
-**Recommended experimental baseline: Tier 3 (`quality+qattn`), alpha 0**, with the defaults above. It is the only measured mode meeting the tuning NLL bar, and its 48 tuning needles all succeed. This recommendation does not establish held-out confirmation. In separate held-out reference runs, the four chat-template documents show mean Tier 3 degradation of **+0.291 nats per novel token**; the registered held-out confirmation was REFUTED. That is a reference result, not an engine measurement, and chat-template quality is a material limitation despite the tuning needles succeeding. The cause and a general fix have not been established.
-
-Full-model engine/reference agreement also remains limited: G2-as-written is INCONCLUSIVE because the wrong-map control is not separable, the registered G2-shift amendment is FAIL, and Tier 3 row unions differ from the reference. The tuning NLL bar does not resolve these checks or establish an overall release verdict.
-
-| backend / placement | measured status | remaining scope |
-|---|---|---|
-| CPU | tiny oracle/tool and clean archive/refusal gates passed | 27B CPU measurements NOT RUN |
-| Vulkan / one GPU | speed G4; Tier 3 TTFT/needles; all-mode native NLL measured above | quality G4, full held-out engine G3 and GPU archive gate NOT RUN |
-| HIP / one GPU | speed native prefill/decode G4 measured above | server TTFT, G3, quality G4 and GPU archive gate NOT RUN |
-| Vulkan / two GPUs | NOT RUN | coordinator's separate layer-split smoke |
-| CUDA | NOT RUN | no Qwen35 RidgeFill backend gate run |
-| Metal | NOT RUN | no Qwen35 RidgeFill backend gate run |
+| Schedule | New request TTFT s, stock / E3 | Other users tok/s, stock / E3 | Other users ITL mean ms | Other users ITL p99 ms | Other users ITL max ms |
+|---|---|---|---|---|---|
+| unified C1 | 13.06 / 11.11 | - | - | - | - |
+| unified C2 | 13.53 / 11.70 | 19.92 / 21.60 | 49.33 / 45.50 | 1605.7 / 863.0 | 1707.8 / 1317.1 |
+| unified C4 | 14.18 / 12.22 | 60.06 / 62.96 | 46.47 / 44.20 | 148.0 / 669.0 | 1785.0 / 1323.7 |
+| unified C8 | 15.32 / 13.53 | 86.90 / 89.48 | 71.58 / 69.35 | 621.7 / 774.9 | 1919.6 / 1876.1 |
+| separate KV C2 | 13.48 / 11.34 | 19.91 / 21.87 | 49.38 / 44.90 | 1592.2 / 858.3 | 1703.4 / 1310.7 |
+| separate KV C8 | 13.93 / 11.86 | 88.88 / 91.98 | 69.84 / 67.46 | 584.7 / 654.3 | 1821.1 / 1809.6 |
 
 ### Projector conversion
 
-The planned release location is `TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8`; publication is pending. Projector: Dylan Johnston and tcclaviger, Apache-2.0, DOI `10.5281/zenodo.23179168`. The converted artifact is `ridgefill-projector-qwen3.8-27b-i8-S16.gguf`: Q8_0 maps, F32 biases/corrections/row scores, 1452188032 bytes, SHA256 `8646d41a5a28d60ef53cc5e1fee4b2bfb20d0775db88d3f89d0731ad9f6b629d`.
+Download the projector from [TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8). Projector: Dylan Johnston and tcclaviger, Apache-2.0, DOI `10.5281/zenodo.23179168`. The converted artifact is `ridgefill-projector-qwen3.8-27b-i8-S16.gguf`: Q8_0 maps, F32 biases/corrections/row scores, 1452188032 bytes, SHA256 `8646d41a5a28d60ef53cc5e1fee4b2bfb20d0775db88d3f89d0731ad9f6b629d`.
 
 ```sh
-# Once the release is published:
 hf download TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8 ridgefill-projector-qwen3.8-27b-i8-S16.gguf --local-dir projector
 
 # Or convert the verified int8 source folder, with NumPy and safetensors installed:
@@ -155,6 +198,7 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 | `--ridgefill-min-prompt N` | 8192 | shorter prompts are not filled; CLI/server/perplexity only |
 | `--ridgefill-mode MODE` | speed with a projector | off, speed, quality, quality+qattn; availability above |
 | `--ridgefill-stream-projector on\|off` | off | quality+qattn server/scorer: host maps, two staging maps per device, layer-major late prefix; alpha 0 only |
+| `--ridgefill-trim-kv on\|off` | on | reuse S1 bulk K/V in the late sweep |
 | `--ridgefill-share N` | projector (27B: 0.5) | per-prompt class-row share in [0,1] |
 | `--ridgefill-digits on\|off` | projector (27B: on) | add digit rows in quality |
 | `--ridgefill-lexical on\|off` | off | quality+qattn server/scorer: reserve rare question-matching word phrases and their containing units, within a 5% prefix cap |
@@ -179,9 +223,9 @@ With no projector, processing is stock. `--ridgefill FILE` defaults to speed mod
 llama-server -m model.gguf -c 32768 -ngl 99 --ridgefill projector.gguf --ridgefill-mode speed --ridgefill-tail 4096
 ```
 
-In experimental turn mode (`--qattn-window-mode turn`, alias `--ridgefill-qattn-window-mode`), the driver parses the literal `<|im_start|>user\n` with special tokens enabled and no BOS. It finds the last complete header entirely before END, excludes the header, and captures `[max(turn_start, END-cap), END)`. END is the prompt end for HTTP and N-K for native NLL, which excludes scored targets from selection. Missing/empty user turns and turn plus blind selection refuse by name. Turn mode has no measured full-model chat quality verdict; release remains on hold. Defaults remain last/64 with special-exact off and header-rows 0.
+In experimental turn mode (`--qattn-window-mode turn`, alias `--ridgefill-qattn-window-mode`), the driver parses the literal `<|im_start|>user\n` with special tokens enabled and no BOS. It finds the last complete header entirely before END, excludes the header, and captures `[max(turn_start, END-cap), END)`. END is the prompt end for HTTP and N-K for native NLL, which excludes scored targets from selection. Missing/empty user turns and turn plus blind selection refuse by name. The E3 measurements above use last-window mode; turn-mode quality is not measured there. Defaults remain last/64 with special-exact off and header-rows 0.
 
-Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. For question-attention, use `--ridgefill-mode quality+qattn --ridgefill-qattn-share 0.2 --ridgefill-qattn-window 64 --ridgefill-alpha 0` on llama-server. Tier 3 is the recommended RidgeFill mode, subject to the raw-text tuning scope and chat-template limitation above.
+Quality settings are `--ridgefill-mode quality --ridgefill-share 0.5 --ridgefill-digits on --ridgefill-alpha 0`. For question-attention, use `--ridgefill-mode quality+qattn --ridgefill-qattn-share 0.2 --ridgefill-qattn-window 64 --ridgefill-alpha 0` on llama-server. For the recommended E3 configuration, use the complete [quick-start command](#quick-start-qwen38-27b), including S1, vtail and lexical settings.
 
 | per-request field | effect |
 |---|---|
@@ -346,7 +390,7 @@ cmake --build build --config Release -j
 ```
 
 RidgeFill uses only standard ggml ops (matrix multiplication, add, RMS norm, RoPE, KV-cache writes), so it should run
-on every backend. **Tested: CPU and CUDA.** Metal, Vulkan, ROCm/HIP and SYCL are expected to work but are untested.
+on every backend. **Tested: CPU, CUDA and Vulkan.** The final Qwen3.8-27B tables above use CUDA; earlier HIP native speed-mode measurements also exist. Metal and SYCL are untested.
 
 ## Get a projector
 
@@ -362,14 +406,15 @@ python convert_ridgefill_to_gguf.py llama-3.1-8b-instruct-sweep-s12.safetensors 
 `--base` is the Hugging Face model directory the projector was fitted for (only its `config.json` is read). The GGUF
 records the split, the layer count, the hidden size and the sha256 of the source file.
 
-Ready projectors (Dylan: TODO where they are hosted):
+Projectors:
 
-| model | split | file | size |
-|---|---|---|---|
-| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-bf16.gguf` | 671 MB |
-| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-q8_0.gguf` | 357 MB |
-| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-bf16.gguf` | 772 MB |
-| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-q8_0.gguf` | 410 MB |
+| model | split | file | size | availability |
+|---|---|---|---|---|
+| Qwen3.8-27B | 16 of 64 | `ridgefill-projector-qwen3.8-27b-i8-S16.gguf` | 1452188032 bytes | [TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8) |
+| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-bf16.gguf` | 671 MB | not published yet |
+| Llama-3.1-8B-Instruct | 12 of 32 | `llama-3.1-8b-instruct-s12-q8_0.gguf` | 357 MB | not published yet |
+| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-bf16.gguf` | 772 MB | not published yet |
+| Qwen3-8B | 13 of 36 | `qwen3-8b-s13-q8_0.gguf` | 410 MB | not published yet |
 
 The projector works with any quantization of its model (F16, Q8_0, Q4_K_M were measured).
 
@@ -435,16 +480,13 @@ Batches and ubatches may be split anywhere: the fork never mixes filled and exac
 
 ## Limits
 
-- The earlier validated paths are dense Llama (`llama`) and dense Qwen3 (`qwen3`). Qwen3.8-27B (`qwen35`) measurements and limitations are described above. MoE, sliding-window attention, other hybrid architectures, multimodal RidgeFill inputs and Llama 4 remain unsupported.
-- Approximate: outputs differ from normal llama.cpp. Quality drops with the share of the prompt that is filled.
-- No speedup for short prompts: below `--ridgefill-min-prompt`, or when the prompt is not longer than the tail,
-  nothing is filled. The speedup grows with prompt length (analytic ceiling about 1.35x at 8K, 1.67x at 16K and 1.93x
-  at 32K for split 12 of 32 with T = 4096).
-- Not combined with LoRA adapters, control vectors, embeddings or reranking (refused), with requests that need
-  logits inside the prompt (for example MTP drafting: those prompts are computed exactly), or with media inputs.
-- The approximate prompt cache rules above; nonzero `--cache-reuse` refused by name; slot save refused for filled slots.
-- The projector adds its size to memory (671 MB bf16 / 357 MB q8_0 for Llama-3.1-8B), on the same device as the
-  layers it serves.
+- S1/vtail quality mode supports architecture `qwen35` only, using the server or native scorer with `quality+qattn`. The earlier dense Llama (`llama`) and Qwen3 (`qwen3`) paths do not support S1/vtail. MoE, sliding-window attention, other hybrid architectures, multimodal RidgeFill inputs and Llama 4 remain unsupported.
+- The output is not identical to stock. E3 changes RULER by -1.2/-1.4 percentage points at 16K/32K and LongBench v2 by -1.4 points. Top-1 token agreement on post-prompt tokens is about 94% (94.64% at 16K, 93.60% at 32K); see the [results and intervals](#measured-qwen38-27b-results).
+- Prompts under `--ridgefill-min-prompt` run exact, including requests with `ridgefill: true`. Prompts no longer than the exact tail also run exact.
+- Draft models (`--model-draft` / `-md`) and MTP (`--spec-type draft-mtp`) are refused at startup when a RidgeFill projector is loaded.
+- LoRA adapters, control vectors, embeddings and reranking are refused. Filled prompt tokens cannot request logits; media inputs are unsupported.
+- The approximate prompt cache rules above apply; nonzero `--cache-reuse` is refused, and slot save is refused for filled slots.
+- Budget extra memory for the first filled prompt, beyond stock model and KV allocations. The [VRAM table](#ttft-and-vram-warm-median-of-3-same-gpu) reports overhead of 1592-3014 MiB with resident maps and 268-1732 MiB with streamed maps across 16K-120K contexts. TTFT in that table is measured after warmup.
 
 ## Tests
 
@@ -463,7 +505,7 @@ Batches and ubatches may be split anywhere: the fork never mixes filled and exac
 
 ### Experimental S1/vtail
 
-The release remains ON HOLD. The settings and reporting contract are defined against RF27 C API v2. A build without that API refuses enabled S1/vtail by name. Enabled scorer and HTTP paths pass the tiny CPU reference gates; GPU behavior and 27B quality/speed are not established by these checks. CLI, bench and perplexity refuse these features because they use a single-pass prefill. Server/scorer require quality+qattn. S1 requires a positive qattn share and header_rows=0; it refuses blind/overlapping/empty windows and windows beyond LOWER rows. Vtail requires a positive sample count and a first tail ubatch large enough for min(C, tail). Existing qwen35-only, LoRA, control-vector, embedding/non-causal, recurrent-rollback and replay-order restrictions still apply.
+The settings and reporting contract are defined against RF27 C API v2. A build without that API refuses enabled S1/vtail by name. Enabled scorer and HTTP paths pass the tiny CPU reference gates; the final 27B CUDA measurements are [above](#measured-qwen38-27b-results). CLI, bench and perplexity refuse these features because they use a single-pass prefill. Server/scorer require quality+qattn. S1 requires a positive qattn share and header_rows=0; it refuses blind/overlapping/empty windows and windows beyond LOWER rows. Vtail requires a positive sample count and a first tail ubatch large enough for min(C, tail). Existing qwen35-only, LoRA, control-vector, embedding/non-causal, recurrent-rollback and replay-order restrictions still apply.
 
 S1 replaces the base class/digit/header/qattn union with its mass-ranked rows, then unions special rows when requested. Reporting attributes final exact rows to special and S1, rather than claiming the discarded base rows were kept. The driver supplies completed S1 window bounds, the actual dense probe pair count and the actual vtail sample count. Missing execution metadata is refused. Disabled features retain the previous reporting JSON shape and MAC totals.
 
@@ -483,7 +525,7 @@ The common CLI, server HTTP and native scorer expose `ridgefill_lexical_window`,
 
 The report records the resolved rule/Unicode version/parameters, window, sorted rows, matched cores, reserved unit spans, rare anchors and occurrence counts, candidates, cap and clipped/oversize counters. `capped` means a whole span was refused by the 5% cap. `clipped` counts unit truncations; `oversize_skipped` counts cores lost by truncation. Lexical rows have first attribution in disjoint source counts and count as exact in token and MAC totals. The production selector must match all 68 frozen Q6 expected-row fixtures before an engine smoke; these CPU fixtures establish selector parity, not inference quality.
 
-The net requires quality+qattn with positive qattn share. It reserves rows within the existing base/S1 row budget instead of adding rows above it. A budget smaller than the lexical set (or the base/lexical union in ordinary qattn) is refused by name; S1 retains its existing special-row union. Lexical off keeps the previous selection and report shape. This change has no decode-path or GPU-kernel changes; quality remains subject to lane Q's separate screen.
+The net requires quality+qattn with positive qattn share. It reserves rows within the existing base/S1 row budget instead of adding rows above it. A budget smaller than the lexical set (or the base/lexical union in ordinary qattn) is refused by name; S1 retains its existing special-row union. Lexical off keeps the previous selection and report shape. The E3 measurements above use this selector with the recommended defaults.
 
 ### Experimental projector streaming
 

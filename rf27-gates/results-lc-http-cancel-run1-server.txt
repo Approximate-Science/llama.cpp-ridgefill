@@ -4,7 +4,7 @@ warning: consult docs/build.md for compilation instructions
 0.00.004.170 I srv  llama_server: initializing ...
 0.00.004.182 I cmn  common_param: common_params_print_info: verbosity = 3 (adjust with the `-lv N` CLI arg)
 0.00.004.451 W srv  llama_server: security: no API key is set and CORS allows all origins (see https://github.com/ggml-org/llama.cpp/pull/25655)
-0.00.005.784 I srv    load_model: loading model '/var/home/dylan/projects/inference/llama.cpp-ridgefill/rf27-gates/integ-work/gate1-qwen35/tiny-qwen35-f32.gguf'
+0.00.005.784 I srv    load_model: loading model '<work>/llama.cpp-ridgefill/rf27-gates/integ-work/gate1-qwen35/tiny-qwen35-f32.gguf'
 0.00.013.869 I cmn  common_init_: RidgeFill: projector-s4 (RidgeFill test fixture; MIT; doi test-fixture), mode quality+qattn, split 4, exact tail 200, min prompt 1
 0.00.013.893 I cmn          init: llama threadpool init, n_threads = 4
 0.00.045.925 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 4096, kv_unified = 'false'

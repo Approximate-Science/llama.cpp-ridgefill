@@ -53,7 +53,7 @@ The temporary harness files are inside the ignored `build-sweep/` directory, sin
 c++ -std=c++17 -O2 -I src -I ggml/include build-sweep/check-sweep.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-sweep
 c++ -std=c++17 -O2 -I src -I include -I ggml/include build-sweep/check-question.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-question
 build-sweep/check-sweep
-PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-mass.py /var/home/dylan/projects/research/kva-wt-q27
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-mass.py <work>/research/kva-wt-q27
 ```
 
 Logs: `build-sweep/build.log`, `build-sweep/check-sweep.log`, `build-sweep/check-mass.log`.
@@ -94,7 +94,7 @@ Read L-A's `RF27-INTERFACE.md`, commit `9e1c3d076`. The proposed `llama_ridgefil
 - L-B supplied the split-4 fixture variant and frozen oracle at `rf27-tools` commit `022983964`; it should adopt the standalone checks into its owned harness. Split 3 with attention at 3/7 contains no lower attention and cannot validate question mass.
 - Next implement lower-sweep execution and slot cache mapping against L-A's landed touch points, then sweeps 2-3 and the server driver after G1 speed.
 
-The initial missing skill path is resolved: read `/var/home/dylan/AI-Work/ridgefill-ports-20261020/skills/build-anything.md` sections 2-4. No GPU, Docker, push, or publication was attempted.
+The initial missing skill path is resolved: read `<work>/AI-Work/ridgefill-ports-20261020/skills/build-anything.md` sections 2-4. No GPU, Docker, push, or publication was attempted.
 
 
 ## 2026-10-20 18:06: real cache integration
@@ -122,7 +122,7 @@ c++ -std=c++17 -O2 -I src -I include -I ggml/include build-sweep/check-cache.cpp
 build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f32 f32
 build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f16 f16
 build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-stream-f32 f32 separate
-PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-cache.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-cache.py <work>/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
 PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-rotation.py
 ```
 
@@ -160,7 +160,7 @@ Commands:
 c++ -std=c++17 -O2 -I src -I ggml/include build-sweep/check-rows.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-rows
 build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f32 f32
 build-sweep/check-cache ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/cache-f16 f16
-PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-frozen.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-frozen.py <work>/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
 ```
 
 These commands exited zero; the test records the FP16 mismatch as a precision measurement and explicitly skips unavailable integration. Log: `build-sweep/check-frozen.log`. The new harness files are local and ignored, ready for L-B to adopt with the other component checks. Production sources did not change in this milestone; the existing CPU build remains green. L-A's inspected tip is `72d79baa7`; LOWER/LATE hooks and the rebase-ready notification are still pending.
@@ -216,7 +216,7 @@ The coordinator authorized L-C to propose the part dispatch, API, extraction and
 Completed the requested FP16 selected-row check with `build-sweep/check-f16-rows.py`. It uses the shared tiny GGUF token text/types, the split-4 `rowsel.safetensors`, and the real engine's FP32/FP16 mass dumps. The C++ selector chooses 100 question rows; oracle `top_rows` independently agrees. Class selection keeps 127 of 254 finite-score prefix rows at share 0.5 with position ties; digit selection returns 20 prefix rows. The union is checked after question rows, so class/digit overlap cannot hide a changed question set.
 
 ```sh
-PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-f16-rows.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-f16-rows.py <work>/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
 ```
 
 ```text
@@ -259,7 +259,7 @@ build-sweep/check-dispatch ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qw
 build-sweep/check-dispatch ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/projector-s4-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tokens.bin build-sweep/dispatch-700 700 512
 PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-dispatch-prefix.py ../llama.cpp-ridgefill-tools build-sweep/dispatch-50 build-sweep/dispatch-128 build-sweep/dispatch-700
 build-sweep/check-dispatch-refusal ../llama.cpp-ridgefill-tools/out/gate1-qwen35/tiny-qwen35-f32.gguf ../llama.cpp-ridgefill-tools/out/gate1-qwen35/projector-s4-f32.gguf
-PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-f16-rows.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-f16-rows.py <work>/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
 build-sweep/check-driver
 git diff --cached --check
 ```
@@ -316,7 +316,7 @@ Commands:
 ```sh
 cmake --build build-sweep --target server-context -j4
 c++ -std=c++17 -O2 -I tools/server -I src -I include -I ggml/include build-sweep/g1-sweep.cpp tools/server/server-ridgefill-sweep.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/g1-sweep
-PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/g1-sweep-oracle.py /var/home/dylan/projects/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
+PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/g1-sweep-oracle.py <work>/research/kva-wt-q27 ../llama.cpp-ridgefill-tools/out/gate1-qwen35
 c++ -std=c++17 -O2 -Wall -Wextra -I tools/server -I include -I ggml/include build-sweep/check-driver.cpp tools/server/server-ridgefill-sweep.cpp -L build-sweep/bin -Wl,-rpath,'$ORIGIN/bin' -lllama -lggml -lggml-cpu -lggml-base -o build-sweep/check-driver
 build-sweep/check-driver
 git diff --check
@@ -510,7 +510,7 @@ PASS existing HTTP: 17 comparisons, zero-share equality, repeat and concurrent-s
 [100%] Built target llama-server
 ```
 
-Commands: `cmake -S . -B build-sweep`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; compile the existing tests/ridgefill/rf_dump.cpp against build-sweep/bin as score-stock-dump (README command); run tools/ridgefill/check_score.py with `--binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --stock-dump build-sweep/score-stock-dump --work build-sweep/score-gate-common`; rebuild the local g1-sweep harness against the extended driver and run g1-sweep-oracle.py and check-http-sweep.py. Evidence: build-sweep/check-score-common.log, check-score-driver-regression.log, check-score-http-regression.log, and score-gate-common/paired/summary.json. The committed gate also checks malformed/out-of-vocabulary token IDs; the final post-commit run is recorded in check-score-release.log.
+Commands: `cmake -S . -B build-sweep`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; compile the existing tests/ridgefill/rf_dump.cpp against build-sweep/bin as score-stock-dump (README command); run tools/ridgefill/check_score.py with `--binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva <work>/research/kva-wt-q27 --stock-dump build-sweep/score-stock-dump --work build-sweep/score-gate-common`; rebuild the local g1-sweep harness against the extended driver and run g1-sweep-oracle.py and check-http-sweep.py. Evidence: build-sweep/check-score-common.log, check-score-driver-regression.log, check-score-http-regression.log, and score-gate-common/paired/summary.json. The committed gate also checks malformed/out-of-vocabulary token IDs; the final post-commit run is recorded in check-score-release.log.
 
 Rejected options: 512 truncated HTTP prompts (512 prefills and a changing selector); a last-64-document selector for the primary result (target leakage); retaining logits for all T tail rows (unneeded output-head work and memory); substituting another bootstrap implementation (would change the registered interval). JSON/JSONL avoids adding an NPY parser. GPU/full-27B validation belongs to lane Q and was not run in this CPU sandbox.
 
@@ -532,7 +532,7 @@ PASS window refusals: zero, negative, malformed, overflowing, beyond document an
 PASS existing zero-share, stock scoring, target replacement and invalid-input controls
 ```
 
-Commands: `cmake --build build-sweep --target llama-ridgefill-score -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_score.py --binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-endpoint --stock-dump build-sweep/score-stock-dump`; `git diff --check`. Logs: build-sweep/build-score-endpoint.log and build-sweep/check-score-endpoint.log. The gate also verifies the wrapper command's numeric endpoint in provenance.json. Invalid numeric endpoints fail with the option name. No GPU or 27B run, and no quality/noninferiority verdict.
+Commands: `cmake --build build-sweep --target llama-ridgefill-score -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_score.py --binary build-sweep/bin/llama-ridgefill-score --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva <work>/research/kva-wt-q27 --work build-sweep/score-gate-endpoint --stock-dump build-sweep/score-stock-dump`; `git diff --check`. Logs: build-sweep/build-score-endpoint.log and build-sweep/check-score-endpoint.log. The gate also verifies the wrapper command's numeric endpoint in provenance.json. Invalid numeric endpoints fail with the option name. No GPU or 27B run, and no quality/noninferiority verdict.
 
 ## 2026-10-20: chat selector controls and last-user-turn window
 
@@ -561,7 +561,7 @@ PASS original scorer gate: 24/24 four-mode comparisons, endpoint/stock/zero-shar
 PASS HTTP defaults: 17 comparisons, zero-share equality, repeat, cancellation/reuse and concurrent slots
 ```
 
-Commands: `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_chat_score.py --binary build-sweep/bin/llama-ridgefill-score --baseline-binary build-sweep/bin/llama-ridgefill-score-before-chat --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-chat-f16`; run the original check_score.py into build-sweep/score-gate-chat-regression; `PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Evidence: build-sweep/build-score-chat.log, check-score-chat-f16.log, check-score-chat-regression.log, check-http-chat-default.log, and score-gate-chat-f16/summary.json. Rejected options: using the 64-row last-window size as the turn cap (different experiment), including header rows in the query window, searching scored future rows, and silently falling back when no user turn exists. CPU correctness only; no GPU/full-model chat quality or release claim.
+Commands: `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; `PYTHONDONTWRITEBYTECODE=1 python3 tools/ridgefill/check_chat_score.py --binary build-sweep/bin/llama-ridgefill-score --baseline-binary build-sweep/bin/llama-ridgefill-score-before-chat --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --kva <work>/research/kva-wt-q27 --work build-sweep/score-gate-chat-f16`; run the original check_score.py into build-sweep/score-gate-chat-regression; `PYTHONDONTWRITEBYTECODE=1 python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Evidence: build-sweep/build-score-chat.log, check-score-chat-f16.log, check-score-chat-regression.log, check-http-chat-default.log, and score-gate-chat-f16/summary.json. Rejected options: using the 64-row last-window size as the turn cap (different experiment), including header rows in the query window, searching scored future rows, and silently falling back when no user turn exists. CPU correctness only; no GPU/full-model chat quality or release claim.
 
 ## 2026-10-21: S1/vtail orchestration draft, blocked on libllama C API v2
 
@@ -622,7 +622,7 @@ PASS HTTP defaults: 17 comparisons, repeat, zero-share equality, cancellation/re
 PASS named refusals: S1 window overlaps prefix; vtail calibration reads NLL targets
 ```
 
-Commands: `git rebase b9a8e5add`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; native harness compile command in tools/ridgefill/README.md (build directory build-sweep); `/var/home/dylan/projects/research/kva-wt-q27/.venv/bin/python tools/ridgefill/check_s1_score.py --binary build-sweep/bin/llama-ridgefill-score --baseline-binary build-sweep/bin/llama-ridgefill-score-before-s1 --native-dump build-sweep/rf-dump-s1 --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --reference /var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail --kva /var/home/dylan/projects/research/kva-wt-q27 --work build-sweep/score-gate-s1-v2-full3`; original check_score.py with work=build-sweep/score-gate-s1-v2-regression; `python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Python checks used PYTHONDONTWRITEBYTECODE=1. Logs: build-sweep/build-s1-v2-cost.log, check-score-s1-v2-full3.log, check-score-s1-v2-regression.log, check-http-s1-v2-default.log; machine-readable new gate result: score-gate-s1-v2-full3/summary.json.
+Commands: `git rebase b9a8e5add`; `cmake --build build-sweep --target llama-ridgefill-score llama-server -j4`; native harness compile command in tools/ridgefill/README.md (build directory build-sweep); `<work>/research/kva-wt-q27/.venv/bin/python tools/ridgefill/check_s1_score.py --binary build-sweep/bin/llama-ridgefill-score --baseline-binary build-sweep/bin/llama-ridgefill-score-before-s1 --native-dump build-sweep/rf-dump-s1 --fixture ../llama.cpp-ridgefill-tools/out/gate1-qwen35 --reference <work>/research/kva-wt-q27/ridgefill-tune/engine-ref/s1-vtail --kva <work>/research/kva-wt-q27 --work build-sweep/score-gate-s1-v2-full3`; original check_score.py with work=build-sweep/score-gate-s1-v2-regression; `python3 build-sweep/check-http-sweep.py ../llama.cpp-ridgefill-tools/out/gate1-qwen35`; `git diff --check`. Python checks used PYTHONDONTWRITEBYTECODE=1. Logs: build-sweep/build-s1-v2-cost.log, check-score-s1-v2-full3.log, check-score-s1-v2-regression.log, check-http-s1-v2-default.log; machine-readable new gate result: score-gate-s1-v2-full3/summary.json.
 
 Harness setup failures were corrected before the final passing run: the native dump initially lacked -DRF27_API and refused quality; the reuse test initially repeated a document name and hit the scorer's input validation; system Python lacked transformers, so the live reference uses its existing environment. No engine fallback or weakened tolerance was introduced.
 

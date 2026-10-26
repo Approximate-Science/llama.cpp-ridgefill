@@ -3,5 +3,5 @@ PASS G0 ppl-off    llama: 34 lines identical (Final estimate: PPL = 301.4395 +/-
 PASS G0 ppl-tgen    llama: 34 lines identical (Final estimate: PPL = 301.4395 +/- 0.71842)
 PASS G0 ppl-off    qwen3: 34 lines identical (Final estimate: PPL = 305.1462 +/- 0.71548)
 PASS G0 ppl-tgen    qwen3: 34 lines identical (Final estimate: PPL = 305.1462 +/- 0.71548)
-SKIPPED G0 qwen35: no fixture at /var/home/dylan/projects/inference/llama.cpp-ridgefill/rf27-gates/lb/out/gate1-qwen35
+SKIPPED G0 qwen35: no fixture at <work>/llama.cpp-ridgefill/rf27-gates/lb/out/gate1-qwen35
 TOTAL PASS 4 FAIL 0 SKIPPED 1

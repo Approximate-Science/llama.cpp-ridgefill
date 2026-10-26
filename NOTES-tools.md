@@ -4,7 +4,7 @@
 
 Read KICKOFF.md, LANE-LLAMACPP.md, SPEC.md, FACTS.md sections 1-3, HANDOVER.md, the repository code-review skill, CONTRIBUTING.md, the existing converter and RIDGEFILL.md, the release manifest, and kva/gguf_ckpt.py.
 
-The required `/var/home/dylan/.claude/skills/build-anything/SKILL.md` was unavailable because `.claude` is hidden. Resolved by reading the coordinator's copy at `/var/home/dylan/AI-Work/ridgefill-ports-20261020/skills/build-anything.md`.
+The required `~/.claude/skills/build-anything/SKILL.md` was unavailable because `.claude` is hidden. Resolved by reading the coordinator's copy at `<work>/AI-Work/ridgefill-ports-20261020/skills/build-anything.md`.
 
 Branch is `rf27-tools`; the initial working tree was clean.
 
@@ -23,8 +23,8 @@ Output: `out/ridgefill-projector-qwen3.8-27b-i8-S16.gguf` (1452188032 bytes). Th
 Commands run from this folder:
 
 ```sh
-python3 convert_ridgefill_to_gguf.py /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/release/ridgefill-projector-qwen3.8-27b-i8/ --model-gguf /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf --outfile out/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
-python3 tests/ridgefill/check_converter.py /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/release/ridgefill-projector-qwen3.8-27b-i8/ out/ridgefill-projector-qwen3.8-27b-i8-S16.gguf --model-gguf /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
+python3 convert_ridgefill_to_gguf.py <work>/AI-Work/ridgefill-q27-projector-20261008/release/ridgefill-projector-qwen3.8-27b-i8/ --model-gguf <models>/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf --outfile out/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
+python3 tests/ridgefill/check_converter.py <work>/AI-Work/ridgefill-q27-projector-20261008/release/ridgefill-projector-qwen3.8-27b-i8/ out/ridgefill-projector-qwen3.8-27b-i8-S16.gguf --model-gguf <models>/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
 python3 tests/ridgefill/test_converter.py -v
 git diff --check
 ```
@@ -70,8 +70,8 @@ Commands and results:
 .venv-oracle/bin/python tests/ridgefill/make_tiny_qwen35.py
 .venv-oracle/bin/python tests/ridgefill/check_converter.py out/gate1-qwen35/projector-s3 out/gate1-qwen35/projector-s3-f32.gguf --model-gguf out/gate1-qwen35/tiny-qwen35-f32.gguf
 .venv-oracle/bin/python tests/ridgefill/check_converter.py out/gate1-qwen35/projector-s4 out/gate1-qwen35/projector-s4-f32.gguf --model-gguf out/gate1-qwen35/tiny-qwen35-f32.gguf
-.venv-oracle/bin/python tests/ridgefill/check_fixture.py --kva /var/home/dylan/projects/research/kva-wt-q27
-tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-wt-q27 --split 3 --mode speed
+.venv-oracle/bin/python tests/ridgefill/check_fixture.py --kva <work>/research/kva-wt-q27
+tests/ridgefill/run_gate1_qwen35.sh --kva <work>/research/kva-wt-q27 --split 3 --mode speed
 ```
 
 Both projector round-trips PASS with zero map error; metadata and wrong-map/head/orientation controls PASS. The oracle fixture checks PASS: alpha-1 prepares 27 reference arrays; the wrong correction orientation differs by maximum absolute 0.233485952; split 3 has no lower attention layers, split 4 has layer 3; question mass sums to 255.999999155 (= 4 heads x 64 queries within tolerance), top rows count 100; moving the query window before the prefix end changes mass by maximum absolute 0.500046968; explicit/default end=700 is byte-identical; the digit selector includes token 269 (`Digit7`) and excludes normal token 259.
@@ -134,7 +134,7 @@ Commands for the live controls and unit tests:
 
 ```sh
 .venv-oracle/bin/python tests/ridgefill/test_eval_client.py -v
-.venv-oracle/bin/python tests/ridgefill/check_eval_live.py --engine-dir out/gate1-engine/72d79baa775d --kva /var/home/dylan/projects/research/kva-wt-q27
+.venv-oracle/bin/python tests/ridgefill/check_eval_live.py --engine-dir out/gate1-engine/72d79baa775d --kva <work>/research/kva-wt-q27
 out/test-tool-args
 ```
 
@@ -145,7 +145,7 @@ Updated RIDGEFILL.md with the Qwen27 section, row rules, planned projector line,
 L-A landed the loader/fill in `45199c4dc`. Built a fresh pinned archive and ran:
 
 ```sh
-tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-wt-q27 --engine-ref 45199c4dc --split 3 --mode speed
+tests/ridgefill/run_gate1_qwen35.sh --kva <work>/research/kva-wt-q27 --engine-ref 45199c4dc --split 3 --mode speed
 ```
 
 ```json
@@ -193,8 +193,8 @@ Quality alpha 0 compares all expected arrays against the independent oracle for 
 Built a clean archive of engine `3ac42957d0bfb7449b11bc77ed82685ef21b7148` with -j4, then ran:
 
 ```sh
-tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-wt-q27 --engine-ref 3ac42957d --split 3 --mode speed
-tests/ridgefill/run_gate1_qwen35.sh --kva /var/home/dylan/projects/research/kva-wt-q27 --engine-ref 3ac42957d --split 3 --mode quality
+tests/ridgefill/run_gate1_qwen35.sh --kva <work>/research/kva-wt-q27 --engine-ref 3ac42957d --split 3 --mode speed
+tests/ridgefill/run_gate1_qwen35.sh --kva <work>/research/kva-wt-q27 --engine-ref 3ac42957d --split 3 --mode quality
 ```
 
 ```json
@@ -212,10 +212,10 @@ Implemented `tests/ridgefill/run_g3.py` with --mode speed|quality|quality+qattn|
 
 NLL scores exactly 512 teacher-forced targets, with n_probs=1 and raw pre-sampling logprob, one target per /completion call. P=N-T remains fixed as the known exact tail grows. Require T-512 >= projector tail_min and N-512 >= min-prompt. The runner reads tail_min from the actual projector GGUF. Native probabilities are never requested for filled prefix rows. Needles strip answer_len IDs before detokenization, use the loaded Qwen chat template with enable_thinking=false and a closed empty assistant think block, and generate greedily. Answers must be seven ASCII digits and match at digit boundaries. Prompt hashes, removed answer counts, thinking/greedy flags and raw answers are retained. TTFT warms both modes and alternates three measurements per length. Native bench alternates prefill and decode runs and refuses unexpected/zero/nonfinite measurements.
 
-Lane Q: after integrating this tools commit and rebuilding the selected engine/tools from one revision, run the following command inside its existing HIP host bridge environment, with cwd `/var/home/dylan/projects/inference/llama.cpp-ridgefill-validate`. The SDK setup/card assignment stays with Q's bridge; this script does not select a physical device.
+Lane Q: after integrating this tools commit and rebuilding the selected engine/tools from one revision, run the following command inside its existing HIP host bridge environment, with cwd `<work>/llama.cpp-ridgefill-validate`. The SDK setup/card assignment stays with Q's bridge; this script does not select a physical device.
 
 ```sh
-python3 tests/ridgefill/run_g3.py --bin-dir build-hip-engine/bin --model /var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf --projector /var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf --mode speed --docs /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/evaldata/nll.jsonl --needles /var/mnt/qwen-storage/dylan/AI-Work/ridgefill-q27-projector-20261008/evaldata/needle.jsonl --out out/g3-hip-speed --kva /var/home/dylan/projects/research/kva-wt-q27 --build-label "$(git rev-parse HEAD)-HIP-f16-fa-off" --gpu-layers 99 --flash-attn off
+python3 tests/ridgefill/run_g3.py --bin-dir build-hip-engine/bin --model <models>/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf --projector <models>/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf --mode speed --docs <work>/AI-Work/ridgefill-q27-projector-20261008/evaldata/nll.jsonl --needles <work>/AI-Work/ridgefill-q27-projector-20261008/evaldata/needle.jsonl --out out/g3-hip-speed --kva <work>/research/kva-wt-q27 --build-label "$(git rev-parse HEAD)-HIP-f16-fa-off" --gpu-layers 99 --flash-attn off
 ```
 
 For Vulkan, change --bin-dir to build-vulkan-engine/bin and the output/build label accordingly. No Python code changes are required. Defaults measure all 24 documents at N=16384, all 48 needles, TTFT and native prefill at 8192/16384/32768, and native tg128. Each output is paired against mode off within the same build, never the separately compiled upstream build. Run mode off as a negative control into a separate --out directory. Quality and quality+qattn flags are accepted, but they must fail by name on an engine lacking their paths. Bench quality+qattn is deliberately unsupported; when that server path lands, Q can explicitly request --metrics nll,needles,ttft instead of bench. No mode is silently substituted. These real-model measurements remain NOT YET MEASURED here.
@@ -223,7 +223,7 @@ For Vulkan, change --bin-dir to build-vulkan-engine/bin and the output/build lab
 End-to-end CPU control command:
 
 ```sh
-.venv-oracle/bin/python tests/ridgefill/check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-tools --kva /var/home/dylan/projects/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/g3-cpu-controls3 --port 18095
+.venv-oracle/bin/python tests/ridgefill/check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-tools --kva <work>/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/g3-cpu-controls3 --port 18095
 ```
 
 The control extracted the actual 9993-byte Qwen3.8 GGUF template (sha256 12827f24b742ea4e80cdc12dbcf9622227056b9f797252a3149263d4f9aaadce) into out/, then used it with the existing tiny model and split-3 projector. Source weights/vocab/projector and the canonical G1 fixture were unchanged. The first attempt used context 1536; the synthetic tokenizer expanded a formatted needle to 3797 tokens, and the server correctly refused it. Increased the tiny control context to 4096 instead of truncating the needle or ignoring the error.
@@ -309,7 +309,7 @@ ty: All checks passed!
 
 Each mode's G3 run completed paired NLL (2 documents, exactly last 512 targets), Qwen3.8 thinking-off greedy needles (2), TTFT, native prefill and tg128 with BCa via kva finals/stats.py. All 512 logprobs of every document/arm matched direct F32 logits. Off/off NLL arrays were identical. Quality was distinct from speed as a positive control. Quality's synthetic NLL delta was 0.0030389586463570595, 95% BCa [0.0027102669700980186, 0.0033676503226161003]; random-model needle deltas were degenerate and are not retrieval evidence. These are instrumentation controls, not 27B release measurements.
 
-Commands/evidence: `cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity -j4`; `check_tool_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --work out/quality-tool-live3 --port 18128`; `check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --kva /var/home/dylan/projects/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/g3-quality-tools2 --port 18123`. Logs: `out/quality-tools-{build,rebuild,typecheck}.log`, `out/quality-perplexity-final-build.log`, `out/quality-tool-live3.json` and its per-case directory, `out/g3-quality-tools2.json` and its mode directories, `out/quality-row-selector-tests.log`, `out/quality-argument-tests.log`, `out/quality-eval-unit-tests.log`. Q can now use the same G3 command with --mode quality and --alpha 0, including native bench metrics, against the integrated rebuild. Real-model cells remain NOT YET MEASURED pending Q's own results.
+Commands/evidence: `cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity -j4`; `check_tool_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --work out/quality-tool-live3 --port 18128`; `check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/rf_dump-quality-tools --kva <work>/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/g3-quality-tools2 --port 18123`. Logs: `out/quality-tools-{build,rebuild,typecheck}.log`, `out/quality-perplexity-final-build.log`, `out/quality-tool-live3.json` and its per-case directory, `out/g3-quality-tools2.json` and its mode directories, `out/quality-row-selector-tests.log`, `out/quality-argument-tests.log`, `out/quality-eval-unit-tests.log`. Q can now use the same G3 command with --mode quality and --alpha 0, including native bench metrics, against the integrated rebuild. Real-model cells remain NOT YET MEASURED pending Q's own results.
 
 Quality enablement is committed at `23da65965e93f361149f0f6fe18a90c062d38d29`. Resumed G5 on that exact commit:
 
@@ -355,24 +355,24 @@ Exact lane-Q bridge commands (submit each as a separate kind=host job, timeout 1
 
 ```sh
 RF_REF=$(git rev-parse rf27-integ)
-RF_MODEL=/var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
-RF_PROJECTOR=/var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
+RF_MODEL=<models>/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
+RF_PROJECTOR=<models>/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
 tests/ridgefill/run_g5_gpu.sh vulkan "$RF_REF" out/gate1-qwen35 "$RF_MODEL" "$RF_PROJECTOR" "out/g5-vulkan-$RF_REF"
 ```
 
 ```sh
 RF_REF=$(git rev-parse rf27-integ)
-RF_MODEL=/var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
-RF_PROJECTOR=/var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
-RF_SDK=/var/home/dylan/projects/inference/strata/.venv/lib64/python3.14/site-packages/_rocm_sdk_devel
+RF_MODEL=<models>/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
+RF_PROJECTOR=<models>/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
+RF_SDK=<work>/strata/.venv/lib64/python3.14/site-packages/_rocm_sdk_devel
 tests/ridgefill/run_g5_gpu.sh hip "$RF_REF" out/gate1-qwen35 "$RF_MODEL" "$RF_PROJECTOR" "out/g5-hip-$RF_REF" "$RF_SDK"
 ```
 
 Coordinator outside the bridge, in lane Q's folder with the Vulkan archive build and both cards visible (set RF_REF to the exact same pinned value as that build; no rebuild):
 
 ```sh
-RF_MODEL=/var/home/dylan/models/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
-RF_PROJECTOR=/var/home/dylan/models/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
+RF_MODEL=<models>/qwen3.8-27b/Qwen3.8-27B-UD-Q4_K_XL.gguf
+RF_PROJECTOR=<models>/qwen3.8-27b/projector/ridgefill-projector-qwen3.8-27b-i8-S16.gguf
 tests/ridgefill/run_g5_two_card.sh "out/g5-vulkan-$RF_REF/build/bin" "$RF_REF" "$RF_MODEL" "$RF_PROJECTOR" "out/g5-two-card-$RF_REF"
 ```
 
@@ -434,11 +434,11 @@ The suite includes an explicit missing-rg positive/negative control in addition 
 
 ## 2026-10-20: publish lane-Q measurements in RIDGEFILL.md
 
-Rebased onto integration ee79ee49e, which includes L-C's native scorer. Replaced the Qwen3.8-27B NOT YET MEASURED placeholders with lane Q's measured results from /var/home/dylan/projects/inference/llama.cpp-ridgefill-validate/REPORT-Q.md (updated 22:05:34 CDT). Source SHA256: d7dd86f97d1f95655bc9cff35f7f1925f4805d559a249ba6a52d79c23944ce37. Documented the R9700/9600X machine, RADV and ROCm SDK, model filename/bytes/SHA256, the separate measured build IDs, flags and repeat counts. Native speed prefill is measured on both backends; speed and Tier 3 streaming TTFT are measured on Vulkan. Preserved every unrun mode/backend as NOT RUN rather than inventing measurements or deriving native Tier-3 throughput from server TTFT.
+Rebased onto integration ee79ee49e, which includes L-C's native scorer. Replaced the Qwen3.8-27B NOT YET MEASURED placeholders with lane Q's measured results from <work>/llama.cpp-ridgefill-validate/REPORT-Q.md (updated 22:05:34 CDT). Source SHA256: d7dd86f97d1f95655bc9cff35f7f1925f4805d559a249ba6a52d79c23944ce37. Documented the R9700/9600X machine, RADV and ROCm SDK, model filename/bytes/SHA256, the separate measured build IDs, flags and repeat counts. Native speed prefill is measured on both backends; speed and Tier 3 streaming TTFT are measured on Vulkan. Preserved every unrun mode/backend as NOT RUN rather than inventing measurements or deriving native Tier-3 throughput from server TTFT.
 
 Copied the full 24-document native reference-compatible novel-token NLL means, deltas, two-sided 95% BCa intervals, one-sided 95% uppers and the +0.00995 tuning bar verdict. Explicitly distinguished this estimator from the earlier all-token HTTP path, kept shared off controls and target-excluding qattn endpoint visible, and did not conflate tuning with held-out confirmation. Tier 3 alone meets that tuning NLL bar. Included all 48 Tier-3 tuning needles and the explicitly partial 24-of-48 speed needle result; no full quality/held-out claim follows from a degenerate interval. Retained the G2 inconclusive/shift-fail limitations from Q's report.
 
-The requested chat-template limitation was verified against /var/home/dylan/projects/research/kva-wt-q27/ridgefill-tune/REFERENCE-ARMS.md, SHA256 6427515b5043bca015070e52a585efcaa6a23643d3e80b2e60d2626e4fceca76: the four templated held-out reference documents average +0.291 nats per novel token for Tier 3, and registered confirmation is REFUTED. This is explicitly attributed to the reference, not claimed as a new engine result. Tier 3 is recommended among RidgeFill modes subject to this limitation and the raw-text tuning scope. No claim that a chat-quality fix is established was added.
+The requested chat-template limitation was verified against <work>/research/kva-wt-q27/ridgefill-tune/REFERENCE-ARMS.md, SHA256 6427515b5043bca015070e52a585efcaa6a23643d3e80b2e60d2626e4fceca76: the four templated held-out reference documents average +0.291 nats per novel token for Tier 3, and registered confirmation is REFUTED. This is explicitly attributed to the reference, not claimed as a new engine result. Tier 3 is recommended among RidgeFill modes subject to this limitation and the raw-text tuning scope. No claim that a chat-quality fix is established was added.
 
 Added llama-ridgefill-score to the main README Tools list, linked its existing README, and added a short use entry to RIDGEFILL.md. Only README.md, RIDGEFILL.md and these notes changed. No source, scripts, inference or build was changed/run.
 
@@ -488,7 +488,7 @@ git diff --check: PASS
 
 The synthetic fixture uses <s>/</s> as turn markers and byte-token role labels because its 300-token vocabulary has no Qwen chat markers. Its final scored span lies in the synthetic assistant turn. This is a plumbing/control fixture, not the frozen chat corpus, a successful last-user-turn test or a model-quality result. Special/header expected sets are calculated independently from the tiny vocabulary and row-score tables, and native/server logits are compared at matching prefix boundaries/cache precision. No tolerance was widened.
 
-Commands: cmake -S . -B out/tools-cpu-build (all GPU backends/UI/OpenSSL off), then cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity llama-ridgefill-score -j4; .venv-oracle/bin/python tests/ridgefill/check_chat_tools.py --bin-dir out/tools-cpu-build/bin --kva /var/home/dylan/projects/research/kva-wt-q27 --out out/chat-tools-live4; .venv-oracle/bin/python tools/ridgefill/check_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --fixture out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --stock-dump out/rf_dump-quality-tools --work out/chat-default-score-gate. Common C++ tests link the real shared common/llama libraries. Logs: out/chat-{argument,selector}-tests.log, out/chat-plumbing-{configure,rebuild,final-build,typecheck,portability}.log, out/chat-tools-live4.log and its per-case directory/results.json, out/chat-default-score-gate.log, out/chat-wrapper-{speed,off}.log. Build binaries are d619c13d6 plus this worktree's changes, not a claim that the unchanged integration binary had new flags.
+Commands: cmake -S . -B out/tools-cpu-build (all GPU backends/UI/OpenSSL off), then cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity llama-ridgefill-score -j4; .venv-oracle/bin/python tests/ridgefill/check_chat_tools.py --bin-dir out/tools-cpu-build/bin --kva <work>/research/kva-wt-q27 --out out/chat-tools-live4; .venv-oracle/bin/python tools/ridgefill/check_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --fixture out/gate1-qwen35 --kva <work>/research/kva-wt-q27 --stock-dump out/rf_dump-quality-tools --work out/chat-default-score-gate. Common C++ tests link the real shared common/llama libraries. Logs: out/chat-{argument,selector}-tests.log, out/chat-plumbing-{configure,rebuild,final-build,typecheck,portability}.log, out/chat-tools-live4.log and its per-case directory/results.json, out/chat-default-score-gate.log, out/chat-wrapper-{speed,off}.log. Build binaries are d619c13d6 plus this worktree's changes, not a claim that the unchanged integration binary had new flags.
 
 RIDGEFILL.md and the scorer/test READMEs document the flags, defaults, per-request behavior, named pending-turn refusal and release hold. No GPU, full-model chat inference, CHAT-TUNE/CHAT-HELDOUT scoring, publishing or push was attempted. Remaining work is L-C turn integration plus lane T's frozen schema/data relay for the paired chat/needle runner.
 
@@ -527,12 +527,12 @@ Commands and evidence:
 
 ```sh
 cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity llama-ridgefill-score -j4
-.venv-oracle/bin/python tools/ridgefill/check_chat_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --baseline-binary out/chat-baseline/score --fixture out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work out/chat-turn-score-gate2
+.venv-oracle/bin/python tools/ridgefill/check_chat_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --baseline-binary out/chat-baseline/score --fixture out/gate1-qwen35 --kva <work>/research/kva-wt-q27 --work out/chat-turn-score-gate2
 .venv-oracle/bin/python tests/ridgefill/check_turn_http.py --bin-dir out/tools-cpu-build/bin --fixture out/gate1-qwen35 --chat-fixture out/chat-turn-score-gate --work out/chat-turn-http2 --port 18126
-.venv-oracle/bin/python tests/ridgefill/check_chat_tools.py --bin-dir out/tools-cpu-build/bin --kva /var/home/dylan/projects/research/kva-wt-q27 --out out/chat-turn-tool-gate3
+.venv-oracle/bin/python tests/ridgefill/check_chat_tools.py --bin-dir out/tools-cpu-build/bin --kva <work>/research/kva-wt-q27 --out out/chat-turn-tool-gate3
 .venv-oracle/bin/python tests/ridgefill/check_refusals.py --bin-dir out/tools-cpu-build/bin --fixture out/gate1-qwen35 --work out/chat-turn-refusals3 --port 18127
 .venv-oracle/bin/python tests/ridgefill/test_gpu_smoke.py -v
-UV_CACHE_DIR="$PWD/.cache/uv" UV_TOOL_DIR="$PWD/.cache/uv-tools" uvx --offline --from ty==0.0.84 ty check --python .venv-oracle/bin/python --extra-search-path /var/home/dylan/projects/research/kva-wt-q27 --extra-search-path tests/ridgefill --extra-search-path . tests/ridgefill/check_turn_http.py tests/ridgefill/check_refusals.py tests/ridgefill/check_chat_tools.py tools/ridgefill/run_nll.py tools/ridgefill/check_chat_score.py
+UV_CACHE_DIR="$PWD/.cache/uv" UV_TOOL_DIR="$PWD/.cache/uv-tools" uvx --offline --from ty==0.0.84 ty check --python .venv-oracle/bin/python --extra-search-path <work>/research/kva-wt-q27 --extra-search-path tests/ridgefill --extra-search-path . tests/ridgefill/check_turn_http.py tests/ridgefill/check_refusals.py tests/ridgefill/check_chat_tools.py tools/ridgefill/run_nll.py tools/ridgefill/check_chat_score.py
 ```
 
 The canonical HTTP script and native g1-sweep.cpp were copied read-only from L-C's build-sweep directory into out/http17, adapting only the root/build paths. Compiled that native harness against this worktree's server-ridgefill-sweep.cpp and libraries, then ran .venv-oracle/bin/python out/http17/check-http-sweep.py out/gate1-qwen35. The result is out/http17/http-sweep-results.json (17 records). The saved pre-change executable and shared libraries in out/chat-baseline are isolated with LD_LIBRARY_PATH, so rebuilding cannot change the baseline library ABI. The baseline is ce8332871; its unchanged defaults were already checked against the previous engine/oracle gate.
@@ -609,9 +609,9 @@ Commands (all inside this worktree, CPU only):
 
 ```sh
 cmake --build out/tools-cpu-build --target llama-server llama-bench llama-perplexity llama-ridgefill-score -j4
-.venv-oracle/bin/python tests/ridgefill/check_reporting.py --bin-dir out/tools-cpu-build/bin --fixture out/gate1-qwen35 --chat-fixture out/integ-f106/chat-score-final --dump out/integ-f106/gates/rf_dump_rs --kva /var/home/dylan/projects/research/kva-wt-q27 --out out/reporting-cache-live2
-.venv-oracle/bin/python tests/ridgefill/check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/integ-f106/rf_dump --kva /var/home/dylan/projects/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/reporting-cache-g3 --port 18135
-.venv-oracle/bin/python tools/ridgefill/check_chat_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --baseline-binary out/chat-baseline/score --fixture out/gate1-qwen35 --kva /var/home/dylan/projects/research/kva-wt-q27 --work out/reporting-cache-chat
+.venv-oracle/bin/python tests/ridgefill/check_reporting.py --bin-dir out/tools-cpu-build/bin --fixture out/gate1-qwen35 --chat-fixture out/integ-f106/chat-score-final --dump out/integ-f106/gates/rf_dump_rs --kva <work>/research/kva-wt-q27 --out out/reporting-cache-live2
+.venv-oracle/bin/python tests/ridgefill/check_g3_live.py --bin-dir out/tools-cpu-build/bin --dump out/integ-f106/rf_dump --kva <work>/research/kva-wt-q27 --chat-template-file out/qwen38-chat-template.jinja --work out/reporting-cache-g3 --port 18135
+.venv-oracle/bin/python tools/ridgefill/check_chat_score.py --binary out/tools-cpu-build/bin/llama-ridgefill-score --baseline-binary out/chat-baseline/score --fixture out/gate1-qwen35 --kva <work>/research/kva-wt-q27 --work out/reporting-cache-chat
 .venv-oracle/bin/python out/http17/check-http-sweep.py out/gate1-qwen35
 .venv-oracle/bin/python out/reporting_finish_gates.py
 .venv-oracle/bin/python tests/ridgefill/test_eval_client.py -v

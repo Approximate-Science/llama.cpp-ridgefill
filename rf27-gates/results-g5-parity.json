@@ -41,6 +41,6 @@
       "result": "PASS"
     }
   ],
-  "a": "/var/home/dylan/projects/inference/llama.cpp-ridgefill/rf27-gates/g5/build/bin",
-  "b": "/var/home/dylan/projects/inference/llama.cpp-ridgefill/build-cpu/bin"
+  "a": "<work>/llama.cpp-ridgefill/rf27-gates/g5/build/bin",
+  "b": "<work>/llama.cpp-ridgefill/build-cpu/bin"
 }

@@ -1,7 +1,7 @@
 {
   "summary": {
     "gate": "G5-refusals (L-A instrument)",
-    "bin": "/var/home/dylan/projects/inference/llama.cpp-ridgefill/build-cpu/bin",
+    "bin": "<work>/llama.cpp-ridgefill/build-cpu/bin",
     "checks": 17,
     "passed": 17,
     "result": "PASS"
@@ -75,7 +75,7 @@
       "result": "PASS",
       "rc": 1,
       "needles": [
-        "/var/home/dylan/projects/inference/llama.cpp-ridgefill/rf27-gates/g5/ref-dev/does-not-exist.gguf"
+        "<work>/llama.cpp-ridgefill/rf27-gates/g5/ref-dev/does-not-exist.gguf"
       ]
     },
     {
