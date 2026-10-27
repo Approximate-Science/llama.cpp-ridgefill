@@ -1,14 +1,35 @@
-# llama.cpp
+<p align="center"><img src="media/ridgefill-banner.webp" width="100%" alt="RidgeFill"></p>
 
-## This fork: RidgeFill
+<p align="center"><b>This fork of llama.cpp adds RidgeFill: faster long-prompt prefill from closed-form ridge maps.</b></p>
+<p align="center"><b>1.25 to 1.31× faster time to first token on Qwen3.8-27B at 16K to 120K tokens, on one A100.</b></p>
 
-This fork implements RidgeFill, approximate long-prompt prefill for Qwen3.8-27B; see [usage and results](RIDGEFILL.md).
+<p align="center">
+<a href="RIDGEFILL.md">Usage and results</a> ·
+<a href="https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8">Maps</a> ·
+<a href="https://github.com/Approximate-Science/ridgefill-data">Data and code</a> ·
+<a href="https://github.com/Approximate-Science/ridgefill-data#citation">Citation</a>
+</p>
 
-| A100 CUDA, Qwen3.8-27B | 16K | 32K | 65K | 120K |
+## RidgeFill in this fork
+
+RidgeFill skips most of a model's upper layers for the prompt. The lower layers run exactly up to a split; for the
+other prompt rows, except an exact tail and a selected set of exact rows, a ridge map per later layer predicts that
+layer's input and the layer writes its cache from the prediction. The maps are fitted once, in closed form, with no
+training, and no token is dropped. Generation after the prompt is exact. With RidgeFill off, this fork is
+bit-identical to upstream llama.cpp. [RIDGEFILL.md](RIDGEFILL.md) has the quick start, every flag and the
+measurements.
+
+| Qwen3.8-27B, one A100 PCIe 40 GB | 16K | 32K | 65K | 120K |
 |---|---|---|---|---|
-| TTFT speedup (resident projector) | 1.25x | 1.30x | 1.31x | 1.28x |
+| Time to first token, maps in VRAM | 1.25× | 1.30× | 1.31× | 1.28× |
+| Time to first token, maps streamed from host | 1.19× | 1.27× | 1.30× | 1.29× |
 
-Projector: [TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8).
+RULER changes by −1.19 and −1.42 points at 16K and 32K, and LongBench v2 by −1.39, each with a 95 % interval that
+includes zero. Output is not identical to upstream llama.cpp.
+
+---
+
+# llama.cpp
 
 ![llama](https://raw.githubusercontent.com/ggml-org/llama.brand/refs/heads/master/cover/llama-cpp/cover-llama-cpp-dark.svg)
 
