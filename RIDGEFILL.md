@@ -16,7 +16,7 @@ The filled part of the cache is approximate. The output is not identical to norm
 loss, more so when the tail is short relative to the prompt (numbers below). With RidgeFill off, this fork is
 bit-identical to upstream llama.cpp (checked, see "Tests").
 
-RidgeFill is by Dylan Johnston and Robert P Smith. Technical note: [doi:10.5281/zenodo.23179168](https://doi.org/10.5281/zenodo.23179168). The projector is licensed under Apache-2.0; the code follows [this repository's license](LICENSE).
+RidgeFill is by Dylan Johnston and Robert P Smith. Paper: [doi:10.5281/zenodo.23890247](https://doi.org/10.5281/zenodo.23890247); earlier technical note: [doi:10.5281/zenodo.23179168](https://doi.org/10.5281/zenodo.23179168). The projector is licensed under Apache-2.0; the code follows [this repository's license](LICENSE).
 
 ## Qwen3.8-27B (`qwen35`)
 
@@ -164,7 +164,7 @@ Speed mode writes attention KV and GDN convolution/recurrent state from each pre
 
 ### Projector conversion
 
-Download the projector from [TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8). Projector: Dylan Johnston and Robert P Smith, Apache-2.0, DOI `10.5281/zenodo.23179168`. The converted artifact is `ridgefill-projector-qwen3.8-27b-i8-S16.gguf`: Q8_0 maps, F32 biases/corrections/row scores, 1452188032 bytes, SHA256 `8646d41a5a28d60ef53cc5e1fee4b2bfb20d0775db88d3f89d0731ad9f6b629d`.
+Download the projector from [TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8](https://huggingface.co/TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8). Projector: Dylan Johnston and Robert P Smith, Apache-2.0; paper DOI `10.5281/zenodo.23890247`. The converted artifact is `ridgefill-projector-qwen3.8-27b-i8-S16.gguf`: Q8_0 maps, F32 biases/corrections/row scores, 1452188032 bytes, SHA256 `8646d41a5a28d60ef53cc5e1fee4b2bfb20d0775db88d3f89d0731ad9f6b629d`.
 
 ```sh
 hf download TheCacheIsALie/RidgeFill-Projector-Qwen3.8-27B-i8 ridgefill-projector-qwen3.8-27b-i8-S16.gguf --local-dir projector
